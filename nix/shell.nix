@@ -4,7 +4,7 @@
 let
   inherit (pkgs) lib;
 in
-pkgs.mkShell.override { stdenv = pkgs.useMoldLinker pkgs.stdenv; } {
+pkgs.mkShell.override { stdenv = pkgs.useMoldLinker pkgs.clangStdenv; } {
   packages =
     [
       pkgs.curl

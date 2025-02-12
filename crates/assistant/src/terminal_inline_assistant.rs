@@ -312,31 +312,6 @@ impl TerminalInlineAssistant {
                 })
                 .log_err();
 
-            if let Some(model) = LanguageModelRegistry::read_global(cx).active_model() {
-                let codegen = assist.codegen.read(cx);
-                let executor = cx.background_executor().clone();
-                report_assistant_event(
-                    AssistantEvent {
-                        conversation_id: None,
-                        kind: AssistantKind::InlineTerminal,
-                        message_id: codegen.message_id.clone(),
-                        phase: if undo {
-                            AssistantPhase::Rejected
-                        } else {
-                            AssistantPhase::Accepted
-                        },
-                        model: model.telemetry_id(),
-                        model_provider: model.provider_id().to_string(),
-                        response_latency: None,
-                        error_message: None,
-                        language_name: None,
-                    },
-                    cx.http_client(),
-                    model.api_key(cx),
-                    &executor,
-                );
-            }
-
             assist.codegen.update(cx, |codegen, cx| {
                 if undo {
                     codegen.undo(cx);
@@ -1129,7 +1104,6 @@ impl Codegen {
         self.status = CodegenStatus::Pending;
         self.transaction = Some(TerminalTransaction::start(self.terminal.clone()));
         self.generation = cx.spawn(|this, mut cx| async move {
-            let model_telemetry_id = model.telemetry_id();
             let model_provider_id = model.provider_id();
             let response = model.stream_completion_text(prompt, &cx).await;
             let generate = async {
@@ -1160,24 +1134,6 @@ impl Codegen {
                         };
 
                         let result = task.await;
-
-                        let error_message = result.as_ref().err().map(|error| error.to_string());
-                        report_assistant_event(
-                            AssistantEvent {
-                                conversation_id: None,
-                                kind: AssistantKind::InlineTerminal,
-                                message_id,
-                                phase: AssistantPhase::Response,
-                                model: model_telemetry_id,
-                                model_provider: model_provider_id.to_string(),
-                                response_latency,
-                                error_message,
-                                language_name: None,
-                            },
-                            http_client,
-                            model_api_key,
-                            &executor,
-                        );
 
                         result?;
                         anyhow::Ok(())

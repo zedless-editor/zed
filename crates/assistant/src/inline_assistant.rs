@@ -834,26 +834,6 @@ impl InlineAssistant {
                         .and_then(|(buffer, _, _)| buffer.language())
                         .map(|language| language.name())
                 });
-                report_assistant_event(
-                    AssistantEvent {
-                        conversation_id: None,
-                        kind: AssistantKind::Inline,
-                        message_id,
-                        phase: if undo {
-                            AssistantPhase::Rejected
-                        } else {
-                            AssistantPhase::Accepted
-                        },
-                        model: model.telemetry_id(),
-                        model_provider: model.provider_id().to_string(),
-                        response_latency: None,
-                        error_message: None,
-                        language_name: language_name.map(|name| name.to_proto()),
-                    },
-                    cx.http_client(),
-                    model.api_key(cx),
-                    cx.background_executor(),
-                );
             }
 
             if undo {
@@ -2847,7 +2827,7 @@ impl CodegenAlternative {
                 cx.spawn(|_, cx| async move { model.stream_completion_text(request, &cx).await })
                     .boxed_local()
             };
-        self.handle_stream(telemetry_id, provider_id.to_string(), api_key, stream, cx);
+        self.handle_stream(provider_id.to_string(), api_key, stream, cx);
         Ok(())
     }
 
@@ -2910,7 +2890,6 @@ impl CodegenAlternative {
 
     pub fn handle_stream(
         &mut self,
-        model_telemetry_id: String,
         model_provider_id: String,
         model_api_key: Option<String>,
         stream: impl 'static + Future<Output = Result<LanguageModelTextStream>>,
@@ -3070,25 +3049,6 @@ impl CodegenAlternative {
                             };
 
                             let result = diff.await;
-
-                            let error_message =
-                                result.as_ref().err().map(|error| error.to_string());
-                            report_assistant_event(
-                                AssistantEvent {
-                                    conversation_id: None,
-                                    message_id,
-                                    kind: AssistantKind::Inline,
-                                    phase: AssistantPhase::Response,
-                                    model: model_telemetry_id,
-                                    model_provider: model_provider_id.to_string(),
-                                    response_latency,
-                                    error_message,
-                                    language_name: language_name.map(|name| name.to_proto()),
-                                },
-                                http_client,
-                                model_api_key,
-                                &executor,
-                            );
 
                             result?;
                             Ok(())

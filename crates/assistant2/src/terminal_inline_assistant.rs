@@ -27,7 +27,7 @@ pub fn init(
     prompt_builder: Arc<PromptBuilder>,
     cx: &mut App,
 ) {
-    cx.set_global(TerminalInlineAssistant::new(fs, prompt_builder, telemetry));
+    cx.set_global(TerminalInlineAssistant::new(fs, prompt_builder));
 }
 
 const DEFAULT_CONTEXT_LINES: usize = 50;

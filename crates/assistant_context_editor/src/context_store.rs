@@ -4,7 +4,6 @@ use crate::{
 };
 use anyhow::{anyhow, Context as _, Result};
 use assistant_slash_command::{SlashCommandId, SlashCommandWorkingSet};
-use client::{proto, telemetry::Telemetry, Client, TypedEnvelope};
 use clock::ReplicaId;
 use collections::HashMap;
 use context_server::manager::ContextServerManager;
@@ -53,7 +52,6 @@ pub struct ContextStore {
     fs: Arc<dyn Fs>,
     languages: Arc<LanguageRegistry>,
     slash_commands: Arc<SlashCommandWorkingSet>,
-    telemetry: Arc<Telemetry>,
     _watch_updates: Task<Option<()>>,
     client: Arc<Client>,
     project: Entity<Project>,
@@ -118,7 +116,6 @@ impl ContextStore {
                     fs,
                     languages,
                     slash_commands,
-                    telemetry,
                     _watch_updates: cx.spawn(|this, mut cx| {
                         async move {
                             while events.next().await.is_some() {
@@ -355,7 +352,6 @@ impl ContextStore {
             AssistantContext::local(
                 self.languages.clone(),
                 Some(self.project.clone()),
-                Some(self.telemetry.clone()),
                 self.prompt_builder.clone(),
                 self.slash_commands.clone(),
                 cx,
@@ -394,7 +390,6 @@ impl ContextStore {
                     prompt_builder,
                     slash_commands,
                     Some(project),
-                    Some(telemetry),
                     cx,
                 )
             })?;
@@ -453,7 +448,6 @@ impl ContextStore {
                     prompt_builder,
                     slash_commands,
                     Some(project),
-                    Some(telemetry),
                     cx,
                 )
             })?;
@@ -530,7 +524,6 @@ impl ContextStore {
                     prompt_builder,
                     slash_commands,
                     Some(project),
-                    Some(telemetry),
                     cx,
                 )
             })?;

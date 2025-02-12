@@ -14104,7 +14104,6 @@ impl Editor {
                 let Some(project) = &self.project else { return };
                 let (telemetry, is_via_ssh) = {
                     let project = project.read(cx);
-                    let telemetry = project.client().telemetry().clone();
                     let is_via_ssh = project.is_via_ssh();
                     (telemetry, is_via_ssh)
                 };

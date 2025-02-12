@@ -349,7 +349,6 @@ impl CodegenAlternative {
         self.edit_position = Some(self.range.start.bias_right(&self.snapshot));
 
         let api_key = model.api_key(cx);
-        let telemetry_id = model.telemetry_id();
         let provider_id = model.provider_id();
         let stream: LocalBoxFuture<Result<LanguageModelTextStream>> =
             if user_prompt.trim().to_lowercase() == "delete" {

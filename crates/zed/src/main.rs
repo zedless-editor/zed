@@ -368,7 +368,6 @@ fn main() {
         zed::init(cx);
         project::Project::init(&client, cx);
         client::init(&client, cx);
-        let telemetry = client.telemetry();
         telemetry.start(
             system_id.as_ref().map(|id| id.to_string()),
             installation_id.as_ref().map(|id| id.to_string()),

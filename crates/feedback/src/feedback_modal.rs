@@ -307,7 +307,6 @@ impl FeedbackModal {
             }
         }
 
-        let telemetry = zed_client.telemetry();
         let installation_id = telemetry.installation_id();
         let metrics_id = telemetry.metrics_id();
         let is_staff = telemetry.is_staff();

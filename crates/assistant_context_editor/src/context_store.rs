@@ -99,7 +99,6 @@ impl ContextStore {
     ) -> Task<Result<Entity<Self>>> {
         let fs = project.read(cx).fs().clone();
         let languages = project.read(cx).languages().clone();
-        let telemetry = project.read(cx).client().telemetry().clone();
         cx.spawn(|mut cx| async move {
             const CONTEXT_WATCH_DURATION: Duration = Duration::from_millis(100);
             let (mut events, _) = fs.watch(contexts_dir(), CONTEXT_WATCH_DURATION).await;
@@ -379,7 +378,6 @@ impl ContextStore {
         let capability = project.capability();
         let language_registry = self.languages.clone();
         let project = self.project.clone();
-        let telemetry = self.telemetry.clone();
         let prompt_builder = self.prompt_builder.clone();
         let slash_commands = self.slash_commands.clone();
         let request = self.client.request(proto::CreateContext { project_id });
@@ -435,7 +433,6 @@ impl ContextStore {
         let fs = self.fs.clone();
         let languages = self.languages.clone();
         let project = self.project.clone();
-        let telemetry = self.telemetry.clone();
         let load = cx.background_executor().spawn({
             let path = path.clone();
             async move {
@@ -515,7 +512,6 @@ impl ContextStore {
         let capability = project.capability();
         let language_registry = self.languages.clone();
         let project = self.project.clone();
-        let telemetry = self.telemetry.clone();
         let request = self.client.request(proto::OpenContext {
             project_id,
             context_id: context_id.to_proto(),

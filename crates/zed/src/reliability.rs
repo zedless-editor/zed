@@ -274,7 +274,6 @@ pub fn monitor_main_thread_hangs(
 
     let foreground_executor = cx.foreground_executor();
     let background_executor = cx.background_executor();
-    let telemetry_settings = *client::TelemetrySettings::get_global(cx);
 
     // Initialize SIGUSR2 handler to send a backtrace to a channel.
     let (backtrace_tx, backtrace_rx) = mpsc::channel();
@@ -449,7 +448,6 @@ fn upload_panics_and_crashes(
     installation_id: Option<String>,
     cx: &App,
 ) {
-    let telemetry_settings = *client::TelemetrySettings::get_global(cx);
     cx.background_executor()
         .spawn(async move {
             let most_recent_panic =

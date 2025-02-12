@@ -1043,7 +1043,6 @@ impl InputHandler for TerminalInputHandler {
             .update(cx, |this, cx| {
                 window.invalidate_character_coordinates();
                 let project = this.project().read(cx);
-                let telemetry = project.client().telemetry().clone();
             })
             .ok();
     }

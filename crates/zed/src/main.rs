@@ -380,14 +380,10 @@ fn main() {
         if let (Some(system_id), Some(installation_id)) = (&system_id, &installation_id) {
             match (&system_id, &installation_id) {
                 (IdType::New(_), IdType::New(_)) => {
-                    telemetry::event!("App First Opened");
-                    telemetry::event!("App First Opened For Release Channel");
                 }
                 (IdType::Existing(_), IdType::New(_)) => {
-                    telemetry::event!("App First Opened For Release Channel");
                 }
                 (_, IdType::Existing(_)) => {
-                    telemetry::event!("App Opened");
                 }
             }
         }
@@ -549,7 +545,6 @@ fn main() {
             setting = "keymap",
             value = BaseKeymap::get_global(cx).to_string()
         );
-        telemetry.flush_events();
 
         let fs = app_state.fs.clone();
         load_user_themes_in_background(fs.clone(), cx);

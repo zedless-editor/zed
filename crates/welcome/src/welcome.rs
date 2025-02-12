@@ -132,7 +132,6 @@ impl Render for WelcomePage {
                                             .icon_color(Color::Muted)
                                             .icon_position(IconPosition::Start)
                                             .on_click(cx.listener(|this, _, window, cx| {
-                                                telemetry::event!("Welcome Theme Changed");
                                                 this.workspace
                                                     .update(cx, |_workspace, cx| {
                                                         window.dispatch_action(zed_actions::theme_selector::Toggle::default().boxed_clone(), cx);
@@ -147,7 +146,6 @@ impl Render for WelcomePage {
                                             .icon_color(Color::Muted)
                                             .icon_position(IconPosition::Start)
                                             .on_click(cx.listener(|this, _, window, cx| {
-                                                telemetry::event!("Welcome Keymap Changed");
                                                 this.workspace
                                                     .update(cx, |workspace, cx| {
                                                         base_keymap_picker::toggle(
@@ -170,7 +168,6 @@ impl Render for WelcomePage {
                                         .icon_position(IconPosition::Start)
                                         .on_click(
                                             cx.listener(|_, _, window, cx| {
-                                                telemetry::event!("Welcome Copilot Signed In");
                                                 copilot::initiate_sign_in(window, cx);
                                             }),
                                         ),
@@ -182,7 +179,6 @@ impl Render for WelcomePage {
                                             .icon_color(Color::Muted)
                                             .icon_position(IconPosition::Start)
                                             .on_click(cx.listener(|_, _, window, cx| {
-                                                telemetry::event!("Welcome Settings Edited");
                                                 window.dispatch_action(Box::new(
                                                     zed_actions::OpenSettings,
                                                 ), cx);
@@ -207,7 +203,6 @@ impl Render for WelcomePage {
                                                 .icon_color(Color::Muted)
                                                 .icon_position(IconPosition::Start)
                                                 .on_click(cx.listener(|_, _, _, cx| {
-                                                    telemetry::event!("Welcome CLI Installed");
                                                     cx
                                                         .spawn(|_, cx| async move {
                                                             install_cli::install_cli(&cx).await
@@ -223,7 +218,6 @@ impl Render for WelcomePage {
                                             .icon_color(Color::Muted)
                                             .icon_position(IconPosition::Start)
                                             .on_click(cx.listener(|_, _, _, cx| {
-                                                telemetry::event!("Welcome Documentation Viewed");
                                                 cx.open_url(DOCS_URL);
                                             })),
                                     )
@@ -234,7 +228,6 @@ impl Render for WelcomePage {
                                             .icon_color(Color::Muted)
                                             .icon_position(IconPosition::Start)
                                             .on_click(cx.listener(|_, _, window, cx| {
-                                                telemetry::event!("Welcome Extensions Page Opened");
                                                 window.dispatch_action(Box::new(
                                                     zed_actions::Extensions,
                                                 ), cx);
@@ -268,7 +261,6 @@ impl Render for WelcomePage {
                                                 ui::ToggleState::Unselected
                                             },
                                             cx.listener(move |this, selection, _window, cx| {
-                                                telemetry::event!("Welcome Vim Mode Toggled");
                                                 this.update_settings::<VimModeSetting>(
                                                     selection,
                                                     cx,
@@ -299,7 +291,6 @@ impl Render for WelcomePage {
                                         ui::ToggleState::Unselected
                                     },
                                     cx.listener(move |this, selection, _window, cx| {
-                                        telemetry::event!("Welcome Diagnostic Telemetry Toggled");
                                         this.update_settings::<TelemetrySettings>(selection, cx, {
                                             move |settings, value| {
                                                 settings.diagnostics = Some(value);
@@ -325,7 +316,6 @@ impl Render for WelcomePage {
                                         ui::ToggleState::Unselected
                                     },
                                     cx.listener(move |this, selection, _window, cx| {
-                                        telemetry::event!("Welcome Metric Telemetry Toggled");
                                         this.update_settings::<TelemetrySettings>(selection, cx, {
                                             move |settings, value| {
                                                 settings.metrics = Some(value);
@@ -350,7 +340,6 @@ impl WelcomePage {
     pub fn new(workspace: &Workspace, cx: &mut Context<Workspace>) -> Entity<Self> {
         let this = cx.new(|cx| {
             cx.on_release(|_: &mut Self, _| {
-                telemetry::event!("Welcome Page Closed");
             })
             .detach();
 

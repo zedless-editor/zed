@@ -18,7 +18,6 @@ pub fn report_assistant_event(
     executor: &BackgroundExecutor,
 ) {
     if let Some(telemetry) = telemetry.as_ref() {
-        telemetry.report_assistant_event(event.clone());
         if telemetry.metrics_enabled() && event.model_provider == ANTHROPIC_PROVIDER_ID {
             executor
                 .spawn(async move {

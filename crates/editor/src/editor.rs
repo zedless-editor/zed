@@ -14109,7 +14109,6 @@ impl Editor {
                     (telemetry, is_via_ssh)
                 };
                 refresh_linked_ranges(self, window, cx);
-                telemetry.log_edit_event("editor", is_via_ssh);
             }
             multi_buffer::Event::ExcerptsAdded {
                 buffer,

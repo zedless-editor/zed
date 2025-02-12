@@ -479,17 +479,6 @@ impl ActiveCall {
     pub fn pending_invites(&self) -> &HashSet<u64> {
         &self.pending_invites
     }
-
-    pub fn report_call_event(&self, operation: &'static str, cx: &mut App) {
-        if let Some(room) = self.room() {
-            let room = room.read(cx);
-            telemetry::event!(
-                operation,
-                room_id = room.id(),
-                channel_id = room.channel_id()
-            )
-        }
-    }
 }
 
 #[cfg(test)]

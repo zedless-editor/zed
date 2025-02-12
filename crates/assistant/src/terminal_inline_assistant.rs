@@ -2,7 +2,6 @@ use crate::{AssistantPanel, AssistantPanelEvent, DEFAULT_CONTEXT_LINES};
 use anyhow::{Context as _, Result};
 use assistant_context_editor::{humanize_token_count, RequestType};
 use assistant_settings::AssistantSettings;
-use client::telemetry::Telemetry;
 use collections::{HashMap, VecDeque};
 use editor::{
     actions::{MoveDown, MoveUp, SelectAll},
@@ -27,7 +26,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use telemetry_events::{AssistantEvent, AssistantKind, AssistantPhase};
 use terminal::Terminal;
 use terminal_view::TerminalView;
 use theme::ThemeSettings;
@@ -38,10 +36,9 @@ use workspace::{notifications::NotificationId, Toast, Workspace};
 pub fn init(
     fs: Arc<dyn Fs>,
     prompt_builder: Arc<PromptBuilder>,
-    telemetry: Arc<Telemetry>,
     cx: &mut App,
 ) {
-    cx.set_global(TerminalInlineAssistant::new(fs, prompt_builder, telemetry));
+    cx.set_global(TerminalInlineAssistant::new(fs, prompt_builder));
 }
 
 const PROMPT_HISTORY_MAX_LEN: usize = 20;
@@ -61,7 +58,6 @@ pub struct TerminalInlineAssistant {
     next_assist_id: TerminalInlineAssistId,
     assists: HashMap<TerminalInlineAssistId, TerminalInlineAssist>,
     prompt_history: VecDeque<String>,
-    telemetry: Option<Arc<Telemetry>>,
     fs: Arc<dyn Fs>,
     prompt_builder: Arc<PromptBuilder>,
 }
@@ -72,13 +68,11 @@ impl TerminalInlineAssistant {
     pub fn new(
         fs: Arc<dyn Fs>,
         prompt_builder: Arc<PromptBuilder>,
-        telemetry: Arc<Telemetry>,
     ) -> Self {
         Self {
             next_assist_id: TerminalInlineAssistId::default(),
             assists: HashMap::default(),
             prompt_history: VecDeque::default(),
-            telemetry: Some(telemetry),
             fs,
             prompt_builder,
         }
@@ -97,7 +91,7 @@ impl TerminalInlineAssistant {
         let assist_id = self.next_assist_id.post_inc();
         let prompt_buffer = cx.new(|cx| Buffer::local(initial_prompt.unwrap_or_default(), cx));
         let prompt_buffer = cx.new(|cx| MultiBuffer::singleton(prompt_buffer, cx));
-        let codegen = cx.new(|_| Codegen::new(terminal, self.telemetry.clone()));
+        let codegen = cx.new(|_| Codegen::new(terminal));
 
         let prompt_editor = cx.new(|cx| {
             PromptEditor::new(
@@ -337,7 +331,6 @@ impl TerminalInlineAssistant {
                         error_message: None,
                         language_name: None,
                     },
-                    codegen.telemetry.clone(),
                     cx.http_client(),
                     model.api_key(cx),
                     &executor,
@@ -1109,7 +1102,6 @@ impl TerminalTransaction {
 
 pub struct Codegen {
     status: CodegenStatus,
-    telemetry: Option<Arc<Telemetry>>,
     terminal: Entity<Terminal>,
     generation: Task<()>,
     message_id: Option<String>,
@@ -1117,10 +1109,9 @@ pub struct Codegen {
 }
 
 impl Codegen {
-    pub fn new(terminal: Entity<Terminal>, telemetry: Option<Arc<Telemetry>>) -> Self {
+    pub fn new(terminal: Entity<Terminal>) -> Self {
         Self {
             terminal,
-            telemetry,
             status: CodegenStatus::Idle,
             generation: Task::ready(()),
             message_id: None,
@@ -1135,7 +1126,6 @@ impl Codegen {
 
         let model_api_key = model.api_key(cx);
         let http_client = cx.http_client();
-        let telemetry = self.telemetry.clone();
         self.status = CodegenStatus::Pending;
         self.transaction = Some(TerminalTransaction::start(self.terminal.clone()));
         self.generation = cx.spawn(|this, mut cx| async move {
@@ -1184,7 +1174,6 @@ impl Codegen {
                                 error_message,
                                 language_name: None,
                             },
-                            telemetry,
                             http_client,
                             model_api_key,
                             &executor,

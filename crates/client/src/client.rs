@@ -2,7 +2,6 @@
 pub mod test;
 
 mod socks;
-pub mod telemetry;
 pub mod user;
 pub mod zed_urls;
 
@@ -44,13 +43,11 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use telemetry::Telemetry;
 use thiserror::Error;
 use url::Url;
 use util::{ResultExt, TryFutureExt};
 
 pub use rpc::*;
-pub use telemetry_events::Event;
 pub use user::*;
 
 static ZED_SERVER_URL: LazyLock<Option<String>> =
@@ -192,7 +189,6 @@ pub struct Client {
     id: AtomicU64,
     peer: Arc<Peer>,
     http: Arc<HttpClientWithUrl>,
-    telemetry: Arc<Telemetry>,
     credentials_provider: Arc<dyn CredentialsProvider + Send + Sync + 'static>,
     state: RwLock<ClientState>,
     handler_set: parking_lot::Mutex<ProtoMessageHandlerSet>,
@@ -1547,10 +1543,6 @@ impl Client {
                 .respond_with_unhandled_message(sender_id.into(), request_id, type_name)
                 .log_err();
         }
-    }
-
-    pub fn telemetry(&self) -> &Arc<Telemetry> {
-        &self.telemetry
     }
 }
 

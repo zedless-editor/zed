@@ -309,11 +309,6 @@ impl<T: 'static> PromptEditor<T> {
                         let is_via_ssh = workspace
                             .project()
                             .update(cx, |project, _| project.is_via_ssh());
-
-                        workspace
-                            .client()
-                            .telemetry()
-                            .log_edit_event("inline assist", is_via_ssh);
                     });
                 }
                 let prompt = self.editor.read(cx).text(cx);

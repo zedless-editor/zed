@@ -4,7 +4,6 @@ use crate::{
 use anyhow::{anyhow, Context as _, Result};
 use assistant_context_editor::{humanize_token_count, RequestType};
 use assistant_settings::AssistantSettings;
-use client::{telemetry::Telemetry, ErrorExt};
 use collections::{hash_map, HashMap, HashSet, VecDeque};
 use editor::{
     actions::{MoveDown, MoveUp, SelectAll},
@@ -56,7 +55,6 @@ use std::{
     time::{Duration, Instant},
 };
 use streaming_diff::{CharOperation, LineDiff, LineOperation, StreamingDiff};
-use telemetry_events::{AssistantEvent, AssistantKind, AssistantPhase};
 use terminal_view::terminal_panel::TerminalPanel;
 use text::{OffsetRangeExt, ToPoint as _};
 use theme::ThemeSettings;
@@ -69,10 +67,9 @@ use workspace::{notifications::NotificationId, ItemHandle, Toast, Workspace};
 pub fn init(
     fs: Arc<dyn Fs>,
     prompt_builder: Arc<PromptBuilder>,
-    telemetry: Arc<Telemetry>,
     cx: &mut App,
 ) {
-    cx.set_global(InlineAssistant::new(fs, prompt_builder, telemetry));
+    cx.set_global(InlineAssistant::new(fs, prompt_builder));
     cx.observe_new(|_, window, cx| {
         let Some(window) = window else {
             return;
@@ -105,7 +102,6 @@ pub struct InlineAssistant {
     confirmed_assists: HashMap<InlineAssistId, Entity<CodegenAlternative>>,
     prompt_history: VecDeque<String>,
     prompt_builder: Arc<PromptBuilder>,
-    telemetry: Arc<Telemetry>,
     fs: Arc<dyn Fs>,
     is_assistant2_enabled: bool,
 }
@@ -116,7 +112,6 @@ impl InlineAssistant {
     pub fn new(
         fs: Arc<dyn Fs>,
         prompt_builder: Arc<PromptBuilder>,
-        telemetry: Arc<Telemetry>,
     ) -> Self {
         Self {
             next_assist_id: InlineAssistId::default(),
@@ -127,7 +122,6 @@ impl InlineAssistant {
             confirmed_assists: HashMap::default(),
             prompt_history: VecDeque::default(),
             prompt_builder,
-            telemetry,
             fs,
             is_assistant2_enabled: false,
         }
@@ -279,20 +273,6 @@ impl InlineAssistant {
                 buffer.remote_id(),
                 start..end,
             ));
-
-            if let Some(model) = LanguageModelRegistry::read_global(cx).active_model() {
-                self.telemetry.report_assistant_event(AssistantEvent {
-                    conversation_id: None,
-                    kind: AssistantKind::Inline,
-                    phase: AssistantPhase::Invoked,
-                    message_id: None,
-                    model: model.telemetry_id(),
-                    model_provider: model.provider_id().to_string(),
-                    response_latency: None,
-                    error_message: None,
-                    language_name: buffer.language().map(|language| language.name().to_proto()),
-                });
-            }
         }
 
         let assist_group_id = self.next_assist_group_id.post_inc();
@@ -308,7 +288,6 @@ impl InlineAssistant {
                     editor.read(cx).buffer().clone(),
                     range.clone(),
                     None,
-                    self.telemetry.clone(),
                     self.prompt_builder.clone(),
                     cx,
                 )
@@ -418,7 +397,6 @@ impl InlineAssistant {
                 editor.read(cx).buffer().clone(),
                 range.clone(),
                 initial_transaction_id,
-                self.telemetry.clone(),
                 self.prompt_builder.clone(),
                 cx,
             )
@@ -872,7 +850,6 @@ impl InlineAssistant {
                         error_message: None,
                         language_name: language_name.map(|name| name.to_proto()),
                     },
-                    Some(self.telemetry.clone()),
                     cx.http_client(),
                     model.api_key(cx),
                     cx.background_executor(),
@@ -1883,11 +1860,6 @@ impl PromptEditor {
                         let is_via_ssh = workspace
                             .project()
                             .update(cx, |project, _| project.is_via_ssh());
-
-                        workspace
-                            .client()
-                            .telemetry()
-                            .log_edit_event("inline assist", is_via_ssh);
                     });
                 }
                 let prompt = self.editor.read(cx).text(cx);
@@ -2489,7 +2461,6 @@ pub struct Codegen {
     buffer: Entity<MultiBuffer>,
     range: Range<Anchor>,
     initial_transaction_id: Option<TransactionId>,
-    telemetry: Arc<Telemetry>,
     builder: Arc<PromptBuilder>,
     is_insertion: bool,
 }
@@ -2499,7 +2470,6 @@ impl Codegen {
         buffer: Entity<MultiBuffer>,
         range: Range<Anchor>,
         initial_transaction_id: Option<TransactionId>,
-        telemetry: Arc<Telemetry>,
         builder: Arc<PromptBuilder>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -2508,7 +2478,6 @@ impl Codegen {
                 buffer.clone(),
                 range.clone(),
                 false,
-                Some(telemetry.clone()),
                 builder.clone(),
                 cx,
             )
@@ -2522,7 +2491,6 @@ impl Codegen {
             buffer,
             range,
             initial_transaction_id,
-            telemetry,
             builder,
         };
         this.activate(0, cx);
@@ -2599,7 +2567,6 @@ impl Codegen {
                     self.buffer.clone(),
                     self.range.clone(),
                     false,
-                    Some(self.telemetry.clone()),
                     self.builder.clone(),
                     cx,
                 )
@@ -2694,7 +2661,6 @@ pub struct CodegenAlternative {
     status: CodegenStatus,
     generation: Task<()>,
     diff: Diff,
-    telemetry: Option<Arc<Telemetry>>,
     _subscription: gpui::Subscription,
     builder: Arc<PromptBuilder>,
     active: bool,
@@ -2732,7 +2698,6 @@ impl CodegenAlternative {
         multi_buffer: Entity<MultiBuffer>,
         range: Range<Anchor>,
         active: bool,
-        telemetry: Option<Arc<Telemetry>>,
         builder: Arc<PromptBuilder>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -2772,7 +2737,6 @@ impl CodegenAlternative {
             status: CodegenStatus::Idle,
             generation: Task::ready(()),
             diff: Diff::default(),
-            telemetry,
             _subscription: cx.subscribe(&multi_buffer, Self::handle_buffer_event),
             builder,
             active,
@@ -2981,7 +2945,6 @@ impl CodegenAlternative {
         }
 
         let http_client = cx.http_client().clone();
-        let telemetry = self.telemetry.clone();
         let language_name = {
             let multibuffer = self.buffer.read(cx);
             let snapshot = multibuffer.snapshot(cx);
@@ -3123,7 +3086,6 @@ impl CodegenAlternative {
                                     error_message,
                                     language_name: language_name.map(|name| name.to_proto()),
                                 },
-                                telemetry,
                                 http_client,
                                 model_api_key,
                                 &executor,

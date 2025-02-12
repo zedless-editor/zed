@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use assistant_settings::AssistantSettings;
-use client::telemetry::Telemetry;
 use collections::{hash_map, HashMap, HashSet, VecDeque};
 use editor::{
     actions::SelectAll,
@@ -31,7 +30,6 @@ use parking_lot::Mutex;
 use project::{CodeAction, ProjectTransaction};
 use prompt_library::PromptBuilder;
 use settings::{Settings, SettingsStore};
-use telemetry_events::{AssistantEvent, AssistantKind, AssistantPhase};
 use terminal_view::{terminal_panel::TerminalPanel, TerminalView};
 use text::{OffsetRangeExt, ToPoint as _};
 use ui::prelude::*;
@@ -50,10 +48,9 @@ use crate::AssistantPanel;
 pub fn init(
     fs: Arc<dyn Fs>,
     prompt_builder: Arc<PromptBuilder>,
-    telemetry: Arc<Telemetry>,
     cx: &mut App,
 ) {
-    cx.set_global(InlineAssistant::new(fs, prompt_builder, telemetry));
+    cx.set_global(InlineAssistant::new(fs, prompt_builder));
     cx.observe_new(|_workspace: &mut Workspace, window, cx| {
         let Some(window) = window else {
             return;
@@ -91,7 +88,6 @@ pub struct InlineAssistant {
     confirmed_assists: HashMap<InlineAssistId, Entity<CodegenAlternative>>,
     prompt_history: VecDeque<String>,
     prompt_builder: Arc<PromptBuilder>,
-    telemetry: Arc<Telemetry>,
     fs: Arc<dyn Fs>,
     is_assistant2_enabled: bool,
 }
@@ -102,7 +98,6 @@ impl InlineAssistant {
     pub fn new(
         fs: Arc<dyn Fs>,
         prompt_builder: Arc<PromptBuilder>,
-        telemetry: Arc<Telemetry>,
     ) -> Self {
         Self {
             next_assist_id: InlineAssistId::default(),
@@ -113,7 +108,6 @@ impl InlineAssistant {
             confirmed_assists: HashMap::default(),
             prompt_history: VecDeque::default(),
             prompt_builder,
-            telemetry,
             fs,
             is_assistant2_enabled: false,
         }
@@ -366,19 +360,6 @@ impl InlineAssistant {
 
             codegen_ranges.push(anchor_range);
 
-            if let Some(model) = LanguageModelRegistry::read_global(cx).active_model() {
-                self.telemetry.report_assistant_event(AssistantEvent {
-                    conversation_id: None,
-                    kind: AssistantKind::Inline,
-                    phase: AssistantPhase::Invoked,
-                    message_id: None,
-                    model: model.telemetry_id(),
-                    model_provider: model.provider_id().to_string(),
-                    response_latency: None,
-                    error_message: None,
-                    language_name: buffer.language().map(|language| language.name().to_proto()),
-                });
-            }
         }
 
         let assist_group_id = self.next_assist_group_id.post_inc();
@@ -396,7 +377,6 @@ impl InlineAssistant {
                     range.clone(),
                     None,
                     context_store.clone(),
-                    self.telemetry.clone(),
                     self.prompt_builder.clone(),
                     cx,
                 )
@@ -510,7 +490,6 @@ impl InlineAssistant {
                 range.clone(),
                 initial_transaction_id,
                 context_store.clone(),
-                self.telemetry.clone(),
                 self.prompt_builder.clone(),
                 cx,
             )
@@ -950,27 +929,6 @@ impl InlineAssistant {
                         .and_then(|(buffer, _, _)| buffer.language())
                         .map(|language| language.name())
                 });
-                report_assistant_event(
-                    AssistantEvent {
-                        conversation_id: None,
-                        kind: AssistantKind::Inline,
-                        message_id,
-                        phase: if undo {
-                            AssistantPhase::Rejected
-                        } else {
-                            AssistantPhase::Accepted
-                        },
-                        model: model.telemetry_id(),
-                        model_provider: model.provider_id().to_string(),
-                        response_latency: None,
-                        error_message: None,
-                        language_name: language_name.map(|name| name.to_proto()),
-                    },
-                    Some(self.telemetry.clone()),
-                    cx.http_client(),
-                    model.api_key(cx),
-                    cx.background_executor(),
-                );
             }
 
             if undo {

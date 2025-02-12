@@ -8,7 +8,6 @@ use assistant_slash_command::{
     SlashCommandResult, SlashCommandWorkingSet,
 };
 use assistant_slash_commands::FileCommandMetadata;
-use client::{self, proto, telemetry::Telemetry};
 use clock::ReplicaId;
 use collections::{HashMap, HashSet};
 use fs::{Fs, RemoveOptions};
@@ -43,7 +42,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use telemetry_events::{AssistantEvent, AssistantKind, AssistantPhase};
 use text::{BufferSnapshot, ToPoint};
 use ui::IconName;
 use util::{post_inc, ResultExt, TryFutureExt};
@@ -596,7 +594,6 @@ pub struct AssistantContext {
     pending_cache_warming_task: Task<Option<()>>,
     path: Option<PathBuf>,
     _subscriptions: Vec<Subscription>,
-    telemetry: Option<Arc<Telemetry>>,
     language_registry: Arc<LanguageRegistry>,
     patches: Vec<AssistantPatch>,
     xml_tags: Vec<XmlTag>,
@@ -632,7 +629,6 @@ impl AssistantContext {
     pub fn local(
         language_registry: Arc<LanguageRegistry>,
         project: Option<Entity<Project>>,
-        telemetry: Option<Arc<Telemetry>>,
         prompt_builder: Arc<PromptBuilder>,
         slash_commands: Arc<SlashCommandWorkingSet>,
         cx: &mut Context<Self>,
@@ -645,7 +641,6 @@ impl AssistantContext {
             prompt_builder,
             slash_commands,
             project,
-            telemetry,
             cx,
         )
     }
@@ -659,7 +654,6 @@ impl AssistantContext {
         prompt_builder: Arc<PromptBuilder>,
         slash_commands: Arc<SlashCommandWorkingSet>,
         project: Option<Entity<Project>>,
-        telemetry: Option<Arc<Telemetry>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let buffer = cx.new(|_cx| {
@@ -698,7 +692,6 @@ impl AssistantContext {
             pending_save: Task::ready(Ok(())),
             path: None,
             buffer,
-            telemetry,
             project,
             language_registry,
             slash_commands,
@@ -779,7 +772,6 @@ impl AssistantContext {
         prompt_builder: Arc<PromptBuilder>,
         slash_commands: Arc<SlashCommandWorkingSet>,
         project: Option<Entity<Project>>,
-        telemetry: Option<Arc<Telemetry>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let id = saved_context.id.clone().unwrap_or_else(ContextId::new);
@@ -791,7 +783,6 @@ impl AssistantContext {
             prompt_builder,
             slash_commands,
             project,
-            telemetry,
             cx,
         );
         this.path = Some(path);

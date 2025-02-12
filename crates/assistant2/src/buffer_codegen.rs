@@ -2,7 +2,6 @@ use crate::context::attach_context_to_message;
 use crate::context_store::ContextStore;
 use crate::inline_prompt_editor::CodegenStatus;
 use anyhow::{Context as _, Result};
-use client::telemetry::Telemetry;
 use collections::HashSet;
 use editor::{Anchor, AnchorRangeExt, MultiBuffer, MultiBufferSnapshot, ToOffset as _, ToPoint};
 use futures::{channel::mpsc, future::LocalBoxFuture, join, SinkExt, Stream, StreamExt};
@@ -29,7 +28,6 @@ use std::{
     time::Instant,
 };
 use streaming_diff::{CharOperation, LineDiff, LineOperation, StreamingDiff};
-use telemetry_events::{AssistantEvent, AssistantKind, AssistantPhase};
 
 pub struct BufferCodegen {
     alternatives: Vec<Entity<CodegenAlternative>>,
@@ -40,7 +38,6 @@ pub struct BufferCodegen {
     range: Range<Anchor>,
     initial_transaction_id: Option<TransactionId>,
     context_store: Entity<ContextStore>,
-    telemetry: Arc<Telemetry>,
     builder: Arc<PromptBuilder>,
     pub is_insertion: bool,
 }
@@ -51,7 +48,6 @@ impl BufferCodegen {
         range: Range<Anchor>,
         initial_transaction_id: Option<TransactionId>,
         context_store: Entity<ContextStore>,
-        telemetry: Arc<Telemetry>,
         builder: Arc<PromptBuilder>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -61,7 +57,6 @@ impl BufferCodegen {
                 range.clone(),
                 false,
                 Some(context_store.clone()),
-                Some(telemetry.clone()),
                 builder.clone(),
                 cx,
             )
@@ -76,7 +71,6 @@ impl BufferCodegen {
             range,
             initial_transaction_id,
             context_store,
-            telemetry,
             builder,
         };
         this.activate(0, cx);
@@ -149,7 +143,6 @@ impl BufferCodegen {
                     self.range.clone(),
                     false,
                     Some(self.context_store.clone()),
-                    Some(self.telemetry.clone()),
                     self.builder.clone(),
                     cx,
                 )
@@ -229,7 +222,6 @@ pub struct CodegenAlternative {
     generation: Task<()>,
     diff: Diff,
     context_store: Option<Entity<ContextStore>>,
-    telemetry: Option<Arc<Telemetry>>,
     _subscription: gpui::Subscription,
     builder: Arc<PromptBuilder>,
     active: bool,
@@ -249,7 +241,6 @@ impl CodegenAlternative {
         range: Range<Anchor>,
         active: bool,
         context_store: Option<Entity<ContextStore>>,
-        telemetry: Option<Arc<Telemetry>>,
         builder: Arc<PromptBuilder>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -290,7 +281,6 @@ impl CodegenAlternative {
             generation: Task::ready(()),
             diff: Diff::default(),
             context_store,
-            telemetry,
             _subscription: cx.subscribe(&buffer, Self::handle_buffer_event),
             builder,
             active,
@@ -464,7 +454,6 @@ impl CodegenAlternative {
         }
 
         let http_client = cx.http_client().clone();
-        let telemetry = self.telemetry.clone();
         let language_name = {
             let multibuffer = self.buffer.read(cx);
             let snapshot = multibuffer.snapshot(cx);
@@ -606,7 +595,6 @@ impl CodegenAlternative {
                                     error_message,
                                     language_name: language_name.map(|name| name.to_proto()),
                                 },
-                                telemetry,
                                 http_client,
                                 model_api_key,
                                 &executor,

@@ -1,23 +1,15 @@
 use crate::stdout_is_a_pty;
-use anyhow::{Context as _, Result};
 use backtrace::{self, Backtrace};
-use chrono::Utc;
-use db::kvp::KEY_VALUE_STORE;
 use gpui::{App, SemanticVersion};
-use http_client::{self, HttpClient, HttpClientWithUrl, HttpRequestExt, Method};
-use paths::{crashes_dir, crashes_retired_dir};
+use http_client::{self, HttpClientWithUrl};
 use project::Project;
-use release_channel::{AppCommitSha, ReleaseChannel, RELEASE_CHANNEL};
-use settings::Settings;
+use release_channel::{AppCommitSha, ReleaseChannel};
 use smol::stream::StreamExt;
 use std::{
-    env,
-    ffi::{c_void, OsStr},
+    ffi::c_void,
     sync::{atomic::Ordering, Arc},
 };
-use std::{io::Write, panic, sync::atomic::AtomicU32, thread};
-use url::Url;
-use util::ResultExt;
+use std::{panic, sync::atomic::AtomicU32, thread};
 
 static PANIC_COUNT: AtomicU32 = AtomicU32::new(0);
 

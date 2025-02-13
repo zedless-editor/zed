@@ -15,7 +15,7 @@ use editor::Editor;
 use env_logger::Builder;
 use extension::ExtensionHostProxy;
 use fs::{Fs, RealFs};
-use futures::{future, StreamExt};
+use futures::StreamExt;
 use git::GitHostingProviderRegistry;
 use gpui::{App, AppContext as _, Application, AsyncApp, UpdateGlobal as _};
 use title_bar;
@@ -48,7 +48,7 @@ use theme::{ActiveTheme, SystemAppearance, ThemeRegistry, ThemeSettings};
 use time::UtcOffset;
 use util::{maybe, ResultExt, TryFutureExt};
 use uuid::Uuid;
-use welcome::{show_welcome_view, BaseKeymap, FIRST_OPEN};
+use welcome::{show_welcome_view, FIRST_OPEN};
 use workspace::{AppState, SerializedWorkspaceLocation, WorkspaceSettings, WorkspaceStore};
 use zed::{
     app_menus, build_window_options, derive_paths_with_position, handle_cli_connection,

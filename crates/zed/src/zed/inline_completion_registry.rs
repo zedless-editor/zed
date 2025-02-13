@@ -2,7 +2,7 @@ use client::{Client, UserStore};
 use collections::HashMap;
 use editor::{Editor, EditorMode};
 use feature_flags::{FeatureFlagAppExt, PredictEditsFeatureFlag};
-use gpui::{AnyWindowHandle, App, AppContext, Context, Entity, WeakEntity};
+use gpui::{AnyWindowHandle, App, Context, Entity, WeakEntity};
 use language::language_settings::{all_language_settings, EditPredictionProvider};
 use settings::SettingsStore;
 use std::{cell::RefCell, rc::Rc, sync::Arc};

@@ -4055,16 +4055,11 @@ mod tests {
             command_palette::init(cx);
             language::init(cx);
             editor::init(cx);
-            collab_ui::init(&app_state, cx);
+            title_bar::init(cx);
             git_ui::init(cx);
             project_panel::init((), cx);
             outline_panel::init((), cx);
             terminal_view::init(cx);
-            copilot::copilot_chat::init(
-                app_state.fs.clone(),
-                app_state.client.http_client().clone(),
-                cx,
-            );
             image_viewer::init(cx);
             language_model::init(cx);
             language_models::init(

@@ -123,7 +123,6 @@ pub struct TitleBar {
     should_move: bool,
     application_menu: Option<Entity<ApplicationMenu>>,
     _subscriptions: Vec<Subscription>,
-    zed_predict_banner: Entity<ZedPredictBanner>,
 }
 
 impl Render for TitleBar {
@@ -207,7 +206,6 @@ impl Render for TitleBar {
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
                     )
                     .child(self.render_collaborator_list(window, cx))
-                    .child(self.zed_predict_banner.clone())
                     .child(
                         h_flex()
                             .gap_1()
@@ -221,7 +219,6 @@ impl Render for TitleBar {
                                     el.child(self.render_user_menu_button(cx))
                                 } else {
                                     el.children(self.render_connection_status(status, cx))
-                                        .child(self.render_sign_in_button(cx))
                                         .child(self.render_user_menu_button(cx))
                                 }
                             }),
@@ -310,8 +307,6 @@ impl TitleBar {
         subscriptions.push(cx.observe_window_activation(window, Self::window_activation_changed));
         subscriptions.push(cx.observe(&user_store, |_, _, cx| cx.notify()));
 
-        let zed_predict_banner = cx.new(ZedPredictBanner::new);
-
         Self {
             platform_style,
             content: div().id(id.into()),
@@ -323,7 +318,6 @@ impl TitleBar {
             user_store,
             client,
             _subscriptions: subscriptions,
-            zed_predict_banner,
         }
     }
 
@@ -608,23 +602,6 @@ impl TitleBar {
             }
             _ => None,
         }
-    }
-
-    pub fn render_sign_in_button(&mut self, _: &mut Context<Self>) -> Button {
-        let client = self.client.clone();
-        Button::new("sign_in", "Sign in")
-            .label_size(LabelSize::Small)
-            .on_click(move |_, window, cx| {
-                let client = client.clone();
-                window
-                    .spawn(cx, move |mut cx| async move {
-                        client
-                            .authenticate_and_connect(true, &cx)
-                            .await
-                            .notify_async_err(&mut cx);
-                    })
-                    .detach();
-            })
     }
 
     pub fn render_user_menu_button(&mut self, cx: &mut Context<Self>) -> impl Element {

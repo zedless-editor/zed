@@ -18,6 +18,7 @@ use fs::{Fs, RealFs};
 use futures::{future, StreamExt};
 use git::GitHostingProviderRegistry;
 use gpui::{App, AppContext as _, Application, AsyncApp, UpdateGlobal as _};
+use title_bar;
 
 use gpui_tokio::Tokio;
 use http_client::{read_proxy_from_env, Uri};
@@ -479,6 +480,7 @@ fn main() {
         language_tools::init(cx);
         call::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);
+        title_bar::init(cx);
         git_ui::init(cx);
         markdown_preview::init(cx);
         welcome::init(cx);

@@ -26,8 +26,6 @@ const MAX_STORED_LOG_ENTRIES: usize = 2000;
 pub struct LogStore {
     projects: HashMap<WeakEntity<Project>, ProjectState>,
     language_servers: HashMap<LanguageServerId, LanguageServerState>,
-    copilot_log_subscription: Option<lsp::Subscription>,
-    _copilot_subscription: Option<gpui::Subscription>,
     io_tx: mpsc::UnboundedSender<(LanguageServerId, IoKind, String)>,
 }
 

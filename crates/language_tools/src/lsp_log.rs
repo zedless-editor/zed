@@ -1,5 +1,4 @@
 use collections::{HashMap, VecDeque};
-use copilot::Copilot;
 use editor::{actions::MoveToEnd, scroll::Autoscroll, Editor, EditorEvent};
 use futures::{channel::mpsc, StreamExt};
 use gpui::{

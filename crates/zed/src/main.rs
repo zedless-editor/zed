@@ -372,12 +372,9 @@ fn main() {
         // We should rename these in the future to `first app open`, `first app open for release channel`, and `app open`
         if let (Some(system_id), Some(installation_id)) = (&system_id, &installation_id) {
             match (&system_id, &installation_id) {
-                (IdType::New(_), IdType::New(_)) => {
-                }
-                (IdType::Existing(_), IdType::New(_)) => {
-                }
-                (_, IdType::Existing(_)) => {
-                }
+                (IdType::New(_), IdType::New(_)) => {}
+                (IdType::Existing(_), IdType::New(_)) => {}
+                (_, IdType::Existing(_)) => {}
             }
         }
         let app_session = cx.new(|cx| AppSession::new(session, cx));
@@ -412,15 +409,6 @@ fn main() {
             cx.background_executor().clone(),
         );
         command_palette::init(cx);
-        let copilot_language_server_id = app_state.languages.next_language_server_id();
-        copilot::init(
-            copilot_language_server_id,
-            app_state.fs.clone(),
-            app_state.client.http_client(),
-            app_state.node_runtime.clone(),
-            cx,
-        );
-        supermaven::init(app_state.client.clone(), cx);
         language_model::init(cx);
         language_models::init(
             app_state.user_store.clone(),

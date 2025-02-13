@@ -38,10 +38,6 @@ use zed_actions::OpenBrowser;
 
 actions!(edit_prediction, [ToggleMenu]);
 
-const COPILOT_SETTINGS_URL: &str = "https://github.com/settings/copilot";
-
-struct CopilotErrorToast;
-
 pub struct InlineCompletionButton {
     editor_subscription: Option<(Subscription, usize)>,
     editor_enabled: Option<bool>,
@@ -53,13 +49,6 @@ pub struct InlineCompletionButton {
     fs: Arc<dyn Fs>,
     user_store: Entity<UserStore>,
     popover_menu_handle: PopoverMenuHandle<ContextMenu>,
-}
-
-enum SupermavenButtonStatus {
-    Ready,
-    Errored(String),
-    NeedsActivation(String),
-    Initializing,
 }
 
 impl Render for InlineCompletionButton {
@@ -98,27 +87,6 @@ impl InlineCompletionButton {
             fs,
             user_store,
         }
-    }
-
-    pub fn build_copilot_start_menu(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<ContextMenu> {
-        let fs = self.fs.clone();
-        ContextMenu::build(window, cx, |menu, _, _| {
-            menu.entry("Sign In", None, copilot::initiate_sign_in)
-                .entry("Disable Copilot", None, {
-                    let fs = fs.clone();
-                    move |_window, cx| hide_copilot(fs.clone(), cx)
-                })
-                .entry("Use Supermaven", None, {
-                    let fs = fs.clone();
-                    move |_window, cx| {
-                        set_completion_provider(fs.clone(), cx, EditPredictionProvider::Supermaven)
-                    }
-                })
-        })
     }
 
     pub fn build_language_settings_menu(&self, mut menu: ContextMenu, cx: &mut App) -> ContextMenu {
@@ -299,18 +267,6 @@ impl InlineCompletionButton {
         })
     }
 
-    fn build_supermaven_context_menu(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<ContextMenu> {
-        ContextMenu::build(window, cx, |menu, _, cx| {
-            self.build_language_settings_menu(menu, cx)
-                .separator()
-                .action("Sign Out", supermaven::SignOut.boxed_clone())
-        })
-    }
-
     pub fn update_enabled(&mut self, editor: Entity<Editor>, cx: &mut Context<Self>) {
         let editor = editor.read(cx);
         let snapshot = editor.buffer().read(cx).snapshot(cx);
@@ -360,33 +316,6 @@ impl StatusItemView for InlineCompletionButton {
             self.editor_enabled = None;
         }
         cx.notify();
-    }
-}
-
-impl SupermavenButtonStatus {
-    fn to_icon(&self) -> IconName {
-        match self {
-            SupermavenButtonStatus::Ready => IconName::Supermaven,
-            SupermavenButtonStatus::Errored(_) => IconName::SupermavenError,
-            SupermavenButtonStatus::NeedsActivation(_) => IconName::SupermavenInit,
-            SupermavenButtonStatus::Initializing => IconName::SupermavenInit,
-        }
-    }
-
-    fn to_tooltip(&self) -> String {
-        match self {
-            SupermavenButtonStatus::Ready => "Supermaven is ready".to_string(),
-            SupermavenButtonStatus::Errored(error) => format!("Supermaven error: {}", error),
-            SupermavenButtonStatus::NeedsActivation(_) => "Supermaven needs activation".to_string(),
-            SupermavenButtonStatus::Initializing => "Supermaven initializing".to_string(),
-        }
-    }
-
-    fn has_menu(&self) -> bool {
-        match self {
-            SupermavenButtonStatus::Ready | SupermavenButtonStatus::NeedsActivation(_) => true,
-            SupermavenButtonStatus::Errored(_) | SupermavenButtonStatus::Initializing => false,
-        }
     }
 }
 

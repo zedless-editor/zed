@@ -94,11 +94,6 @@ pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
             let new_provider = all_language_settings(None, cx).edit_predictions.provider;
 
             if new_provider != provider {
-                let tos_accepted = user_store
-                    .read(cx)
-                    .current_user_has_accepted_terms()
-                    .unwrap_or(false);
-
                 provider = new_provider;
                 assign_edit_prediction_providers(
                     &editors,
@@ -107,27 +102,8 @@ pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
                     user_store.clone(),
                     cx,
                 );
-
-                if !tos_accepted {
-                    match provider {
-                        EditPredictionProvider::Zed => {
-                            let Some(window) = cx.active_window() else {
-                                return;
-                            };
-
-                            window
-                                .update(cx, |_, window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(zed_actions::OpenZedPredictOnboarding),
-                                        cx,
-                                    );
-                                })
-                                .ok();
-                        }
-                        EditPredictionProvider::None
-                        | EditPredictionProvider::Copilot
-                        | EditPredictionProvider::Supermaven => {}
-                    }
+                match provider {
+                    EditPredictionProvider::None => {}
                 }
             }
         }
@@ -217,62 +193,5 @@ fn assign_edit_prediction_provider(
 
     match provider {
         EditPredictionProvider::None => {}
-        EditPredictionProvider::Copilot => {
-            if let Some(copilot) = Copilot::global(cx) {
-                if let Some(buffer) = singleton_buffer {
-                    if buffer.read(cx).file().is_some() {
-                        copilot.update(cx, |copilot, cx| {
-                            copilot.register_buffer(&buffer, cx);
-                        });
-                    }
-                }
-                let provider = cx.new(|_| CopilotCompletionProvider::new(copilot));
-                editor.set_edit_prediction_provider(Some(provider), window, cx);
-            }
-        }
-        EditPredictionProvider::Supermaven => {
-            if let Some(supermaven) = Supermaven::global(cx) {
-                let provider = cx.new(|_| SupermavenCompletionProvider::new(supermaven));
-                editor.set_edit_prediction_provider(Some(provider), window, cx);
-            }
-        }
-        EditPredictionProvider::Zed => {
-            if cx.has_flag::<PredictEditsFeatureFlag>()
-                || (cfg!(debug_assertions) && client.status().borrow().is_connected())
-            {
-                let mut worktree = None;
-
-                if let Some(buffer) = &singleton_buffer {
-                    if let Some(file) = buffer.read(cx).file() {
-                        let id = file.worktree_id(cx);
-                        if let Some(inner_worktree) = editor
-                            .project
-                            .as_ref()
-                            .and_then(|project| project.read(cx).worktree_for_id(id, cx))
-                        {
-                            worktree = Some(inner_worktree);
-                        }
-                    }
-                }
-
-                let zeta = zeta::Zeta::register(worktree, client.clone(), user_store, cx);
-
-                if let Some(buffer) = &singleton_buffer {
-                    if buffer.read(cx).file().is_some() {
-                        zeta.update(cx, |zeta, cx| {
-                            zeta.register_buffer(&buffer, cx);
-                        });
-                    }
-                }
-
-                let data_collection =
-                    ProviderDataCollection::new(zeta.clone(), singleton_buffer, cx);
-
-                let provider =
-                    cx.new(|_| zeta::ZetaInlineCompletionProvider::new(zeta, data_collection));
-
-                editor.set_edit_prediction_provider(Some(provider), window, cx);
-            }
-        }
     }
 }

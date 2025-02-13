@@ -206,10 +206,7 @@ pub enum EditPredictionProvider {
 impl EditPredictionProvider {
     pub fn is_zed(&self) -> bool {
         match self {
-            EditPredictionProvider::Zed => true,
-            EditPredictionProvider::None
-            | EditPredictionProvider::Copilot
-            | EditPredictionProvider::Supermaven => false,
+            EditPredictionProvider::None => false,
         }
     }
 }
@@ -1108,8 +1105,6 @@ impl settings::Settings for AllLanguageSettings {
             edit_predictions: EditPredictionSettings {
                 provider: if let Some(provider) = edit_prediction_provider {
                     provider
-                } else if copilot_enabled.unwrap_or(true) {
-                    EditPredictionProvider::Copilot
                 } else {
                     EditPredictionProvider::None
                 },

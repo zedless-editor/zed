@@ -39,6 +39,7 @@ use multi_buffer::MultiBufferRow;
 use parking_lot::Mutex;
 use project::{CodeAction, ProjectTransaction};
 use prompt_library::PromptBuilder;
+use proto::ErrorExt;
 use rope::Rope;
 use settings::{update_settings_file, Settings, SettingsStore};
 use smol::future::FutureExt;
@@ -63,11 +64,7 @@ use ui::{
 use util::{RangeExt, ResultExt};
 use workspace::{notifications::NotificationId, ItemHandle, Toast, Workspace};
 
-pub fn init(
-    fs: Arc<dyn Fs>,
-    prompt_builder: Arc<PromptBuilder>,
-    cx: &mut App,
-) {
+pub fn init(fs: Arc<dyn Fs>, prompt_builder: Arc<PromptBuilder>, cx: &mut App) {
     cx.set_global(InlineAssistant::new(fs, prompt_builder));
     cx.observe_new(|_, window, cx| {
         let Some(window) = window else {
@@ -108,10 +105,7 @@ pub struct InlineAssistant {
 impl Global for InlineAssistant {}
 
 impl InlineAssistant {
-    pub fn new(
-        fs: Arc<dyn Fs>,
-        prompt_builder: Arc<PromptBuilder>,
-    ) -> Self {
+    pub fn new(fs: Arc<dyn Fs>, prompt_builder: Arc<PromptBuilder>) -> Self {
         Self {
             next_assist_id: InlineAssistId::default(),
             next_assist_group_id: InlineAssistGroupId::default(),
@@ -2453,13 +2447,7 @@ impl Codegen {
         cx: &mut Context<Self>,
     ) -> Self {
         let codegen = cx.new(|cx| {
-            CodegenAlternative::new(
-                buffer.clone(),
-                range.clone(),
-                false,
-                builder.clone(),
-                cx,
-            )
+            CodegenAlternative::new(buffer.clone(), range.clone(), false, builder.clone(), cx)
         });
         let mut this = Self {
             is_insertion: range.to_offset(&buffer.read(cx).snapshot(cx)).is_empty(),

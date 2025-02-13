@@ -16,7 +16,6 @@ anthropic = { workspace = true, features = ["schemars"] }
 anyhow.workspace = true
 client.workspace = true
 collections.workspace = true
-copilot = { workspace = true, features = ["schemars"] }
 deepseek = { workspace = true, features = ["schemars"] }
 editor.workspace = true
 feature_flags.workspace = true

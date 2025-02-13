@@ -199,11 +199,8 @@ impl LanguageSettings {
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EditPredictionProvider {
-    None,
     #[default]
-    Copilot,
-    Supermaven,
-    Zed,
+    None,
 }
 
 impl EditPredictionProvider {

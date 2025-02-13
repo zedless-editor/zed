@@ -26,7 +26,6 @@ members = [
     "crates/component_preview",
     "crates/context_server",
     "crates/context_server_settings",
-    "crates/copilot",
     "crates/db",
     "crates/deepseek",
     "crates/diagnostics",
@@ -217,7 +216,6 @@ component = { path = "crates/component" }
 component_preview = { path = "crates/component_preview" }
 context_server = { path = "crates/context_server" }
 context_server_settings = { path = "crates/context_server_settings" }
-copilot = { path = "crates/copilot" }
 db = { path = "crates/db" }
 deepseek = { path = "crates/deepseek" }
 diagnostics = { path = "crates/diagnostics" }

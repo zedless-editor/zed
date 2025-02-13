@@ -249,11 +249,7 @@ impl ActiveCall {
 
         cx.spawn(move |this, mut cx| async move {
             let result = invite.await;
-            if result.is_ok() {
-                this.update(&mut cx, |this, cx| {
-                })?;
-            } else {
-                //TODO: report collaboration error
+            if !result.is_ok() {
                 log::error!("invite failed: {:?}", result);
             }
 
@@ -318,8 +314,6 @@ impl ActiveCall {
             let room = join.await?;
             this.update(&mut cx, |this, cx| this.set_room(room.clone(), cx))?
                 .await?;
-            this.update(&mut cx, |this, cx| {
-            })?;
             Ok(())
         })
     }
@@ -364,8 +358,6 @@ impl ActiveCall {
             let room = join.await?;
             this.update(&mut cx, |this, cx| this.set_room(room.clone(), cx))?
                 .await?;
-            this.update(&mut cx, |this, cx| {
-            })?;
             Ok(room)
         })
     }

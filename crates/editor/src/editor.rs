@@ -151,7 +151,7 @@ use std::{
     mem,
     num::NonZeroU32,
     ops::{ControlFlow, Deref, DerefMut, Not as _, Range, RangeInclusive},
-    path::{Path, PathBuf},
+    path::PathBuf,
     rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
@@ -2667,7 +2667,7 @@ impl Editor {
             return true;
         }
 
-        if is_user_requested && self.discard_inline_completion(true, cx) {
+        if is_user_requested && self.discard_inline_completion(cx) {
             return true;
         }
 
@@ -3958,7 +3958,7 @@ impl Editor {
                         if editor.show_edit_predictions_in_menu() {
                             editor.update_visible_inline_completion(window, cx);
                         } else {
-                            editor.discard_inline_completion(false, cx);
+                            editor.discard_inline_completion(cx);
                         }
 
                         cx.notify();
@@ -4020,7 +4020,7 @@ impl Editor {
         let entries = completions_menu.entries.borrow();
         let mat = entries.get(item_ix.unwrap_or(completions_menu.selected_item))?;
         if self.show_edit_predictions_in_menu() {
-            self.discard_inline_completion(true, cx);
+            self.discard_inline_completion(cx);
         }
         let candidate_id = mat.candidate_id;
         drop(entries);
@@ -4266,7 +4266,7 @@ impl Editor {
                     }
 
                     editor.completion_tasks.clear();
-                    editor.discard_inline_completion(false, cx);
+                    editor.discard_inline_completion(cx);
                     let task_context =
                         tasks
                             .as_ref()
@@ -4706,7 +4706,7 @@ impl Editor {
             self.buffer.read(cx).text_anchor_for_position(cursor, cx)?;
 
         if !self.inline_completions_enabled_in_buffer(&buffer, cursor_buffer_position, cx) {
-            self.discard_inline_completion(false, cx);
+            self.discard_inline_completion(cx);
             return None;
         }
 
@@ -4715,7 +4715,7 @@ impl Editor {
                 || !self.is_focused(window)
                 || buffer.read(cx).is_empty())
         {
-            self.discard_inline_completion(false, cx);
+            self.discard_inline_completion(cx);
             return None;
         }
 
@@ -5076,10 +5076,7 @@ impl Editor {
         }
     }
 
-    fn discard_inline_completion(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    fn discard_inline_completion(&mut self, cx: &mut Context<Self>) -> bool {
         if let Some(provider) = self.edit_prediction_provider() {
             provider.discard(cx);
         }
@@ -5217,7 +5214,7 @@ impl Editor {
                     !invalidation_range.contains(&offset_selection.head())
                 })
         {
-            self.discard_inline_completion(false, cx);
+            self.discard_inline_completion(cx);
             return None;
         }
 
@@ -5234,7 +5231,7 @@ impl Editor {
             self.edit_prediction_settings_at_position(&buffer, cursor_buffer_position, cx);
 
         if !self.edit_prediction_settings.is_enabled() {
-            self.discard_inline_completion(false, cx);
+            self.discard_inline_completion(cx);
             return None;
         }
 
@@ -5704,7 +5701,7 @@ impl Editor {
                     .id("accept-terms")
                     .cursor_pointer()
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
-                    .on_click(cx.listener(|this, _event, window, cx| {
+                    .on_click(cx.listener(|_this, _event, window, cx| {
                         cx.stop_propagation();
                         window.dispatch_action(
                             zed_actions::OpenZedPredictOnboarding.boxed_clone(),
@@ -14046,10 +14043,10 @@ impl Editor {
                 }
 
                 let Some(project) = &self.project else { return };
-                let (is_via_ssh) = {
+                let is_via_ssh = {
                     let project = project.read(cx);
                     let is_via_ssh = project.is_via_ssh();
-                    (is_via_ssh)
+                    is_via_ssh
                 };
                 refresh_linked_ranges(self, window, cx);
             }
@@ -14648,7 +14645,7 @@ impl Editor {
         }
 
         self.hide_context_menu(window, cx);
-        self.discard_inline_completion(false, cx);
+        self.discard_inline_completion(cx);
         cx.emit(EditorEvent::Blurred);
         cx.notify();
     }

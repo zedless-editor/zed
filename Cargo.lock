@@ -5339,7 +5339,6 @@ dependencies = [
  "ui",
  "workspace",
  "zed_actions",
- "zeta",
 ]
 
 [[package]]
@@ -11814,7 +11813,6 @@ dependencies = [
  "windows 0.58.0",
  "workspace",
  "zed_actions",
- "zeta",
 ]
 
 [[package]]
@@ -14657,7 +14655,6 @@ dependencies = [
  "winresource",
  "workspace",
  "zed_actions",
- "zeta",
 ]
 
 [[package]]
@@ -14754,17 +14751,6 @@ name = "zed_html"
 version = "0.1.5"
 dependencies = [
  "zed_extension_api 0.1.0",
-]
-
-[[package]]
-name = "zed_llm_client"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "614669bead4741b2fc352ae1967318be16949cf46f59013e548c6dbfdfc01252"
-dependencies = [
- "serde",
- "serde_json",
- "uuid",
 ]
 
 [[package]]
@@ -14950,55 +14936,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.90",
-]
-
-[[package]]
-name = "zeta"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arrayvec",
- "call",
- "chrono",
- "client",
- "clock",
- "collections",
- "command_palette_hooks",
- "ctor",
- "db",
- "editor",
- "env_logger 0.11.6",
- "feature_flags",
- "fs",
- "futures 0.3.31",
- "gpui",
- "http_client",
- "indoc",
- "inline_completion",
- "language",
- "language_models",
- "log",
- "menu",
- "postage",
- "project",
- "regex",
- "reqwest_client",
- "rpc",
- "serde",
- "serde_json",
- "settings",
- "similar",
- "theme",
- "tree-sitter-go",
- "tree-sitter-rust",
- "ui",
- "unindent",
- "util",
- "uuid",
- "workspace",
- "worktree",
- "zed_actions",
- "zed_llm_client",
 ]
 
 [[package]]

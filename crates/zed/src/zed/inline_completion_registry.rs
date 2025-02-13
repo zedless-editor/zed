@@ -1,6 +1,5 @@
 use client::{Client, UserStore};
 use collections::HashMap;
-use copilot::{Copilot, CopilotCompletionProvider};
 use editor::{Editor, EditorMode};
 use feature_flags::{FeatureFlagAppExt, PredictEditsFeatureFlag};
 use gpui::{AnyWindowHandle, App, AppContext, Context, Entity, WeakEntity};
@@ -19,8 +18,6 @@ pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
             if editor.mode() != EditorMode::Full {
                 return;
             }
-
-            register_backward_compatible_actions(editor, cx);
 
             let Some(window) = window else {
                 return;
@@ -68,10 +65,6 @@ pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
         });
     }
 
-    if cx.has_flag::<PredictEditsFeatureFlag>() {
-        cx.on_action(clear_zeta_edit_history);
-    }
-
     cx.observe_flag::<PredictEditsFeatureFlag, _>({
         let editors = editors.clone();
         let client = client.clone();
@@ -79,9 +72,6 @@ pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
         move |active, cx| {
             let provider = all_language_settings(None, cx).edit_predictions.provider;
             assign_edit_prediction_providers(&editors, provider, &client, user_store.clone(), cx);
-            if active && !cx.is_action_available(&zeta::ClearHistory) {
-                cx.on_action(clear_zeta_edit_history);
-            }
         }
     })
     .detach();
@@ -111,12 +101,6 @@ pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
     .detach();
 }
 
-fn clear_zeta_edit_history(_: &zeta::ClearHistory, cx: &mut App) {
-    if let Some(zeta) = zeta::Zeta::global(cx) {
-        zeta.update(cx, |zeta, _| zeta.clear_history());
-    }
-}
-
 fn assign_edit_prediction_providers(
     editors: &Rc<RefCell<HashMap<WeakEntity<Editor>, AnyWindowHandle>>>,
     provider: EditPredictionProvider,
@@ -138,46 +122,6 @@ fn assign_edit_prediction_providers(
             })
         });
     }
-}
-
-fn register_backward_compatible_actions(editor: &mut Editor, cx: &mut Context<Editor>) {
-    // We renamed some of these actions to not be copilot-specific, but that
-    // would have not been backwards-compatible. So here we are re-registering
-    // the actions with the old names to not break people's keymaps.
-    editor
-        .register_action(cx.listener(
-            |editor, _: &copilot::Suggest, window: &mut Window, cx: &mut Context<Editor>| {
-                editor.show_inline_completion(&Default::default(), window, cx);
-            },
-        ))
-        .detach();
-    editor
-        .register_action(cx.listener(
-            |editor, _: &copilot::NextSuggestion, window: &mut Window, cx: &mut Context<Editor>| {
-                editor.next_edit_prediction(&Default::default(), window, cx);
-            },
-        ))
-        .detach();
-    editor
-        .register_action(cx.listener(
-            |editor,
-             _: &copilot::PreviousSuggestion,
-             window: &mut Window,
-             cx: &mut Context<Editor>| {
-                editor.previous_edit_prediction(&Default::default(), window, cx);
-            },
-        ))
-        .detach();
-    editor
-        .register_action(cx.listener(
-            |editor,
-             _: &editor::actions::AcceptPartialCopilotSuggestion,
-             window: &mut Window,
-             cx: &mut Context<Editor>| {
-                editor.accept_partial_inline_completion(&Default::default(), window, cx);
-            },
-        ))
-        .detach();
 }
 
 fn assign_edit_prediction_provider(

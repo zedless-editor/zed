@@ -9,7 +9,6 @@ use chrono::Offset;
 use clap::{command, Parser};
 use cli::FORCE_CLI_MODE_ENV_VAR_NAME;
 use client::{parse_zed_link, Client, ProxySettings, UserStore};
-use collab_ui::channel_view::ChannelView;
 use collections::HashMap;
 use db::kvp::{GLOBAL_KEY_VALUE_STORE, KEY_VALUE_STORE};
 use editor::Editor;
@@ -391,8 +390,6 @@ fn main() {
         });
         AppState::set_global(Arc::downgrade(&app_state), cx);
 
-        auto_update::init(client.http_client(), cx);
-        auto_update_ui::init(cx);
         reliability::init(
             client.http_client(),
             system_id.as_ref().map(|id| id.to_string()),
@@ -482,14 +479,11 @@ fn main() {
         language_tools::init(cx);
         call::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);
-        collab_ui::init(&app_state, cx);
         git_ui::init(cx);
-        feedback::init(cx);
         markdown_preview::init(cx);
         welcome::init(cx);
         settings_ui::init(cx);
         extensions_ui::init(cx);
-        zeta::init(cx);
 
         cx.observe_global::<SettingsStore>({
             let languages = app_state.languages.clone();
@@ -654,22 +648,6 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
 
                 let workspace_window =
                     workspace::get_any_active_workspace(app_state, cx.clone()).await?;
-                let workspace = workspace_window.entity(&cx)?;
-
-                let mut promises = Vec::new();
-                for (channel_id, heading) in request.open_channel_notes {
-                    promises.push(cx.update_window(workspace_window.into(), |_, window, cx| {
-                        ChannelView::open(
-                            client::ChannelId(channel_id),
-                            heading,
-                            workspace.clone(),
-                            window,
-                            cx,
-                        )
-                        .log_err()
-                    })?)
-                }
-                future::join_all(promises).await;
                 anyhow::Ok(())
             })
             .await;

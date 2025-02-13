@@ -376,38 +376,14 @@ fn initialize_panels(
         let project_panel = ProjectPanel::load(workspace_handle.clone(), cx.clone());
         let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
-        let channels_panel =
-            collab_ui::collab_panel::CollabPanel::load(workspace_handle.clone(), cx.clone());
-        let chat_panel =
-            collab_ui::chat_panel::ChatPanel::load(workspace_handle.clone(), cx.clone());
-        let notification_panel = collab_ui::notification_panel::NotificationPanel::load(
-            workspace_handle.clone(),
-            cx.clone(),
-        );
 
-        let (
-            project_panel,
-            outline_panel,
-            terminal_panel,
-            channels_panel,
-            chat_panel,
-            notification_panel,
-        ) = futures::try_join!(
-            project_panel,
-            outline_panel,
-            terminal_panel,
-            channels_panel,
-            chat_panel,
-            notification_panel,
-        )?;
+        let (project_panel, outline_panel, terminal_panel) =
+            futures::try_join!(project_panel, outline_panel, terminal_panel,)?;
 
         workspace_handle.update_in(&mut cx, |workspace, window, cx| {
             workspace.add_panel(project_panel, window, cx);
             workspace.add_panel(outline_panel, window, cx);
             workspace.add_panel(terminal_panel, window, cx);
-            workspace.add_panel(channels_panel, window, cx);
-            workspace.add_panel(chat_panel, window, cx);
-            workspace.add_panel(notification_panel, window, cx);
             cx.when_flag_enabled::<GitUiFeatureFlag>(window, |workspace, window, cx| {
                 let git_panel = git_ui::git_panel::GitPanel::new(workspace, window, cx);
                 workspace.add_panel(git_panel, window, cx);
@@ -733,32 +709,6 @@ fn register_actions(
              window: &mut Window,
              cx: &mut Context<Workspace>| {
                 workspace.toggle_panel_focus::<OutlinePanel>(window, cx);
-            },
-        )
-        .register_action(
-            |workspace: &mut Workspace,
-             _: &collab_ui::collab_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<collab_ui::collab_panel::CollabPanel>(window, cx);
-            },
-        )
-        .register_action(
-            |workspace: &mut Workspace,
-             _: &collab_ui::chat_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<collab_ui::chat_panel::ChatPanel>(window, cx);
-            },
-        )
-        .register_action(
-            |workspace: &mut Workspace,
-             _: &collab_ui::notification_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<collab_ui::notification_panel::NotificationPanel>(
-                    window, cx,
-                );
             },
         )
         .register_action(

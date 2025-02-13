@@ -139,7 +139,6 @@ pub fn init(
 
     cx.observe_new(move |project: &mut Project, _, cx| {
         let http_client = http_client.clone();
-        let panic_report_url = panic_report_url.clone();
         let session_id = session_id.clone();
         let installation_id = installation_id.clone();
         let system_id = system_id.clone();

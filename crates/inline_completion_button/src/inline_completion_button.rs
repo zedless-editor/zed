@@ -36,7 +36,6 @@ use workspace::{
     Toast, Workspace,
 };
 use zed_actions::OpenBrowser;
-use zeta::RateCompletions;
 
 actions!(edit_prediction, [ToggleMenu]);
 

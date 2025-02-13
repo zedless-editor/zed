@@ -14,7 +14,6 @@ use crate::application_menu::{
 };
 
 use crate::platforms::{platform_linux, platform_mac, platform_windows};
-use auto_update::AutoUpdateStatus;
 use call::ActiveCall;
 use client::{Client, UserStore};
 use feature_flags::{FeatureFlagAppExt, ZedPro};
@@ -36,7 +35,6 @@ use ui::{
 use util::ResultExt;
 use workspace::{notifications::NotifyResultExt, Workspace};
 use zed_actions::{OpenBrowser, OpenRecent, OpenRemote};
-use zeta::ZedPredictBanner;
 
 #[cfg(feature = "stories")]
 pub use stories::*;
@@ -599,29 +597,12 @@ impl TitleBar {
                     .into_any_element(),
             ),
             client::Status::UpgradeRequired => {
-                let auto_updater = auto_update::AutoUpdater::get(cx);
-                let label = match auto_updater.map(|auto_update| auto_update.read(cx).status()) {
-                    Some(AutoUpdateStatus::Updated { .. }) => "Please restart Zed to Collaborate",
-                    Some(AutoUpdateStatus::Installing)
-                    | Some(AutoUpdateStatus::Downloading)
-                    | Some(AutoUpdateStatus::Checking) => "Updating...",
-                    Some(AutoUpdateStatus::Idle) | Some(AutoUpdateStatus::Errored) | None => {
-                        "Please update Zed to Collaborate"
-                    }
-                };
+                let label = "Please update Zed to Collaborate";
 
                 Some(
                     Button::new("connection-status", label)
                         .label_size(LabelSize::Small)
-                        .on_click(|_, window, cx| {
-                            if let Some(auto_updater) = auto_update::AutoUpdater::get(cx) {
-                                if auto_updater.read(cx).status().is_updated() {
-                                    workspace::reload(&Default::default(), cx);
-                                    return;
-                                }
-                            }
-                            auto_update::check(&Default::default(), window, cx);
-                        })
+                        .on_click(|_, window, cx| {})
                         .into_any_element(),
                 )
             }

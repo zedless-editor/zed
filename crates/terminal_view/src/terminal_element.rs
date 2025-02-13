@@ -1042,7 +1042,6 @@ impl InputHandler for TerminalInputHandler {
         self.workspace
             .update(cx, |this, cx| {
                 window.invalidate_character_coordinates();
-                let project = this.project().read(cx);
             })
             .ok();
     }

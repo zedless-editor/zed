@@ -22,9 +22,7 @@ use language_model::{
     LanguageModelImage, LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage,
     LanguageModelToolUseId, MessageContent, Role, StopReason,
 };
-use language_models::{
-    provider::cloud::{MaxMonthlySpendReachedError, PaymentRequiredError},
-};
+use language_models::provider::cloud::{MaxMonthlySpendReachedError, PaymentRequiredError};
 use open_ai::Model as OpenAiModel;
 use paths::contexts_dir;
 use project::Project;
@@ -2302,7 +2300,6 @@ impl AssistantContext {
                         });
                         None
                     };
-
 
                     if let Ok(stop_reason) = result {
                         match stop_reason {

@@ -536,10 +536,6 @@ impl Session {
         if let Kernel::Shutdown = kernel {
             cx.emit(SessionEvent::Shutdown(self.editor.clone()));
         }
-
-        let kernel_status = KernelStatus::from(&kernel).to_string();
-        let kernel_language = self.kernel_specification.language();
-
         self.kernel = kernel;
     }
 

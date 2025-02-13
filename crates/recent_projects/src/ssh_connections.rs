@@ -1,21 +1,20 @@
 use std::collections::BTreeSet;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use editor::Editor;
 use extension_host::ExtensionStore;
 use futures::channel::oneshot;
 use gpui::{
     percentage, Animation, AnimationExt, AnyWindowHandle, App, AsyncApp, DismissEvent, Entity,
-    EventEmitter, Focusable, FontFeatures, ParentElement as _, PromptLevel, Render,
-    SemanticVersion, SharedString, Task, TextStyleRefinement, Transformation, WeakEntity,
+    EventEmitter, Focusable, FontFeatures, ParentElement as _, PromptLevel, Render, SharedString,
+    Task, TextStyleRefinement, Transformation, WeakEntity,
 };
 
 use language::CursorShape;
 use markdown::{Markdown, MarkdownStyle};
-use release_channel::ReleaseChannel;
 use remote::ssh_session::ConnectionIdentifier;
-use remote::{SshConnectionOptions, SshPlatform, SshRemoteClient};
+use remote::{SshConnectionOptions, SshRemoteClient};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{Settings, SettingsSources};

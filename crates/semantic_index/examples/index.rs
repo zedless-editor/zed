@@ -25,8 +25,6 @@ fn main() {
             store.update_user_settings::<AllLanguageSettings>(cx, |_| {});
         });
 
-        let clock = Arc::new(FakeSystemClock::new());
-
         let http = Arc::new(HttpClientWithUrl::new(
             Arc::new(
                 reqwest_client::ReqwestClient::user_agent("Zed semantic index example").unwrap(),

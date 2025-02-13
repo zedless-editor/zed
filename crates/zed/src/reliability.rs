@@ -128,14 +128,6 @@ pub fn init(
 ) {
     #[cfg(target_os = "macos")]
     monitor_main_thread_hangs(http_client.clone(), installation_id.clone(), cx);
-
-    cx.observe_new(move |project: &mut Project, _, cx| {
-        let http_client = http_client.clone();
-        let session_id = session_id.clone();
-        let installation_id = installation_id.clone();
-        let system_id = system_id.clone();
-    })
-    .detach();
 }
 
 #[cfg(target_os = "macos")]

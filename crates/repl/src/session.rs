@@ -4,7 +4,6 @@ use crate::setup_editor_session_actions;
 use crate::{
     kernels::{Kernel, KernelSpecification, NativeRunningKernel},
     outputs::{ExecutionStatus, ExecutionView},
-    KernelStatus,
 };
 use collections::{HashMap, HashSet};
 use editor::{
@@ -230,7 +229,6 @@ impl Session {
     }
 
     fn start_kernel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let kernel_language = self.kernel_specification.language();
         let entity_id = self.editor.entity_id();
         let working_directory = self
             .editor

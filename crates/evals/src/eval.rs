@@ -2,7 +2,6 @@ use ::fs::{Fs, RealFs};
 use anyhow::Result;
 use clap::Parser;
 use client::{Client, UserStore};
-use clock::RealSystemClock;
 use collections::BTreeMap;
 use feature_flags::FeatureFlagAppExt as _;
 use git::GitHostingProviderRegistry;
@@ -276,7 +275,6 @@ async fn run_evaluation(
     let api_key = std::env::var("OPENAI_API_KEY").unwrap();
     let git_hosting_provider_registry = Arc::new(GitHostingProviderRegistry::new());
     let fs = Arc::new(RealFs::new(git_hosting_provider_registry, None)) as Arc<dyn Fs>;
-    let clock = Arc::new(RealSystemClock);
     let client = cx
         .update(|cx| {
             Client::new(

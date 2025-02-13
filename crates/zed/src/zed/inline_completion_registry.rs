@@ -125,15 +125,14 @@ fn assign_edit_prediction_providers(
 }
 
 fn assign_edit_prediction_provider(
-    editor: &mut Editor,
+    _editor: &mut Editor,
     provider: EditPredictionProvider,
-    client: &Arc<Client>,
-    user_store: Entity<UserStore>,
-    window: &mut Window,
-    cx: &mut Context<Editor>,
+    _client: &Arc<Client>,
+    _user_store: Entity<UserStore>,
+    _window: &mut Window,
+    _cx: &mut Context<Editor>,
 ) {
-    // TODO: Do we really want to collect data only for singleton buffers?
-    let singleton_buffer = editor.buffer().read(cx).as_singleton();
+    // TODO: Do we really want to collect data? No.
 
     match provider {
         EditPredictionProvider::None => {}

@@ -1,8 +1,7 @@
 use crate::headless_project::HeadlessAppState;
 use crate::HeadlessProject;
 use anyhow::{anyhow, Context as _, Result};
-use chrono::Utc;
-use client::{ProxySettings};
+use client::ProxySettings;
 use extension::ExtensionHostProxy;
 use fs::{Fs, RealFs};
 use futures::channel::mpsc;
@@ -16,7 +15,7 @@ use node_runtime::{NodeBinaryOptions, NodeRuntime};
 use paths::logs_dir;
 use project::project_settings::ProjectSettings;
 
-use release_channel::{AppVersion, ReleaseChannel, RELEASE_CHANNEL};
+use release_channel::AppVersion;
 use remote::proxy::ProxyLaunchError;
 use remote::ssh_session::ChannelClient;
 use remote::{
@@ -138,9 +137,6 @@ fn init_panic_hook() {
         {
             backtrace.drain(0..=ix);
         }
-
-        let thread = thread::current();
-        let thread_name = thread.name().unwrap_or("<unnamed>");
 
         log::error!(
             "panic occurred: {}\nBacktrace:\n{}",

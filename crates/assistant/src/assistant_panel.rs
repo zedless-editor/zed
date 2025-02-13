@@ -917,16 +917,7 @@ impl AssistantPanel {
                 self.show_updated_summary(&context_editor, window, cx);
                 cx.notify()
             }
-            EditorEvent::Edited { .. } => {
-                self.workspace
-                    .update(cx, |workspace, cx| {
-                        let is_via_ssh = workspace
-                            .project()
-                            .update(cx, |project, _| project.is_via_ssh());
-                    })
-                    .log_err();
-                cx.emit(AssistantPanelEvent::ContextEdited)
-            }
+            EditorEvent::Edited { .. } => cx.emit(AssistantPanelEvent::ContextEdited),
             _ => {}
         }
     }

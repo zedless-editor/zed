@@ -32,11 +32,7 @@ use ui::{prelude::*, text_for_action, IconButtonShape, Tooltip};
 use util::ResultExt;
 use workspace::{notifications::NotificationId, Toast, Workspace};
 
-pub fn init(
-    fs: Arc<dyn Fs>,
-    prompt_builder: Arc<PromptBuilder>,
-    cx: &mut App,
-) {
+pub fn init(fs: Arc<dyn Fs>, prompt_builder: Arc<PromptBuilder>, cx: &mut App) {
     cx.set_global(TerminalInlineAssistant::new(fs, prompt_builder));
 }
 
@@ -64,10 +60,7 @@ pub struct TerminalInlineAssistant {
 impl Global for TerminalInlineAssistant {}
 
 impl TerminalInlineAssistant {
-    pub fn new(
-        fs: Arc<dyn Fs>,
-        prompt_builder: Arc<PromptBuilder>,
-    ) -> Self {
+    pub fn new(fs: Arc<dyn Fs>, prompt_builder: Arc<PromptBuilder>) -> Self {
         Self {
             next_assist_id: TerminalInlineAssistId::default(),
             assists: HashMap::default(),
@@ -1098,12 +1091,9 @@ impl Codegen {
             return;
         };
 
-        let model_api_key = model.api_key(cx);
-        let http_client = cx.http_client();
         self.status = CodegenStatus::Pending;
         self.transaction = Some(TerminalTransaction::start(self.terminal.clone()));
         self.generation = cx.spawn(|this, mut cx| async move {
-            let model_provider_id = model.provider_id();
             let response = model.stream_completion_text(prompt, &cx).await;
             let generate = async {
                 let message_id = response
@@ -1114,8 +1104,6 @@ impl Codegen {
                 let (mut hunks_tx, mut hunks_rx) = mpsc::channel(1);
 
                 let task = cx.background_executor().spawn({
-                    let message_id = message_id.clone();
-                    let executor = cx.background_executor().clone();
                     async move {
                         let mut response_latency = None;
                         let request_start = Instant::now();

@@ -11,9 +11,7 @@ use editor::{actions::SelectAll, MultiBuffer};
 use fs::Fs;
 use gpui::{App, Entity, Focusable, Global, Subscription, UpdateGlobal, WeakEntity};
 use language::Buffer;
-use language_model::{
-    LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage, Role,
-};
+use language_model::{LanguageModelRequest, LanguageModelRequestMessage, Role};
 use prompt_library::PromptBuilder;
 use std::sync::Arc;
 use terminal_view::TerminalView;
@@ -21,11 +19,7 @@ use ui::prelude::*;
 use util::ResultExt;
 use workspace::{notifications::NotificationId, Toast, Workspace};
 
-pub fn init(
-    fs: Arc<dyn Fs>,
-    prompt_builder: Arc<PromptBuilder>,
-    cx: &mut App,
-) {
+pub fn init(fs: Arc<dyn Fs>, prompt_builder: Arc<PromptBuilder>, cx: &mut App) {
     cx.set_global(TerminalInlineAssistant::new(fs, prompt_builder));
 }
 
@@ -43,10 +37,7 @@ pub struct TerminalInlineAssistant {
 impl Global for TerminalInlineAssistant {}
 
 impl TerminalInlineAssistant {
-    pub fn new(
-        fs: Arc<dyn Fs>,
-        prompt_builder: Arc<PromptBuilder>,
-    ) -> Self {
+    pub fn new(fs: Arc<dyn Fs>, prompt_builder: Arc<PromptBuilder>) -> Self {
         Self {
             next_assist_id: TerminalInlineAssistId::default(),
             assists: HashMap::default(),

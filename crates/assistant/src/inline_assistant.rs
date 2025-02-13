@@ -815,19 +815,6 @@ impl InlineAssistant {
             }
 
             let active_alternative = assist.codegen.read(cx).active_alternative().clone();
-            let message_id = active_alternative.read(cx).message_id.clone();
-
-            if let Some(model) = LanguageModelRegistry::read_global(cx).active_model() {
-                let language_name = assist.editor.upgrade().and_then(|editor| {
-                    let multibuffer = editor.read(cx).buffer().read(cx);
-                    let multibuffer_snapshot = multibuffer.snapshot(cx);
-                    let ranges = multibuffer_snapshot.range_to_buffer_ranges(assist.range.clone());
-                    ranges
-                        .first()
-                        .and_then(|(buffer, _, _)| buffer.language())
-                        .map(|language| language.name())
-                });
-            }
 
             if undo {
                 assist.codegen.update(cx, |codegen, cx| codegen.undo(cx));
@@ -1823,18 +1810,11 @@ impl PromptEditor {
         &mut self,
         _: &Entity<Editor>,
         event: &EditorEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
             EditorEvent::Edited { .. } => {
-                if let Some(workspace) = window.root::<Workspace>().flatten() {
-                    workspace.update(cx, |workspace, cx| {
-                        let is_via_ssh = workspace
-                            .project()
-                            .update(cx, |project, _| project.is_via_ssh());
-                    });
-                }
                 let prompt = self.editor.read(cx).text(cx);
                 if self
                     .prompt_history_ix
@@ -2802,8 +2782,6 @@ impl CodegenAlternative {
 
         self.edit_position = Some(self.range.start.bias_right(&self.snapshot));
 
-        let api_key = model.api_key(cx);
-        let provider_id = model.provider_id();
         let stream: LocalBoxFuture<Result<LanguageModelTextStream>> =
             if user_prompt.trim().to_lowercase() == "delete" {
                 async { Ok(LanguageModelTextStream::default()) }.boxed_local()
@@ -2814,7 +2792,7 @@ impl CodegenAlternative {
                 cx.spawn(|_, cx| async move { model.stream_completion_text(request, &cx).await })
                     .boxed_local()
             };
-        self.handle_stream(provider_id.to_string(), api_key, stream, cx);
+        self.handle_stream(stream, cx);
         Ok(())
     }
 
@@ -2877,8 +2855,6 @@ impl CodegenAlternative {
 
     pub fn handle_stream(
         &mut self,
-        model_provider_id: String,
-        model_api_key: Option<String>,
         stream: impl 'static + Future<Output = Result<LanguageModelTextStream>>,
         cx: &mut Context<Self>,
     ) {
@@ -2909,17 +2885,6 @@ impl CodegenAlternative {
             }
         }
 
-        let http_client = cx.http_client().clone();
-        let language_name = {
-            let multibuffer = self.buffer.read(cx);
-            let snapshot = multibuffer.snapshot(cx);
-            let ranges = snapshot.range_to_buffer_ranges(self.range.clone());
-            ranges
-                .first()
-                .and_then(|(buffer, _, _)| buffer.language())
-                .map(|language| language.name())
-        };
-
         self.diff = Diff::default();
         self.status = CodegenStatus::Pending;
         let mut edit_start = self.range.start.to_offset(&snapshot);
@@ -2935,8 +2900,6 @@ impl CodegenAlternative {
                     .and_then(|stream| stream.message_id.clone());
                 let generate = async {
                     let (mut diff_tx, mut diff_rx) = mpsc::channel(1);
-                    let executor = cx.background_executor().clone();
-                    let message_id = message_id.clone();
                     let line_based_stream_diff: Task<anyhow::Result<()>> =
                         cx.background_executor().spawn(async move {
                             let mut response_latency = None;
@@ -3650,14 +3613,7 @@ mod tests {
         });
         let prompt_builder = Arc::new(PromptBuilder::new(None).unwrap());
         let codegen = cx.new(|cx| {
-            CodegenAlternative::new(
-                buffer.clone(),
-                range.clone(),
-                true,
-                None,
-                prompt_builder,
-                cx,
-            )
+            CodegenAlternative::new(buffer.clone(), range.clone(), true, prompt_builder, cx)
         });
 
         let chunks_tx = simulate_response_stream(codegen.clone(), cx);
@@ -3713,14 +3669,7 @@ mod tests {
         });
         let prompt_builder = Arc::new(PromptBuilder::new(None).unwrap());
         let codegen = cx.new(|cx| {
-            CodegenAlternative::new(
-                buffer.clone(),
-                range.clone(),
-                true,
-                None,
-                prompt_builder,
-                cx,
-            )
+            CodegenAlternative::new(buffer.clone(), range.clone(), true, prompt_builder, cx)
         });
 
         let chunks_tx = simulate_response_stream(codegen.clone(), cx);
@@ -3779,14 +3728,7 @@ mod tests {
         });
         let prompt_builder = Arc::new(PromptBuilder::new(None).unwrap());
         let codegen = cx.new(|cx| {
-            CodegenAlternative::new(
-                buffer.clone(),
-                range.clone(),
-                true,
-                None,
-                prompt_builder,
-                cx,
-            )
+            CodegenAlternative::new(buffer.clone(), range.clone(), true, prompt_builder, cx)
         });
 
         let chunks_tx = simulate_response_stream(codegen.clone(), cx);
@@ -3845,14 +3787,7 @@ mod tests {
         });
         let prompt_builder = Arc::new(PromptBuilder::new(None).unwrap());
         let codegen = cx.new(|cx| {
-            CodegenAlternative::new(
-                buffer.clone(),
-                range.clone(),
-                true,
-                None,
-                prompt_builder,
-                cx,
-            )
+            CodegenAlternative::new(buffer.clone(), range.clone(), true, prompt_builder, cx)
         });
 
         let chunks_tx = simulate_response_stream(codegen.clone(), cx);
@@ -3899,14 +3834,7 @@ mod tests {
         });
         let prompt_builder = Arc::new(PromptBuilder::new(None).unwrap());
         let codegen = cx.new(|cx| {
-            CodegenAlternative::new(
-                buffer.clone(),
-                range.clone(),
-                false,
-                None,
-                prompt_builder,
-                cx,
-            )
+            CodegenAlternative::new(buffer.clone(), range.clone(), false, prompt_builder, cx)
         });
 
         let chunks_tx = simulate_response_stream(codegen.clone(), cx);
@@ -3990,9 +3918,6 @@ mod tests {
         let (chunks_tx, chunks_rx) = mpsc::unbounded();
         codegen.update(cx, |codegen, cx| {
             codegen.handle_stream(
-                String::new(),
-                String::new(),
-                None,
                 future::ready(Ok(LanguageModelTextStream {
                     message_id: None,
                     stream: chunks_rx.map(Ok).boxed(),

@@ -44,11 +44,7 @@ use crate::terminal_inline_assistant::TerminalInlineAssistant;
 use crate::thread_store::ThreadStore;
 use crate::AssistantPanel;
 
-pub fn init(
-    fs: Arc<dyn Fs>,
-    prompt_builder: Arc<PromptBuilder>,
-    cx: &mut App,
-) {
+pub fn init(fs: Arc<dyn Fs>, prompt_builder: Arc<PromptBuilder>, cx: &mut App) {
     cx.set_global(InlineAssistant::new(fs, prompt_builder));
     cx.observe_new(|_workspace: &mut Workspace, window, cx| {
         let Some(window) = window else {
@@ -94,10 +90,7 @@ pub struct InlineAssistant {
 impl Global for InlineAssistant {}
 
 impl InlineAssistant {
-    pub fn new(
-        fs: Arc<dyn Fs>,
-        prompt_builder: Arc<PromptBuilder>,
-    ) -> Self {
+    pub fn new(fs: Arc<dyn Fs>, prompt_builder: Arc<PromptBuilder>) -> Self {
         Self {
             next_assist_id: InlineAssistId::default(),
             next_assist_group_id: InlineAssistGroupId::default(),
@@ -358,7 +351,6 @@ impl InlineAssistant {
             );
 
             codegen_ranges.push(anchor_range);
-
         }
 
         let assist_group_id = self.next_assist_group_id.post_inc();
@@ -916,19 +908,6 @@ impl InlineAssistant {
             }
 
             let active_alternative = assist.codegen.read(cx).active_alternative().clone();
-            let message_id = active_alternative.read(cx).message_id.clone();
-
-            if let Some(model) = LanguageModelRegistry::read_global(cx).active_model() {
-                let language_name = assist.editor.upgrade().and_then(|editor| {
-                    let multibuffer = editor.read(cx).buffer().read(cx);
-                    let snapshot = multibuffer.snapshot(cx);
-                    let ranges = snapshot.range_to_buffer_ranges(assist.range.clone());
-                    ranges
-                        .first()
-                        .and_then(|(buffer, _, _)| buffer.language())
-                        .map(|language| language.name())
-                });
-            }
 
             if undo {
                 assist.codegen.update(cx, |codegen, cx| codegen.undo(cx));

@@ -304,13 +304,6 @@ impl<T: 'static> PromptEditor<T> {
     ) {
         match event {
             EditorEvent::Edited { .. } => {
-                if let Some(workspace) = window.root::<Workspace>().flatten() {
-                    workspace.update(cx, |workspace, cx| {
-                        let is_via_ssh = workspace
-                            .project()
-                            .update(cx, |project, _| project.is_via_ssh());
-                    });
-                }
                 let prompt = self.editor.read(cx).text(cx);
                 if self
                     .prompt_history_ix

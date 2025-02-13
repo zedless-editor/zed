@@ -1,18 +1,14 @@
 use anyhow::Result;
-use client::UserStore;
 use editor::{
     actions::{ShowEditPrediction, ToggleEditPrediction},
     scroll::Autoscroll,
     Editor,
 };
-use feature_flags::{
-    FeatureFlagAppExt, PredictEditsFeatureFlag, PredictEditsRateCompletionsFeatureFlag,
-};
+use feature_flags::FeatureFlagAppExt;
 use fs::Fs;
 use gpui::{
-    actions, div, pulsating_between, Action, Animation, AnimationExt, App, AsyncWindowContext,
-    Corner, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Subscription,
-    WeakEntity,
+    actions, div, App, AsyncWindowContext, Entity, FocusHandle, Focusable, IntoElement, Render,
+    Subscription, WeakEntity,
 };
 use indoc::indoc;
 use language::{
@@ -21,19 +17,9 @@ use language::{
 };
 use regex::Regex;
 use settings::{update_settings_file, Settings, SettingsStore};
-use std::{
-    sync::{Arc, LazyLock},
-    time::Duration,
-};
-use ui::{
-    prelude::*, Clickable, ContextMenu, ContextMenuEntry, IconButton, IconButtonShape, Indicator,
-    PopoverMenu, PopoverMenuHandle, Tooltip,
-};
-use workspace::{
-    create_and_open_local_file, item::ItemHandle, notifications::NotificationId, StatusItemView,
-    Toast, Workspace,
-};
-use zed_actions::OpenBrowser;
+use std::sync::{Arc, LazyLock};
+use ui::{prelude::*, ContextMenu, ContextMenuEntry, PopoverMenuHandle};
+use workspace::{create_and_open_local_file, item::ItemHandle, StatusItemView, Workspace};
 
 actions!(edit_prediction, [ToggleMenu]);
 
@@ -46,7 +32,6 @@ pub struct InlineCompletionButton {
     file: Option<Arc<dyn File>>,
     edit_prediction_provider: Option<Arc<dyn inline_completion::InlineCompletionProviderHandle>>,
     fs: Arc<dyn Fs>,
-    user_store: Entity<UserStore>,
     popover_menu_handle: PopoverMenuHandle<ContextMenu>,
 }
 
@@ -63,7 +48,6 @@ impl Render for InlineCompletionButton {
 impl InlineCompletionButton {
     pub fn new(
         fs: Arc<dyn Fs>,
-        user_store: Entity<UserStore>,
         popover_menu_handle: PopoverMenuHandle<ContextMenu>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -80,7 +64,6 @@ impl InlineCompletionButton {
             edit_prediction_provider: None,
             popover_menu_handle,
             fs,
-            user_store,
         }
     }
 
@@ -128,31 +111,6 @@ impl InlineCompletionButton {
             move |_, cx| toggle_inline_completions_globally(fs.clone(), cx)
         });
         menu = menu.separator().header("Privacy Settings");
-
-        if let Some(provider) = &self.edit_prediction_provider {
-            let data_collection = provider.data_collection_state(cx);
-            if data_collection.is_supported() {
-                let provider = provider.clone();
-                let enabled = data_collection.is_enabled();
-                let is_open_source = data_collection.is_project_open_source();
-                let is_collecting = data_collection.is_enabled();
-                let (icon_name, icon_color) = if is_open_source && is_collecting {
-                    (IconName::Check, Color::Success)
-                } else {
-                    (IconName::Check, Color::Accent)
-                };
-
-                if is_collecting && !is_open_source {
-                    menu = menu.item(
-                        ContextMenuEntry::new("No data captured.")
-                            .disabled(true)
-                            .icon(IconName::Close)
-                            .icon_color(Color::Error)
-                            .icon_size(IconSize::Small),
-                    );
-                }
-            }
-        }
 
         menu = menu.item(
             ContextMenuEntry::new("Configure Excluded Files")
@@ -356,14 +314,6 @@ fn toggle_inline_completions_globally(fs: Arc<dyn Fs>, cx: &mut App) {
     });
 }
 
-fn set_completion_provider(fs: Arc<dyn Fs>, cx: &mut App, provider: EditPredictionProvider) {
-    update_settings_file::<AllLanguageSettings>(fs, cx, move |file, _| {
-        file.features
-            .get_or_insert(Default::default())
-            .edit_prediction_provider = Some(provider);
-    });
-}
-
 fn toggle_show_inline_completions_for_language(
     language: Arc<Language>,
     fs: Arc<dyn Fs>,
@@ -376,13 +326,5 @@ fn toggle_show_inline_completions_for_language(
             .entry(language.name())
             .or_default()
             .show_edit_predictions = Some(!show_edit_predictions);
-    });
-}
-
-fn hide_copilot(fs: Arc<dyn Fs>, cx: &mut App) {
-    update_settings_file::<AllLanguageSettings>(fs, cx, move |file, _| {
-        file.features
-            .get_or_insert(Default::default())
-            .edit_prediction_provider = Some(EditPredictionProvider::None);
     });
 }

@@ -8,7 +8,7 @@ use assistant_slash_command::{
     SlashCommandResult, SlashCommandWorkingSet,
 };
 use assistant_slash_commands::FileCommandMetadata;
-use client::{proto, TypedEnvelope};
+use client::proto;
 use clock::ReplicaId;
 use collections::{HashMap, HashSet};
 use fs::{Fs, RemoveOptions};
@@ -2267,7 +2267,7 @@ impl AssistantContext {
                 let result = stream_completion.await;
 
                 this.update(&mut cx, |this, cx| {
-                    let error_message = if let Some(error) = result.as_ref().err() {
+                    if let Some(error) = result.as_ref().err() {
                         if error.is::<PaymentRequiredError>() {
                             cx.emit(ContextEvent::ShowPaymentRequiredError);
                             this.update_metadata(assistant_message_id, cx, |metadata| {

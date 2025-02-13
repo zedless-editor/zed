@@ -493,7 +493,6 @@ enum InlineCompletion {
 struct InlineCompletionState {
     inlay_ids: Vec<InlayId>,
     completion: InlineCompletion,
-    completion_id: Option<SharedString>,
     invalidation_range: Range<Anchor>,
 }
 
@@ -5345,7 +5344,6 @@ impl Editor {
         self.active_inline_completion = Some(InlineCompletionState {
             inlay_ids,
             completion,
-            completion_id: inline_completion.id,
             invalidation_range,
         });
 

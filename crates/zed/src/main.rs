@@ -427,12 +427,7 @@ fn main() {
             prompt_builder.clone(),
             cx,
         );
-        assistant2::init(
-            app_state.fs.clone(),
-            app_state.client.clone(),
-            prompt_builder.clone(),
-            cx,
-        );
+        assistant2::init(app_state.fs.clone(), prompt_builder.clone(), cx);
         assistant_tools::init(cx);
         repl::init(app_state.fs.clone(), cx);
         extension_host::init(

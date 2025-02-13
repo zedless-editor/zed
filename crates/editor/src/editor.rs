@@ -14041,13 +14041,6 @@ impl Editor {
                         }
                     }
                 }
-
-                let Some(project) = &self.project else { return };
-                let is_via_ssh = {
-                    let project = project.read(cx);
-                    let is_via_ssh = project.is_via_ssh();
-                    is_via_ssh
-                };
                 refresh_linked_ranges(self, window, cx);
             }
             multi_buffer::Event::ExcerptsAdded {

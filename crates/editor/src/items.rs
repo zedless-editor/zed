@@ -835,11 +835,6 @@ impl Item for Editor {
             .as_singleton()
             .expect("cannot call save_as on an excerpt list");
 
-        let file_extension = path
-            .path
-            .extension()
-            .map(|a| a.to_string_lossy().to_string());
-
         project.update(cx, |project, cx| project.save_buffer_as(buffer, path, cx))
     }
 

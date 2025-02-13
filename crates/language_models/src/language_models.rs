@@ -6,7 +6,6 @@ use gpui::{App, Context, Entity};
 use language_model::{LanguageModelProviderId, LanguageModelRegistry, ZED_CLOUD_PROVIDER_ID};
 use provider::deepseek::DeepSeekLanguageModelProvider;
 
-mod logging;
 pub mod provider;
 mod settings;
 

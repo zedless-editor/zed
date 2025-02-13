@@ -4,6 +4,8 @@ use crate::{
 };
 use anyhow::{anyhow, Context as _, Result};
 use assistant_slash_command::{SlashCommandId, SlashCommandWorkingSet};
+use client::proto::context_operation;
+use client::{proto, Client, TypedEnvelope};
 use clock::ReplicaId;
 use collections::HashMap;
 use context_server::manager::ContextServerManager;

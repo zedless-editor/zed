@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::rc::Rc;
 
+use client::proto;
 use file_icons::FileIcons;
 use gpui::{App, Entity, SharedString};
 use language::Buffer;

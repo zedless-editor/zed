@@ -8,6 +8,7 @@ use assistant_slash_command::{
     SlashCommandResult, SlashCommandWorkingSet,
 };
 use assistant_slash_commands::FileCommandMetadata;
+use client::{proto, TypedEnvelope};
 use clock::ReplicaId;
 use collections::{HashMap, HashSet};
 use fs::{Fs, RemoveOptions};

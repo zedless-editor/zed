@@ -4,7 +4,6 @@ mod input_excerpt;
 mod license_detection;
 mod onboarding_banner;
 mod onboarding_modal;
-mod onboarding_telemetry;
 mod rate_completion_modal;
 
 pub(crate) use completion_diff_element::*;
@@ -47,7 +46,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use telemetry_events::InlineCompletionRating;
 use util::ResultExt;
 use uuid::Uuid;
 use worktree::Worktree;
@@ -947,16 +945,6 @@ and then another
         cx: &mut Context<Self>,
     ) {
         self.rated_completions.insert(completion.id);
-        telemetry::event!(
-            "Edit Prediction Rated",
-            rating,
-            input_events = completion.input_events,
-            input_excerpt = completion.input_excerpt,
-            input_outline = completion.input_outline,
-            output_excerpt = completion.output_excerpt,
-            feedback
-        );
-        self.client.telemetry().flush_events();
         cx.notify();
     }
 

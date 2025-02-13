@@ -24,7 +24,6 @@ use language_model::{
 };
 use language_models::{
     provider::cloud::{MaxMonthlySpendReachedError, PaymentRequiredError},
-    report_assistant_event,
 };
 use open_ai::Model as OpenAiModel;
 use paths::contexts_dir;

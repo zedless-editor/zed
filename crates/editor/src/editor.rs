@@ -1498,8 +1498,6 @@ impl Editor {
                 }
             }
         }
-
-        this.report_editor_event("Editor Opened", None, cx);
         this
     }
 
@@ -4949,12 +4947,6 @@ impl Editor {
             return;
         };
 
-        self.report_inline_completion_event(
-            active_inline_completion.completion_id.clone(),
-            true,
-            cx,
-        );
-
         match &active_inline_completion.completion {
             InlineCompletion::Move { target, .. } => {
                 let target = *target;
@@ -5034,12 +5026,6 @@ impl Editor {
             return;
         }
 
-        self.report_inline_completion_event(
-            active_inline_completion.completion_id.clone(),
-            true,
-            cx,
-        );
-
         match &active_inline_completion.completion {
             InlineCompletion::Move { target, .. } => {
                 let target = *target;
@@ -5092,18 +5078,8 @@ impl Editor {
 
     fn discard_inline_completion(
         &mut self,
-        should_report_inline_completion_event: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        if should_report_inline_completion_event {
-            let completion_id = self
-                .active_inline_completion
-                .as_ref()
-                .and_then(|active_completion| active_completion.completion_id.clone());
-
-            self.report_inline_completion_event(completion_id, false, cx);
-        }
-
         if let Some(provider) = self.edit_prediction_provider() {
             provider.discard(cx);
         }
@@ -5730,7 +5706,6 @@ impl Editor {
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
                     .on_click(cx.listener(|this, _event, window, cx| {
                         cx.stop_propagation();
-                        this.report_editor_event("Edit Prediction Provider ToS Clicked", None, cx);
                         window.dispatch_action(
                             zed_actions::OpenZedPredictOnboarding.boxed_clone(),
                             cx,

@@ -270,10 +270,6 @@ impl Render for InlineCompletionButton {
                                 )
                             })
                             .on_click(cx.listener(move |_, _, window, cx| {
-                                telemetry::event!(
-                                    "Pending ToS Clicked",
-                                    source = "Edit Prediction Status Button"
-                                );
                                 window.dispatch_action(
                                     zed_actions::OpenZedPredictOnboarding.boxed_clone(),
                                     cx,
@@ -456,74 +452,6 @@ impl InlineCompletionButton {
                 } else {
                     (IconName::Check, Color::Accent)
                 };
-
-                menu = menu.item(
-                    ContextMenuEntry::new("Training Data Collection")
-                        .toggleable(IconPosition::Start, data_collection.is_enabled())
-                        .icon(icon_name)
-                        .icon_color(icon_color)
-                        .documentation_aside(move |cx| {
-                            let (msg, label_color, icon_name, icon_color) = match (is_open_source, is_collecting) {
-                                (true, true) => (
-                                    "Project identified as open source, and you're sharing data.",
-                                    Color::Default,
-                                    IconName::Check,
-                                    Color::Success,
-                                ),
-                                (true, false) => (
-                                    "Project identified as open source, but you're not sharing data.",
-                                    Color::Muted,
-                                    IconName::Close,
-                                    Color::Muted,
-                                ),
-                                (false, true) => (
-                                    "Project not identified as open source. No data captured.",
-                                    Color::Muted,
-                                    IconName::Close,
-                                    Color::Muted,
-                                ),
-                                (false, false) => (
-                                    "Project not identified as open source, and setting turned off.",
-                                    Color::Muted,
-                                    IconName::Close,
-                                    Color::Muted,
-                                ),
-                            };
-                            v_flex()
-                                .gap_2()
-                                .child(
-                                    Label::new(indoc!{
-                                        "Help us improve our open dataset model by sharing data from open source repositories. \
-                                        Zed must detect a license file in your repo for this setting to take effect."
-                                    })
-                                )
-                                .child(
-                                    h_flex()
-                                        .pt_2()
-                                        .gap_1p5()
-                                        .border_t_1()
-                                        .border_color(cx.theme().colors().border_variant)
-                                        .child(Icon::new(icon_name).size(IconSize::XSmall).color(icon_color))
-                                        .child(div().child(Label::new(msg).size(LabelSize::Small).color(label_color)))
-                                )
-                                .into_any_element()
-                        })
-                        .handler(move |_, cx| {
-                            provider.toggle_data_collection(cx);
-
-                            if !enabled {
-                                telemetry::event!(
-                                    "Data Collection Enabled",
-                                    source = "Edit Prediction Status Menu"
-                                );
-                            } else {
-                                telemetry::event!(
-                                    "Data Collection Disabled",
-                                    source = "Edit Prediction Status Menu"
-                                );
-                            }
-                        })
-                );
 
                 if is_collecting && !is_open_source {
                     menu = menu.item(

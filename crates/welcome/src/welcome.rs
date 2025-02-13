@@ -2,7 +2,6 @@ mod base_keymap_picker;
 mod base_keymap_setting;
 mod multibuffer_hint;
 
-use client::{telemetry::Telemetry, TelemetrySettings};
 use db::kvp::KEY_VALUE_STORE;
 use gpui::{
     actions, svg, Action, App, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -67,7 +66,6 @@ pub fn show_welcome_view(app_state: Arc<AppState>, cx: &mut App) -> Task<anyhow:
 pub struct WelcomePage {
     workspace: WeakEntity<Workspace>,
     focus_handle: FocusHandle,
-    telemetry: Arc<Telemetry>,
     _settings_subscription: Subscription,
 }
 
@@ -280,56 +278,6 @@ impl Render for WelcomePage {
                                                     "You can also toggle Vim Mode via the command palette or Editor Controls menu.")
                                             ),
                                     ),
-                            )
-                            .child(
-                                CheckboxWithLabel::new(
-                                    "enable-crash",
-                                    Label::new("Send Crash Reports"),
-                                    if TelemetrySettings::get_global(cx).diagnostics {
-                                        ui::ToggleState::Selected
-                                    } else {
-                                        ui::ToggleState::Unselected
-                                    },
-                                    cx.listener(move |this, selection, _window, cx| {
-                                        this.update_settings::<TelemetrySettings>(selection, cx, {
-                                            move |settings, value| {
-                                                settings.diagnostics = Some(value);
-                                                telemetry::event!(
-                                                    "Settings Changed",
-                                                    setting = "diagnostic telemetry",
-                                                    value
-                                                );
-                                            }
-                                        });
-                                    }),
-                                )
-                                .fill()
-                                .elevation(ElevationIndex::ElevatedSurface),
-                            )
-                            .child(
-                                CheckboxWithLabel::new(
-                                    "enable-telemetry",
-                                    Label::new("Send Telemetry"),
-                                    if TelemetrySettings::get_global(cx).metrics {
-                                        ui::ToggleState::Selected
-                                    } else {
-                                        ui::ToggleState::Unselected
-                                    },
-                                    cx.listener(move |this, selection, _window, cx| {
-                                        this.update_settings::<TelemetrySettings>(selection, cx, {
-                                            move |settings, value| {
-                                                settings.metrics = Some(value);
-                                                telemetry::event!(
-                                                    "Settings Changed",
-                                                    setting = "metric telemetry",
-                                                    value
-                                                );
-                                            }
-                                        });
-                                    }),
-                                )
-                                .fill()
-                                .elevation(ElevationIndex::ElevatedSurface),
                             ),
                     ),
             )
@@ -346,7 +294,6 @@ impl WelcomePage {
             WelcomePage {
                 focus_handle: cx.focus_handle(),
                 workspace: workspace.weak_handle(),
-                telemetry: workspace.client().telemetry().clone(),
                 _settings_subscription: cx
                     .observe_global::<SettingsStore>(move |_, cx| cx.notify()),
             }
@@ -399,10 +346,6 @@ impl Item for WelcomePage {
         Some("Welcome".into())
     }
 
-    fn telemetry_event_text(&self) -> Option<&'static str> {
-        Some("Welcome Page Opened")
-    }
-
     fn show_toolbar(&self) -> bool {
         false
     }
@@ -416,7 +359,6 @@ impl Item for WelcomePage {
         Some(cx.new(|cx| WelcomePage {
             focus_handle: cx.focus_handle(),
             workspace: self.workspace.clone(),
-            telemetry: self.telemetry.clone(),
             _settings_subscription: cx.observe_global::<SettingsStore>(move |_, cx| cx.notify()),
         }))
     }

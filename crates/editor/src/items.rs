@@ -766,7 +766,6 @@ impl Item for Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
-        self.report_editor_event("Editor Saved", None, cx);
         let buffers = self.buffer().clone().read(cx).all_buffers();
         let buffers = buffers
             .into_iter()
@@ -840,7 +839,6 @@ impl Item for Editor {
             .path
             .extension()
             .map(|a| a.to_string_lossy().to_string());
-        self.report_editor_event("Editor Saved", file_extension, cx);
 
         project.update(cx, |project, cx| project.save_buffer_as(buffer, path, cx))
     }

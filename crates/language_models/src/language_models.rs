@@ -20,7 +20,6 @@ use crate::provider::lmstudio::LmStudioLanguageModelProvider;
 use crate::provider::ollama::OllamaLanguageModelProvider;
 use crate::provider::open_ai::OpenAiLanguageModelProvider;
 pub use crate::settings::*;
-pub use logging::report_assistant_event;
 
 pub fn init(user_store: Entity<UserStore>, client: Arc<Client>, fs: Arc<dyn Fs>, cx: &mut App) {
     crate::settings::init(fs, cx);

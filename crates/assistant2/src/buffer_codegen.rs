@@ -11,7 +11,6 @@ use language_model::{
     LanguageModel, LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage,
     LanguageModelTextStream, Role,
 };
-use language_models::report_assistant_event;
 use multi_buffer::MultiBufferRow;
 use parking_lot::Mutex;
 use prompt_library::PromptBuilder;

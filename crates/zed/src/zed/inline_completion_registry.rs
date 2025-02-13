@@ -101,13 +101,6 @@ pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
                     .current_user_has_accepted_terms()
                     .unwrap_or(false);
 
-                telemetry::event!(
-                    "Edit Prediction Provider Changed",
-                    from = provider,
-                    to = new_provider,
-                    zed_ai_tos_accepted = tos_accepted,
-                );
-
                 provider = new_provider;
                 assign_edit_prediction_providers(
                     &editors,

@@ -2,7 +2,6 @@ use crate::inline_prompt_editor::CodegenStatus;
 use futures::{channel::mpsc, SinkExt, StreamExt};
 use gpui::{App, Context, Entity, EventEmitter, Task};
 use language_model::{LanguageModelRegistry, LanguageModelRequest};
-use language_models::report_assistant_event;
 use std::{sync::Arc, time::Instant};
 use terminal::Terminal;
 

@@ -111,7 +111,6 @@ struct LanguageServerState {
 pub enum LanguageServerKind {
     Local { project: WeakEntity<Project> },
     Remote { project: WeakEntity<Project> },
-    Global,
 }
 
 impl LanguageServerKind {
@@ -125,7 +124,6 @@ impl std::fmt::Debug for LanguageServerKind {
         match self {
             LanguageServerKind::Local { .. } => write!(f, "LanguageServerKind::Local"),
             LanguageServerKind::Remote { .. } => write!(f, "LanguageServerKind::Remote"),
-            LanguageServerKind::Global => write!(f, "LanguageServerKind::Global"),
         }
     }
 }
@@ -135,7 +133,6 @@ impl LanguageServerKind {
         match self {
             Self::Local { project } => Some(project),
             Self::Remote { project } => Some(project),
-            Self::Global { .. } => None,
         }
     }
 }
@@ -461,7 +458,6 @@ impl LogStore {
                         None
                     }
                 }
-                LanguageServerKind::Global => Some(*id),
             })
     }
 
@@ -751,16 +747,6 @@ impl LspLogView {
                         trace_level: lsp::TraceValue::Off,
                     }
                 }
-
-                LanguageServerKind::Global => LogMenuItem {
-                    server_id: *server_id,
-                    server_name: state.name.clone().unwrap_or(unknown_server.clone()),
-                    server_kind: state.kind.clone(),
-                    worktree_root_name: "supplementary".to_string(),
-                    rpc_trace_enabled: state.rpc_state.is_some(),
-                    selected_entry: self.active_entry_kind,
-                    trace_level: lsp::TraceValue::Off,
-                },
             })
             .chain(
                 self.project

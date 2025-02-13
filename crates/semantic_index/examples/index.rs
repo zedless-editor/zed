@@ -14,8 +14,6 @@ use std::{
 fn main() {
     env_logger::init();
 
-    use clock::FakeSystemClock;
-
     Application::new().run(|cx| {
         let store = SettingsStore::test(cx);
         cx.set_global(store);

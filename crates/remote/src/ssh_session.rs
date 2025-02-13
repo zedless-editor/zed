@@ -2240,12 +2240,9 @@ mod fake {
         select_biased, FutureExt, SinkExt, StreamExt,
     };
     use gpui::{App, AsyncApp, Task, TestAppContext};
-    use release_channel::ReleaseChannel;
     use rpc::proto::Envelope;
 
-    use super::{
-        ChannelClient, RemoteConnection, SshClientDelegate, SshConnectionOptions, SshPlatform,
-    };
+    use super::{ChannelClient, RemoteConnection, SshClientDelegate, SshConnectionOptions};
 
     pub(super) struct FakeRemoteConnection {
         pub(super) connection_options: SshConnectionOptions,

@@ -299,7 +299,7 @@ impl<T: 'static> PromptEditor<T> {
         &mut self,
         _: &Entity<Editor>,
         event: &EditorEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {

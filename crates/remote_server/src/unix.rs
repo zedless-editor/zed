@@ -31,10 +31,10 @@ use smol::io::AsyncReadExt;
 
 use smol::Async;
 use smol::{net::unix::UnixListener, stream::StreamExt as _};
+use std::env;
 use std::ffi::OsStr;
 use std::ops::ControlFlow;
 use std::str::FromStr;
-use std::{env, thread};
 use std::{
     io::Write,
     mem,

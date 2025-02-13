@@ -69,7 +69,7 @@ pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
         let editors = editors.clone();
         let client = client.clone();
         let user_store = user_store.clone();
-        move |active, cx| {
+        move |_, cx| {
             let provider = all_language_settings(None, cx).edit_predictions.provider;
             assign_edit_prediction_providers(&editors, provider, &client, user_store.clone(), cx);
         }

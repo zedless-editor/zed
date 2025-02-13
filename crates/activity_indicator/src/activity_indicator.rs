@@ -15,7 +15,7 @@ use ui::{prelude::*, ButtonLike, ContextMenu, PopoverMenu, PopoverMenuHandle, To
 use util::truncate_and_trailoff;
 use workspace::{item::ItemHandle, StatusItemView, Workspace};
 
-actions!(activity_indicator, [ShowErrorMessage]);
+actions!(activity_indicator, [ShowErrorMessage, DismissErrorMessage]);
 
 pub enum Event {
     ShowError {

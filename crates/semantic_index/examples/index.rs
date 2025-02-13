@@ -34,7 +34,7 @@ fn main() {
             "http://localhost:11434",
             None,
         ));
-        let client = client::Client::new(clock, http.clone(), cx);
+        let client = client::Client::new(http.clone(), cx);
         Client::set_global(client.clone(), cx);
 
         let args: Vec<String> = std::env::args().collect();

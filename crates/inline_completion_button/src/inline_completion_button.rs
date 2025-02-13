@@ -1,6 +1,5 @@
 use anyhow::Result;
 use client::UserStore;
-use copilot::{Copilot, Status};
 use editor::{
     actions::{ShowEditPrediction, ToggleEditPrediction},
     scroll::Autoscroll,
@@ -68,10 +67,6 @@ impl InlineCompletionButton {
         popover_menu_handle: PopoverMenuHandle<ContextMenu>,
         cx: &mut Context<Self>,
     ) -> Self {
-        if let Some(copilot) = Copilot::global(cx) {
-            cx.observe(&copilot, |_, _, cx| cx.notify()).detach()
-        }
-
         cx.observe_global::<SettingsStore>(move |_, cx| cx.notify())
             .detach();
 
@@ -246,25 +241,6 @@ impl InlineCompletionButton {
         }
 
         menu
-    }
-
-    fn build_copilot_context_menu(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<ContextMenu> {
-        ContextMenu::build(window, cx, |menu, _, cx| {
-            self.build_language_settings_menu(menu, cx)
-                .separator()
-                .link(
-                    "Go to Copilot Settings",
-                    OpenBrowser {
-                        url: COPILOT_SETTINGS_URL.to_string(),
-                    }
-                    .boxed_clone(),
-                )
-                .action("Sign Out", copilot::SignOut.boxed_clone())
-        })
     }
 
     pub fn update_enabled(&mut self, editor: Entity<Editor>, cx: &mut Context<Self>) {

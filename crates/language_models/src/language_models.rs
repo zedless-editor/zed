@@ -13,7 +13,6 @@ use crate::provider::anthropic::AnthropicLanguageModelProvider;
 use crate::provider::cloud::CloudLanguageModelProvider;
 pub use crate::provider::cloud::LlmApiToken;
 pub use crate::provider::cloud::RefreshLlmTokenListener;
-use crate::provider::copilot_chat::CopilotChatLanguageModelProvider;
 use crate::provider::google::GoogleLanguageModelProvider;
 use crate::provider::lmstudio::LmStudioLanguageModelProvider;
 use crate::provider::ollama::OllamaLanguageModelProvider;
@@ -62,7 +61,6 @@ fn register_language_model_providers(
         GoogleLanguageModelProvider::new(client.http_client(), cx),
         cx,
     );
-    registry.register_provider(CopilotChatLanguageModelProvider::new(cx), cx);
 
     cx.observe_flag::<feature_flags::LanguageModels, _>(move |enabled, cx| {
         let user_store = user_store.clone();

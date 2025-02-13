@@ -227,21 +227,6 @@ impl SshPlatform {
 
 pub trait SshClientDelegate: Send + Sync {
     fn ask_password(&self, prompt: String, cx: &mut AsyncApp) -> oneshot::Receiver<Result<String>>;
-    fn get_download_params(
-        &self,
-        platform: SshPlatform,
-        release_channel: ReleaseChannel,
-        version: Option<SemanticVersion>,
-        cx: &mut AsyncApp,
-    ) -> Task<Result<Option<(String, String)>>>;
-
-    fn download_server_binary_locally(
-        &self,
-        platform: SshPlatform,
-        release_channel: ReleaseChannel,
-        version: Option<SemanticVersion>,
-        cx: &mut AsyncApp,
-    ) -> Task<Result<PathBuf>>;
     fn set_status(&self, status: Option<&str>, cx: &mut AsyncApp);
 }
 
@@ -1739,40 +1724,7 @@ impl SshRemoteConnection {
             _ => Ok(Some(AppVersion::global(cx))),
         })??;
 
-        let platform = self.platform().await?;
-
-        if !self.socket.connection_options.upload_binary_over_ssh {
-            if let Some((url, body)) = delegate
-                .get_download_params(platform, release_channel, wanted_version, cx)
-                .await?
-            {
-                match self
-                    .download_binary_on_server(&url, &body, &tmp_path_gz, delegate, cx)
-                    .await
-                {
-                    Ok(_) => {
-                        self.extract_server_binary(&dst_path, &tmp_path_gz, delegate, cx)
-                            .await?;
-                        return Ok(dst_path);
-                    }
-                    Err(e) => {
-                        log::error!(
-                            "Failed to download binary on server, attempting to upload server: {}",
-                            e
-                        )
-                    }
-                }
-            }
-        }
-
-        let src_path = delegate
-            .download_server_binary_locally(platform, release_channel, wanted_version, cx)
-            .await?;
-        self.upload_local_server_binary(&src_path, &tmp_path_gz, delegate, cx)
-            .await?;
-        self.extract_server_binary(&dst_path, &tmp_path_gz, delegate, cx)
-            .await?;
-        return Ok(dst_path);
+        anyhow::bail!("Not implemented");
     }
 
     async fn download_binary_on_server(

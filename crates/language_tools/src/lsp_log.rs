@@ -235,45 +235,7 @@ impl LogStore {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let (io_tx, mut io_rx) = mpsc::unbounded();
 
-        let copilot_subscription = Copilot::global(cx).map(|copilot| {
-            let copilot = &copilot;
-            cx.subscribe(copilot, |this, copilot, inline_completion_event, cx| {
-                if let copilot::Event::CopilotLanguageServerStarted = inline_completion_event {
-                    if let Some(server) = copilot.read(cx).language_server() {
-                        let server_id = server.server_id();
-                        let weak_this = cx.weak_entity();
-                        this.copilot_log_subscription =
-                            Some(server.on_notification::<copilot::request::LogMessage, _>(
-                                move |params, mut cx| {
-                                    weak_this
-                                        .update(&mut cx, |this, cx| {
-                                            this.add_language_server_log(
-                                                server_id,
-                                                MessageType::LOG,
-                                                &params.message,
-                                                cx,
-                                            );
-                                        })
-                                        .ok();
-                                },
-                            ));
-                        let name = LanguageServerName::new_static("copilot");
-                        this.add_language_server(
-                            LanguageServerKind::Global,
-                            server.server_id(),
-                            Some(name),
-                            None,
-                            Some(server.clone()),
-                            cx,
-                        );
-                    }
-                }
-            })
-        });
-
         let this = Self {
-            copilot_log_subscription: None,
-            _copilot_subscription: copilot_subscription,
             projects: HashMap::default(),
             language_servers: HashMap::default(),
             io_tx,

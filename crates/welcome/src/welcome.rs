@@ -156,21 +156,6 @@ impl Render for WelcomePage {
                                             })),
                                     )
                                     .child(
-                                        Button::new(
-                                            "sign-in-to-copilot",
-                                            "Sign in to GitHub Copilot",
-                                        )
-                                        .icon(IconName::Copilot)
-                                        .icon_size(IconSize::XSmall)
-                                        .icon_color(Color::Muted)
-                                        .icon_position(IconPosition::Start)
-                                        .on_click(
-                                            cx.listener(|_, _, window, cx| {
-                                                copilot::initiate_sign_in(window, cx);
-                                            }),
-                                        ),
-                                    )
-                                    .child(
                                         Button::new("edit settings", "Edit Settings")
                                             .icon(IconName::Settings)
                                             .icon_size(IconSize::XSmall)
@@ -287,9 +272,7 @@ impl Render for WelcomePage {
 impl WelcomePage {
     pub fn new(workspace: &Workspace, cx: &mut Context<Workspace>) -> Entity<Self> {
         let this = cx.new(|cx| {
-            cx.on_release(|_: &mut Self, _| {
-            })
-            .detach();
+            cx.on_release(|_: &mut Self, _| {}).detach();
 
             WelcomePage {
                 focus_handle: cx.focus_handle(),

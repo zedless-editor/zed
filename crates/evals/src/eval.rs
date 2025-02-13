@@ -280,7 +280,6 @@ async fn run_evaluation(
     let client = cx
         .update(|cx| {
             Client::new(
-                clock,
                 Arc::new(http_client::HttpClientWithUrl::new(
                     http_client.clone(),
                     "https://zed.dev",

@@ -1040,7 +1040,7 @@ impl InputHandler for TerminalInputHandler {
         });
 
         self.workspace
-            .update(cx, |this, cx| {
+            .update(cx, |_this, _cx| {
                 window.invalidate_character_coordinates();
             })
             .ok();

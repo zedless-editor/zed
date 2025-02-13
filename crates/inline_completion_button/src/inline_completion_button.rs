@@ -26,7 +26,6 @@ use std::{
     sync::{Arc, LazyLock},
     time::Duration,
 };
-use supermaven::{AccountStatus, Supermaven};
 use ui::{
     prelude::*, Clickable, ContextMenu, ContextMenuEntry, IconButton, IconButtonShape, Indicator,
     PopoverMenu, PopoverMenuHandle, Tooltip,

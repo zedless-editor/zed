@@ -7,7 +7,6 @@ use gpui::{AnyWindowHandle, App, AppContext, Context, Entity, WeakEntity};
 use language::language_settings::{all_language_settings, EditPredictionProvider};
 use settings::SettingsStore;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
-use supermaven::{Supermaven, SupermavenCompletionProvider};
 use ui::Window;
 
 pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {

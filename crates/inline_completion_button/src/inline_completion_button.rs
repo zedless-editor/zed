@@ -584,19 +584,6 @@ impl InlineCompletionButton {
         })
     }
 
-    fn build_zeta_context_menu(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<ContextMenu> {
-        ContextMenu::build(window, cx, |menu, _window, cx| {
-            self.build_language_settings_menu(menu, cx).when(
-                cx.has_flag::<PredictEditsRateCompletionsFeatureFlag>(),
-                |this| this.action("Rate Completions", RateCompletions.boxed_clone()),
-            )
-        })
-    }
-
     pub fn update_enabled(&mut self, editor: Entity<Editor>, cx: &mut Context<Self>) {
         let editor = editor.read(cx);
         let snapshot = editor.buffer().read(cx).snapshot(cx);

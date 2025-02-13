@@ -1198,7 +1198,7 @@ impl Project {
         let clock = Arc::new(FakeSystemClock::new());
         let http_client = http_client::FakeHttpClient::with_404_response();
         let client = cx
-            .update(|cx| client::Client::new(clock, http_client.clone(), cx))
+            .update(|cx| client::Client::new(http_client.clone(), cx))
             .unwrap();
         let user_store = cx.new(|cx| UserStore::new(client.clone(), cx)).unwrap();
         let project = cx
@@ -1240,7 +1240,7 @@ impl Project {
         let languages = LanguageRegistry::test(cx.executor());
         let clock = Arc::new(FakeSystemClock::new());
         let http_client = http_client::FakeHttpClient::with_404_response();
-        let client = cx.update(|cx| client::Client::new(clock, http_client.clone(), cx));
+        let client = cx.update(|cx| client::Client::new(http_client.clone(), cx));
         let user_store = cx.new(|cx| UserStore::new(client.clone(), cx));
         let project = cx.update(|cx| {
             Project::local(

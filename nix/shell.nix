@@ -1,44 +1,67 @@
 {
-  pkgs ? import <nixpkgs> { },
+  lib,
+  mkShell,
+  stdenv,
+  useMoldLinker,
+  clangStdenv,
+  curl,
+  cmake,
+  perl,
+  pkg-config,
+  protobuf,
+  rustPlatform,
+  rust-analyzer,
+  bzip2,
+  fontconfig,
+  freetype,
+  libgit2,
+  openssl,
+  sqlite,
+  zlib,
+  zstd,
+  rustToolchain,
+  alsa-lib,
+  libxkbcommon,
+  wayland,
+  xorg,
+  vulkan-loader,
+  apple-sdk_15,
+  ...
 }:
-let
-  inherit (pkgs) lib;
-in
-pkgs.mkShell.override { stdenv = pkgs.useMoldLinker pkgs.clangStdenv; } {
-  packages =
-    [
-      pkgs.curl
-      pkgs.cmake
-      pkgs.perl
-      pkgs.pkg-config
-      pkgs.protobuf
-      pkgs.rustPlatform.bindgenHook
-      pkgs.rust-analyzer
-    ];
+mkShell.override {stdenv = useMoldLinker clangStdenv;} {
+  packages = [
+    curl
+    cmake
+    perl
+    pkg-config
+    protobuf
+    rustPlatform.bindgenHook
+    rust-analyzer
+  ];
 
   buildInputs =
     [
-      pkgs.bzip2
-      pkgs.curl
-      pkgs.fontconfig
-      pkgs.freetype
-      pkgs.libgit2
-      pkgs.openssl
-      pkgs.sqlite
-      pkgs.zlib
-      pkgs.zstd
-      pkgs.rustToolchain
+      bzip2
+      curl
+      fontconfig
+      freetype
+      libgit2
+      openssl
+      sqlite
+      zlib
+      zstd
+      rustToolchain
     ]
-    ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-      pkgs.alsa-lib
-      pkgs.libxkbcommon
-      pkgs.wayland
-      pkgs.xorg.libxcb
-      pkgs.vulkan-loader
+    ++ lib.optionals stdenv.hostPlatform.isLinux [
+      alsa-lib
+      libxkbcommon
+      wayland
+      xorg.libxcb
+      vulkan-loader
     ]
-    ++ lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.apple-sdk_15;
+    ++ lib.optional stdenv.hostPlatform.isDarwin apple-sdk_15;
 
-  PROTOC="${pkgs.protobuf}/bin/protoc";
+  PROTOC = "${protobuf}/bin/protoc";
 
   ZSTD_SYS_USE_PKG_CONFIG = true;
 }

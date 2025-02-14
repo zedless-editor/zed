@@ -1,36 +1,26 @@
-# Zed
+# Zedless
 
-[![CI](https://github.com/zed-industries/zed/actions/workflows/ci.yml/badge.svg)](https://github.com/zed-industries/zed/actions/workflows/ci.yml)
+This is Zedless, a fork of Zed that's designed to be privacy-friendly and local-first.
 
-Welcome to Zed, a high-performance, multiplayer code editor from the creators of [Atom](https://github.com/atom/atom) and [Tree-sitter](https://github.com/tree-sitter/tree-sitter).
+Zedless is currently work-in-progress. Feel free to contribute!
 
 ---
 
-### Installation
+### Planned Changes from Upstream
 
-<a href="https://repology.org/project/zed-editor/versions">
-    <img src="https://repology.org/badge/vertical-allrepos/zed-editor.svg?minversion=0.143.5" alt="Packaging status" align="right">
-</a>
+This is a list of things that Zedless will do differently.
 
-On macOS and Linux you can [download Zed directly](https://zed.dev/download) or [install Zed via your local package manager](https://zed.dev/docs/linux#installing-via-a-package-manager).
-
-Other platforms are not yet available:
-
-- Windows ([tracking issue](https://github.com/zed-industries/zed/issues/5394))
-- Web ([tracking issue](https://github.com/zed-industries/zed/issues/5396))
-
-### Developing Zed
-
-- [Building Zed for macOS](./docs/src/development/macos.md)
-- [Building Zed for Linux](./docs/src/development/linux.md)
-- [Building Zed for Windows](./docs/src/development/windows.md)
-- [Running Collaboration Locally](./docs/src/development/local-collaboration.md)
-
-### Contributing
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for ways you can contribute to Zed.
-
-Also... we're hiring! Check out our [jobs](https://zed.dev/jobs) page for open roles.
+- No reliance on proprietary cloud services
+  - Components and features that strictly rely on non-selfhostable cloud services will be removed.
+- No spyware
+  - Telemetry and automatic crash reporting will be removed.
+- Priority on bringing your own infrastructure
+  - Any feature that makes use of a network service will allow you to configure which provider to use in a standard format, e.g. by specifying the base URL of an API.
+  - Any such feature will not have a list of "default providers".
+  - Any such feature will be disabled by default.
+- No CLA
+  - Contributors' copyright shall not be reassigned.
+  - No rugpulls.
 
 ### Licensing
 

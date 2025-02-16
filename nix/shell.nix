@@ -19,7 +19,7 @@
   sqlite,
   zlib,
   zstd,
-  rustToolchain,
+  cargo,
   alsa-lib,
   libxkbcommon,
   wayland,
@@ -37,6 +37,7 @@ mkShell.override {stdenv = useMoldLinker clangStdenv;} {
     protobuf
     rustPlatform.bindgenHook
     rust-analyzer
+    cargo
   ];
 
   buildInputs =
@@ -50,7 +51,6 @@ mkShell.override {stdenv = useMoldLinker clangStdenv;} {
       sqlite
       zlib
       zstd
-      rustToolchain
     ]
     ++ lib.optionals stdenv.hostPlatform.isLinux [
       alsa-lib

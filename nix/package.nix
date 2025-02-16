@@ -2,7 +2,6 @@
   lib,
   rustPlatform,
   fetchpatch,
-  fetchFromGitHub,
   cmake,
   copyDesktopItems,
   curl,
@@ -29,7 +28,6 @@
   cargo-about,
   versionCheckHook,
   zed-editor,
-  buildFHSEnv,
   cargo-bundle,
   git,
   apple-sdk_15,
@@ -46,48 +44,10 @@
   buildRemoteServer ? true,
 }:
 assert withGLES -> stdenv.hostPlatform.isLinux; let
-  executableName = "zeditor";
-  # Based on vscode.fhs
-  # Zed allows for users to download and use extensions
-  # which often include the usage of pre-built binaries.
-  # See #309662
-  #
-  # buildFHSEnv allows for users to use the existing Zed
-  # extension tooling without significant pain.
-  fhs = {additionalPkgs ? pkgs: []}:
-    buildFHSEnv {
-      # also determines the name of the wrapped command
-      name = executableName;
-
-      # additional libraries which are commonly needed for extensions
-      targetPkgs = pkgs:
-        (with pkgs; [
-          # ld-linux-x86-64-linux.so.2 and others
-          glibc
-        ])
-        ++ additionalPkgs pkgs;
-
-      # symlink shared assets, including icons and desktop entries
-      extraInstallCommands = ''
-        ln -s "${zed-editor}/share" "$out/"
-      '';
-
-      runScript = "${zed-editor}/bin/${executableName}";
-
-      passthru = {
-        inherit executableName;
-        inherit (zed-editor) pname version;
-      };
-
-      meta =
-        zed-editor.meta
-        // {
-          description = ''
-            Wrapped variant of ${zed-editor.pname} which launches in a FHS compatible environment.
-            Should allow for easy usage of extensions without nix-specific modifications.
-          '';
-        };
-    };
+  gpu-lib =
+    if withGLES
+    then libglvnd
+    else vulkan-loader;
 
   includeFilter = path: type: let
     baseName = baseNameOf (toString path);
@@ -96,28 +56,20 @@ assert withGLES -> stdenv.hostPlatform.isLinux; let
   in
     !(
       inRootDir
-      && (baseName == "docs" || baseName == ".github" || baseName == ".git" || baseName == "target")
+      && (baseName == "docs" || baseName == ".github" || baseName == "target")
     );
-  commonSrc = lib.cleanSourceWith {
+
+  pname = "zedless-editor";
+  version = "0.172.10";
+  src = lib.cleanSourceWith {
+    name = "zed-source";
     src = ../.;
     filter = includeFilter;
-    name = "source";
   };
 in
-  rustPlatform.buildRustPackage rec {
-    pname = "zed-editor";
-    version = "0.172.10";
+  rustPlatform.buildRustPackage {
+    inherit pname version src;
 
-    outputs = ["out"] ++ lib.optional buildRemoteServer "remote_server";
-
-    #src = commonSrc;
-
-    src = fetchFromGitHub {
-      owner = "zed-industries";
-      repo = "zed";
-      tag = "v${version}";
-      hash = "sha256-4R7s+575ofL9JK1Axvvk2Z9QgHPxvJrgl9zCv3m+sZY=";
-    };
     patches = [
       # Zed uses cargo-install to install cargo-about during the script execution.
       # We provide cargo-about ourselves and can skip this step.
@@ -131,6 +83,8 @@ in
       "script/patches/use-cross-platform-livekit.patch"
     ];
 
+    outputs = ["out"] ++ lib.optional buildRemoteServer "remote_server";
+
     # Dynamically link WebRTC instead of static
     postPatch = ''
       substituteInPlace ../${pname}-${version}-vendor/webrtc-sys-*/build.rs \
@@ -138,7 +92,7 @@ in
     '';
 
     useFetchCargoVendor = true;
-    cargoHash = "sha256-yzShyOn90U79Ts+sKLhAK6SYiqPX7MKT/9fgF2plgI4=";
+    cargoHash = "sha256-96LOzmiynRycQvIL0+f53UaybuBAbjsf8/vkfR3w7ZM=";
 
     nativeBuildInputs =
       [
@@ -215,10 +169,6 @@ in
       if withGLES
       then "--cfg gles"
       else "";
-    gpu-lib =
-      if withGLES
-      then libglvnd
-      else vulkan-loader;
 
     preBuild = ''
       bash script/generate-licenses
@@ -320,8 +270,6 @@ in
         rev-prefix = "v";
         ignoredVersions = "(*-pre|0.999999.0|0.9999-temporary)";
       };
-      fhs = fhs {};
-      fhsWithPackages = f: fhs {additionalPkgs = f;};
       tests =
         {
           remoteServerVersion = testers.testVersion {
@@ -339,10 +287,7 @@ in
       homepage = "https://zed.dev";
       changelog = "https://github.com/zed-industries/zed/releases/tag/v${version}";
       license = lib.licenses.gpl3Only;
-      maintainers = with lib.maintainers; [
-        GaetanLepage
-        niklaskorz
-      ];
+      maintainers = with lib.maintainers; [NotAShelf];
       mainProgram = "zeditor";
       platforms = lib.platforms.linux ++ lib.platforms.darwin;
     };

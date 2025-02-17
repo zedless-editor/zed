@@ -58,7 +58,6 @@ assert withGLES -> stdenv.hostPlatform.isLinux; let
   in
     !(
       inRootDir
-      && (baseName == "docs")
       && (lib.any (x: baseName == x) ["docs" "target" "nix" "flake.nix" "flake.lock"])
     );
 

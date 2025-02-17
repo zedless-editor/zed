@@ -57,6 +57,8 @@ use zed::{
     OpenRequest,
 };
 
+use title_bar;
+
 #[cfg(unix)]
 use util::{load_login_shell_environment, load_shell_from_passwd};
 
@@ -494,7 +496,6 @@ fn main() {
         component_preview::init(cx);
         tasks_ui::init(cx);
         snippets_ui::init(cx);
-        channel::init(&app_state.client.clone(), app_state.user_store.clone(), cx);
         search::init(cx);
         vim::init(cx);
         terminal_view::init(cx);
@@ -503,9 +504,7 @@ fn main() {
         toolchain_selector::init(cx);
         theme_selector::init(cx);
         language_tools::init(cx);
-        call::init(app_state.client.clone(), app_state.user_store.clone(), cx);
-        notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);
-        collab_ui::init(&app_state, cx);
+        title_bar::init(cx);
         git_ui::init(cx);
         feedback::init(cx);
         markdown_preview::init(cx);

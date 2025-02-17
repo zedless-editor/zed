@@ -25,7 +25,7 @@
   // Features that can be globally enabled or disabled
   "features": {
     // Which edit prediction provider to use.
-    "edit_prediction_provider": "copilot"
+    "edit_prediction_provider": "none"
   },
   // The name of a font to use for rendering text in the editor
   "buffer_font_family": "Zed Plex Mono",
@@ -547,12 +547,7 @@
     // Default height when the assistant is docked to the bottom.
     "default_height": 320,
     // The default model to use when creating new chats.
-    "default_model": {
-      // The provider to use.
-      "provider": "zed.dev",
-      // The model to use.
-      "model": "claude-3-5-sonnet"
-    }
+    "default_model": null
   },
   // The settings for slash commands.
   "slash_commands": {
@@ -718,13 +713,13 @@
   // Control what info is collected by Zed.
   "telemetry": {
     // Send debug info like crash reports.
-    "diagnostics": true,
+    "diagnostics": false,
     // Send anonymized usage data like what languages you're using Zed with.
-    "metrics": true
+    "metrics": false
   },
   // Automatically update Zed. This setting may be ignored on Linux if
   // installed through a package manager.
-  "auto_update": true,
+  "auto_update": false,
   // Diagnostics configuration.
   "diagnostics": {
     // Whether to show warnings or not by default.
@@ -1005,9 +1000,7 @@
   //
   // If you don't want any of these extensions, add this field to your settings
   // and change the value to `false`.
-  "auto_install_extensions": {
-    "html": true
-  },
+  "auto_install_extensions": {},
   // Different settings for specific languages.
   "languages": {
     "Astro": {

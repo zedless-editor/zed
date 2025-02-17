@@ -365,25 +365,8 @@ impl Copilot {
     }
 
     fn enable_or_disable_copilot(&mut self, cx: &mut Context<Self>) {
-        let server_id = self.server_id;
-        let http = self.http.clone();
-        let node_runtime = self.node_runtime.clone();
-        if all_language_settings(None, cx).edit_predictions.provider
-            == EditPredictionProvider::Copilot
-        {
-            if matches!(self.server, CopilotServer::Disabled) {
-                let start_task = cx
-                    .spawn(move |this, cx| {
-                        Self::start_language_server(server_id, http, node_runtime, this, cx)
-                    })
-                    .shared();
-                self.server = CopilotServer::Starting { task: start_task };
-                cx.notify();
-            }
-        } else {
-            self.server = CopilotServer::Disabled;
-            cx.notify();
-        }
+        self.server = CopilotServer::Disabled;
+        cx.notify();
     }
 
     #[cfg(any(test, feature = "test-support"))]

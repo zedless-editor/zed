@@ -44,6 +44,8 @@
   buildRemoteServer ? true,
 }:
 assert withGLES -> stdenv.hostPlatform.isLinux; let
+  inherit (builtins) fromTOML readFile;
+
   gpu-lib =
     if withGLES
     then libglvnd
@@ -56,11 +58,14 @@ assert withGLES -> stdenv.hostPlatform.isLinux; let
   in
     !(
       inRootDir
-      && (baseName == "docs" || baseName == ".github" || baseName == "target")
+      && (baseName == "docs")
+      && (lib.any (x: baseName == x) ["docs" "target" "nix" "flake.nix" "flake.lock"])
     );
 
-  pname = "zedless-editor";
-  version = "0.172.10";
+  # Cargo.toml located in repo root does not contain any version information.
+  cargoToml = fromTOML (readFile ../crates/zed/Cargo.toml);
+  pname = cargoToml.package.name;
+  version = cargoToml.package.version;
   src = lib.cleanSourceWith {
     name = "zed-source";
     src = ../.;
@@ -284,10 +289,12 @@ in
 
     meta = {
       description = "High-performance, multiplayer code editor from the creators of Atom and Tree-sitter";
-      homepage = "https://zed.dev";
-      changelog = "https://github.com/zed-industries/zed/releases/tag/v${version}";
+      homepage = "https://github.com/zedless-editor/zed";
       license = lib.licenses.gpl3Only;
-      maintainers = with lib.maintainers; [NotAShelf];
+      maintainers = with lib.maintainers; [
+        max
+        NotAShelf
+      ];
       mainProgram = "zeditor";
       platforms = lib.platforms.linux ++ lib.platforms.darwin;
     };

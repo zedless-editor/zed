@@ -155,13 +155,6 @@ impl LanguageModelProvider for OpenAiLanguageModelProvider {
     fn provided_models(&self, cx: &App) -> Vec<Arc<dyn LanguageModel>> {
         let mut models = BTreeMap::default();
 
-        // Add base models from open_ai::Model::iter()
-        for model in open_ai::Model::iter() {
-            if !matches!(model, open_ai::Model::Custom { .. }) {
-                models.insert(model.id().to_string(), model);
-            }
-        }
-
         // Override with available models from settings
         for model in &AllLanguageModelSettings::get_global(cx)
             .openai

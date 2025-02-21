@@ -155,13 +155,6 @@ impl LanguageModelProvider for OpenAiLanguageModelProvider {
     fn provided_models(&self, cx: &App) -> Vec<Arc<dyn LanguageModel>> {
         let mut models = BTreeMap::default();
 
-        // Add base models from open_ai::Model::iter()
-        for model in open_ai::Model::iter() {
-            if !matches!(model, open_ai::Model::Custom { .. }) {
-                models.insert(model.id().to_string(), model);
-            }
-        }
-
         // Override with available models from settings
         for model in &AllLanguageModelSettings::get_global(cx)
             .openai
@@ -482,12 +475,11 @@ impl ConfigurationView {
 
 impl Render for ConfigurationView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        const OPENAI_CONSOLE_URL: &str = "https://platform.openai.com/api-keys";
         const INSTRUCTIONS: [&str; 4] = [
-            "To use Zed's assistant with OpenAI, you need to add an API key. Follow these steps:",
-            " - Create one by visiting:",
-            " - Ensure your OpenAI account has credits",
+            "To use Zed's assistant with an OpenAI-compatible provider, follow these steps:",
+            " - Configure the provider in the config file",
             " - Paste your API key below and hit enter to start using the assistant",
+            " - If your provider has no authentication, just insert a dummy key",
         ];
 
         let env_var_set = self.state.read(cx).api_key_from_env;
@@ -498,18 +490,8 @@ impl Render for ConfigurationView {
             v_flex()
                 .size_full()
                 .on_action(cx.listener(Self::save_api_key))
-                .child(Label::new(INSTRUCTIONS[0]))
-                .child(h_flex().child(Label::new(INSTRUCTIONS[1])).child(
-                    Button::new("openai_console", OPENAI_CONSOLE_URL)
-                        .style(ButtonStyle::Subtle)
-                        .icon(IconName::ArrowUpRight)
-                        .icon_size(IconSize::XSmall)
-                        .icon_color(Color::Muted)
-                        .on_click(move |_, _, cx| cx.open_url(OPENAI_CONSOLE_URL))
-                    )
-                )
                 .children(
-                    (2..INSTRUCTIONS.len()).map(|n|
+                    (0..INSTRUCTIONS.len()).map(|n|
                         Label::new(INSTRUCTIONS[n])).collect::<Vec<_>>())
                 .child(
                     h_flex()
@@ -526,12 +508,6 @@ impl Render for ConfigurationView {
                 .child(
                     Label::new(
                         format!("You can also assign the {OPENAI_API_KEY_VAR} environment variable and restart Zed."),
-                    )
-                    .size(LabelSize::Small),
-                )
-                .child(
-                    Label::new(
-                        "Note that having a subscription for another service like GitHub Copilot won't work.".to_string(),
                     )
                     .size(LabelSize::Small),
                 )

@@ -41,10 +41,6 @@ fn register_language_model_providers(
     RefreshLlmTokenListener::register(client.clone(), cx);
 
     registry.register_provider(
-        AnthropicLanguageModelProvider::new(client.http_client(), cx),
-        cx,
-    );
-    registry.register_provider(
         OpenAiLanguageModelProvider::new(client.http_client(), cx),
         cx,
     );
@@ -52,19 +48,6 @@ fn register_language_model_providers(
         OllamaLanguageModelProvider::new(client.http_client(), cx),
         cx,
     );
-    registry.register_provider(
-        LmStudioLanguageModelProvider::new(client.http_client(), cx),
-        cx,
-    );
-    registry.register_provider(
-        DeepSeekLanguageModelProvider::new(client.http_client(), cx),
-        cx,
-    );
-    registry.register_provider(
-        GoogleLanguageModelProvider::new(client.http_client(), cx),
-        cx,
-    );
-    registry.register_provider(CopilotChatLanguageModelProvider::new(cx), cx);
 
     cx.observe_flag::<feature_flags::LanguageModels, _>(move |enabled, cx| {
         let user_store = user_store.clone();

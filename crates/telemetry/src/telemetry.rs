@@ -17,27 +17,8 @@ pub use telemetry_events::FlexibleEvent as Event;
 /// ```
 #[macro_export]
 macro_rules! event {
-    ($name:expr) => {{
-        let event = $crate::Event {
-            event_type: $name.to_string(),
-            event_properties: std::collections::HashMap::new(),
-        };
-        $crate::send_event(event);
-    }};
-    ($name:expr, $($key:ident $(= $value:expr)?),+ $(,)?) => {{
-        let event = $crate::Event {
-            event_type: $name.to_string(),
-            event_properties: std::collections::HashMap::from([
-                $(
-                    (stringify!($key).to_string(),
-                        $crate::serde_json::value::to_value(&$crate::serialize_property!($key $(= $value)?))
-                            .unwrap_or_else(|_| $crate::serde_json::to_value(&()).unwrap())
-                    ),
-                )+
-            ]),
-        };
-        $crate::send_event(event);
-    }};
+    ($name:expr) => {{}};
+    ($name:expr, $($key:ident $(= $value:expr)?),+ $(,)?) => {{}};
 }
 
 #[macro_export]
@@ -50,15 +31,10 @@ macro_rules! serialize_property {
     };
 }
 
-pub fn send_event(event: Event) {
-    if let Some(queue) = TELEMETRY_QUEUE.get() {
-        queue.unbounded_send(event).ok();
-        return;
-    }
+pub fn send_event(_: Event) {
+    unreachable!("Zedless: unexpected telemetry event!");
 }
 
-pub fn init(tx: mpsc::UnboundedSender<Event>) {
-    TELEMETRY_QUEUE.set(tx).ok();
+pub fn init(_: mpsc::UnboundedSender<Event>) {
+    unreachable!("Zedless: unexpected telemetry queue init!");
 }
-
-static TELEMETRY_QUEUE: OnceLock<mpsc::UnboundedSender<Event>> = OnceLock::new();

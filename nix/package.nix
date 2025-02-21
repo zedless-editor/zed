@@ -96,7 +96,7 @@ in
     '';
 
     useFetchCargoVendor = true;
-    cargoHash = "sha256-96LOzmiynRycQvIL0+f53UaybuBAbjsf8/vkfR3w7ZM=";
+    cargoHash = "sha256-yH9OVEAxAzP5tWWzmXoiouqJ6fukfmG6dKK0Y1Cka8s=";
 
     nativeBuildInputs =
       [

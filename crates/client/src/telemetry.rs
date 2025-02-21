@@ -249,28 +249,6 @@ impl Telemetry {
             state,
         });
 
-        let (tx, mut rx) = mpsc::unbounded();
-        ::telemetry::init(tx);
-
-        cx.background_executor()
-            .spawn({
-                let this = Arc::downgrade(&this);
-                async move {
-                    while let Some(event) = rx.next().await {
-                        let Some(state) = this.upgrade() else { break };
-                        state.report_event(Event::Flexible(event))
-                    }
-                }
-            })
-            .detach();
-
-        // We should only ever have one instance of Telemetry, leak the subscription to keep it alive
-        // rather than store in TelemetryState, complicating spawn as subscriptions are not Send
-        std::mem::forget(cx.on_app_quit({
-            let this = this.clone();
-            move |_| this.shutdown_telemetry()
-        }));
-
         this
     }
 
@@ -308,10 +286,7 @@ impl Telemetry {
     }
 
     pub fn metrics_enabled(self: &Arc<Self>) -> bool {
-        let state = self.state.lock();
-        let enabled = state.settings.metrics;
-        drop(state);
-        enabled
+        false
     }
 
     pub fn set_authenticated_user_info(

@@ -338,7 +338,7 @@ fn main() {
             let options = NodeBinaryOptions {
                 allow_path_lookup: !settings.ignore_system_version.unwrap_or_default(),
                 // TODO: Expose this setting
-                allow_binary_download: true,
+                allow_binary_download: false,
                 use_paths: settings.path.as_ref().map(|node_path| {
                     let node_path = PathBuf::from(shellexpand::tilde(node_path).as_ref());
                     let npm_path = settings

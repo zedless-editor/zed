@@ -456,7 +456,7 @@ impl LocalLspStore {
         &self,
         adapter: Arc<CachedLspAdapter>,
         delegate: Arc<dyn LspAdapterDelegate>,
-        allow_binary_download: bool,
+        _allow_binary_download: bool,
         cx: &mut Context<LspStore>,
     ) -> Task<Result<LanguageServerBinary>> {
         let settings = ProjectSettings::get(
@@ -490,7 +490,7 @@ impl LocalLspStore {
                 .as_ref()
                 .and_then(|b| b.ignore_system_version)
                 .unwrap_or_default(),
-            allow_binary_download,
+            allow_binary_download: false,
         };
         let toolchains = self.toolchain_store.read(cx).as_language_toolchain_store();
         cx.spawn(|_, mut cx| async move {

@@ -20,13 +20,13 @@
   zlib,
   zstd,
   cargo,
+  rustc,
   alsa-lib,
   libxkbcommon,
   wayland,
   xorg,
   vulkan-loader,
-  apple-sdk_15,
-  ...
+  apple-sdk_15
 }:
 mkShell.override {stdenv = useMoldLinker clangStdenv;} {
   packages = [
@@ -38,6 +38,7 @@ mkShell.override {stdenv = useMoldLinker clangStdenv;} {
     rustPlatform.bindgenHook
     rust-analyzer
     cargo
+    rustc
   ];
 
   buildInputs =

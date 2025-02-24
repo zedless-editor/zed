@@ -217,7 +217,7 @@ impl Render for TitleBar {
                     PlatformStyle::Linux => {
                         if matches!(decorations, Decorations::Client { .. }) {
                             title_bar
-                                .child(platform_linux::LinuxWindowControls::new(close_action))
+                                .child(platform_linux::LinuxWindowControls::new(close_action, window.window_style()))
                                 .when(supported_controls.window_menu, |titlebar| {
                                     titlebar.on_mouse_down(
                                         gpui::MouseButton::Right,

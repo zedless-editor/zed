@@ -21,11 +21,11 @@ use wayland_protocols::xdg::shell::client::xdg_surface;
 use wayland_protocols::xdg::shell::client::xdg_toplevel::{self};
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 
-use crate::platform::{
+use crate::{platform::{
     blade::{BladeContext, BladeRenderer, BladeSurfaceConfig},
     linux::wayland::{display::WaylandDisplay, serial::SerialKind},
     PlatformAtlas, PlatformInputHandler, PlatformWindow,
-};
+}, WindowStyle};
 use crate::scene::Scene;
 use crate::{
     px, size, AnyWindowHandle, Bounds, Decorations, Globals, GpuSpecs, Modifiers, Output, Pixels,
@@ -804,6 +804,19 @@ impl PlatformWindow for WaylandWindow {
 
     fn appearance(&self) -> WindowAppearance {
         self.borrow().appearance
+    }
+
+    fn window_style(&self) -> crate::WindowStyle {
+        match std::env::var("XDG_CURRENT_DESKTOP") {
+            Ok(desktop) => {
+              if desktop == "GNOME" {
+                  WindowStyle::Gnome
+              } else {
+                  WindowStyle::Other
+              }
+            },
+            Err(_) => WindowStyle::Other,
+        }
     }
 
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>> {

@@ -32,6 +32,7 @@ pub async fn latest_github_release(
     pre_release: bool,
     http: Arc<dyn HttpClient>,
 ) -> Result<GithubRelease, anyhow::Error> {
+    return Err(anyhow!("zedless: GitHub downloads are disabled"));
     let mut response = http
         .get(
             format!("https://api.github.com/repos/{repo_name_with_owner}/releases").as_str(),
@@ -81,6 +82,7 @@ pub async fn get_release_by_tag_name(
     tag: &str,
     http: Arc<dyn HttpClient>,
 ) -> Result<GithubRelease, anyhow::Error> {
+    return Err(anyhow!("zedless: GitHub downloads are disabled"));
     let mut response = http
         .get(
             &format!("https://api.github.com/repos/{repo_name_with_owner}/releases/tags/{tag}"),

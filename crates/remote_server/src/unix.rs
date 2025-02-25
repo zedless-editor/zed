@@ -910,7 +910,7 @@ fn cleanup_old_binaries() -> Result<()> {
 
         if let Some(file_name) = path.file_name() {
             if let Some(version) = file_name.to_string_lossy().strip_prefix(&prefix) {
-                if !is_new_version(version) && !is_file_in_use(file_name) {
+                if !is_new_version(version) && !is_file_in_use(file_name) && !is_symlinked_to_nix_store(file_name) {
                     log::info!("removing old remote server binary: {:?}", path);
                     std::fs::remove_file(&path)?;
                 }
@@ -943,5 +943,18 @@ fn is_file_in_use(file_name: &OsStr) -> bool {
         }
     }
 
+    false
+}
+
+fn is_symlinked_to_nix_store(file_name: &OsStr) -> bool {
+    let server_dir = paths::remote_server_dir_relative();
+    let file_path = server_dir.join(file_name);
+    if let Ok(file_metadata) = file_path.symlink_metadata() {
+        if file_metadata.file_type().is_symlink() {
+            if let Ok(target_path) = std::fs::canonicalize(&file_path) {
+                return target_path.starts_with("/nix/store");
+            }
+        }
+    }
     false
 }

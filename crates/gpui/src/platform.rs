@@ -312,6 +312,16 @@ pub enum Decorations {
     },
 }
 
+/// A type to describe the window style
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Default)]
+pub enum WindowStyle {
+    /// GNOME Style
+    Gnome,
+    /// Any other desktop
+    #[default]
+    Other,
+}
+
 /// What window controls this platform supports
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct WindowControls {
@@ -437,6 +447,9 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn window_controls(&self) -> WindowControls {
         WindowControls::default()
+    }
+    fn window_style(&self) -> WindowStyle {
+        WindowStyle::Other
     }
     fn set_client_inset(&self, _inset: Pixels) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;

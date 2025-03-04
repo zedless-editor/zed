@@ -38,7 +38,7 @@ use session::{AppSession, Session};
 use settings::{watch_config_file, Settings, SettingsStore};
 use simplelog::ConfigBuilder;
 use std::{
-    env,
+    env::{self, VarError},
     fs::OpenOptions,
     io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
@@ -560,7 +560,38 @@ fn main() {
         cx.set_menus(app_menus());
         initialize_workspace(app_state.clone(), prompt_builder, cx);
 
-        cx.update_flags(false, vec!["git-ui".to_string()]);
+        let mut feature_flags = env::var("ZED_ENABLE_EXPERIMENTAL_FEATURES")
+            .map_or_else(
+                |e| {
+                    if e == VarError::NotPresent {
+                        // List of features enabled if variable is not present.
+                        Ok("git-ui".to_string())
+                    } else {
+                        Err(e)
+                    }
+                },
+                |s| Ok(s),
+            )
+            .and_then(|s| {
+                if s.is_empty() {
+                    Err(VarError::NotPresent)
+                } else {
+                    Ok(s)
+                }
+            })
+            .map_or_else(
+                |e| {
+                    if e == VarError::NotPresent {
+                        Vec::new()
+                    } else {
+                        panic!("Invalid ZED_ENABLE_EXPERIMENTAL_FEATURES: {:?}", e)
+                    }
+                },
+                |s| s.split(',').map(|s| s.to_string()).collect(),
+            );
+        feature_flags.sort();
+        feature_flags.dedup();
+        cx.update_flags(false, feature_flags);
 
         cx.activate(true);
 

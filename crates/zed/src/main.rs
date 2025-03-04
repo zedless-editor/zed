@@ -561,6 +561,17 @@ fn main() {
         initialize_workspace(app_state.clone(), prompt_builder, cx);
 
         let mut feature_flags = env::var("ZED_ENABLE_EXPERIMENTAL_FEATURES")
+            .map_or_else(
+                |e| {
+                    if e == VarError::NotPresent {
+                        // List of features enabled if variable is not present.
+                        Ok("git-ui".to_string())
+                    } else {
+                        Err(e)
+                    }
+                },
+                |s| Ok(s),
+            )
             .and_then(|s| {
                 if s.is_empty() {
                     Err(VarError::NotPresent)

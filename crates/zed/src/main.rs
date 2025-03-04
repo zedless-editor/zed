@@ -15,7 +15,6 @@ use db::kvp::{GLOBAL_KEY_VALUE_STORE, KEY_VALUE_STORE};
 use editor::Editor;
 use env_logger::Builder;
 use extension::ExtensionHostProxy;
-use feature_flags::FeatureFlagAppExt;
 use fs::{Fs, RealFs};
 use futures::{future, StreamExt};
 use git::GitHostingProviderRegistry;
@@ -559,8 +558,6 @@ fn main() {
 
         cx.set_menus(app_menus());
         initialize_workspace(app_state.clone(), prompt_builder, cx);
-
-        cx.update_flags(false, vec!["git-ui".to_string()]);
 
         cx.activate(true);
 

@@ -380,6 +380,7 @@ pub struct ChoiceDelta {
 #[serde(untagged)]
 pub enum ResponseStreamResult {
     Ok(ResponseStreamEvent),
+    OkComplete(Response),
     Err { error: String },
 }
 
@@ -389,6 +390,23 @@ pub struct ResponseStreamEvent {
     pub model: String,
     pub choices: Vec<ChoiceDelta>,
     pub usage: Option<Usage>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Response {
+    pub id: String,
+    pub object: String,
+    pub created: u32,
+    pub model: String,
+    pub choices: Vec<Choice>,
+    pub usage: Usage,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Choice {
+    pub index: u32,
+    pub message: RequestMessage,
+    pub finish_reason: Option<String>,
 }
 
 pub async fn stream_completion(
@@ -404,16 +422,21 @@ pub async fn stream_completion(
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", api_key));
 
+    let stream = request.stream;
     let request = request_builder.body(AsyncBody::from(serde_json::to_string(&request)?))?;
     let mut response = client.send(request).await?;
     if response.status().is_success() {
         let reader = BufReader::new(response.into_body());
         Ok(reader
             .lines()
-            .filter_map(|line| async move {
+            .filter_map(move |line| async move {
                 match line {
                     Ok(line) => {
-                        let line = line.strip_prefix("data: ")?;
+                        let line = if stream {
+                            line.strip_prefix("data: ")?
+                        } else {
+                            line.as_str()
+                        };
                         if line == "[DONE]" {
                             None
                         } else {
@@ -422,6 +445,39 @@ pub async fn stream_completion(
                                 Ok(ResponseStreamResult::Err { error }) => {
                                     Some(Err(anyhow!(error)))
                                 }
+                                Ok(ResponseStreamResult::OkComplete(response)) => Some(Ok(ResponseStreamEvent {
+                                    created: response.created,
+                                    model: response.model,
+                                    usage: Some(response.usage),
+                                    choices: response.choices.iter().map(|choice| ChoiceDelta {
+                                        index: choice.index,
+                                        delta: match &choice.message {
+                                            RequestMessage::Assistant { content, tool_calls } => ResponseMessageDelta {
+                                                role: Some(Role::Assistant),
+                                                content: content.clone().map(|cnt| match cnt {
+                                                    MessageContent::Plain(s) => s,
+                                                    MessageContent::Multipart(_) => unimplemented!(),
+                                                }),
+                                                tool_calls: if tool_calls.is_empty() { None } else {
+                                                    Some(tool_calls.iter().map(|tc| ToolCallChunk {
+                                                        index: 0,
+                                                        id: Some(tc.id.clone()),
+                                                        function: Some(match &tc.content {
+                                                            ToolCallContent::Function { function } => FunctionChunk {
+                                                                name: Some(function.name.clone()),
+                                                                arguments: Some(function.arguments.clone())
+                                                            },
+                                                        })
+                                                    }).collect())
+                                                }
+                                            },
+                                            RequestMessage::User { content } => unimplemented!(),
+                                            RequestMessage::System { content } => unimplemented!(),
+                                            RequestMessage::Tool { content, tool_call_id } => unimplemented!(),
+                                        },
+                                        finish_reason: choice.finish_reason.clone(),
+                                    }).collect(),
+                                })),
                                 Err(error) => Some(Err(anyhow!(error))),
                             }
                         }

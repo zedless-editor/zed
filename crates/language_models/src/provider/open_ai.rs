@@ -350,7 +350,7 @@ pub fn into_open_ai(
     model: &Model,
     max_output_tokens: Option<u32>,
 ) -> open_ai::Request {
-    let stream = !model.id().starts_with("o1-");
+    let stream = request.tools.is_empty();
 
     let mut messages = Vec::new();
     for message in request.messages {

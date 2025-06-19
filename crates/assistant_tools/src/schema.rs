@@ -23,7 +23,12 @@ fn schema_to_json(
 
 fn root_schema_for<T: JsonSchema>(format: LanguageModelToolSchemaFormat) -> RootSchema {
     let mut generator = match format {
-        LanguageModelToolSchemaFormat::JsonSchema => schemars::SchemaGenerator::default(),
+        LanguageModelToolSchemaFormat::JsonSchema => {
+            schemars::r#gen::SchemaSettings::default()
+            .with(|settings| {
+                settings.inline_subschemas = true;
+            }).into_generator()
+        },
         LanguageModelToolSchemaFormat::JsonSchemaSubset => {
             schemars::r#gen::SchemaSettings::default()
                 .with(|settings| {

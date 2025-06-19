@@ -1,14 +1,11 @@
-#![allow(missing_docs)]
-use component::{example_group_with_title, single_example, ComponentPreview};
+use crate::component_prelude::*;
 use gpui::{AnyElement, AnyView, DefiniteLength};
-use ui_macros::IntoComponent;
+use ui_macros::RegisterComponent;
 
+use crate::{ButtonCommon, ButtonLike, ButtonSize, ButtonStyle, IconName, IconSize, Label};
 use crate::{
-    prelude::*, Color, DynamicSpacing, ElevationIndex, IconPosition, KeyBinding,
-    KeybindingPosition, TintColor,
-};
-use crate::{
-    ButtonCommon, ButtonLike, ButtonSize, ButtonStyle, IconName, IconSize, Label, LineHeightStyle,
+    Color, DynamicSpacing, ElevationIndex, IconPosition, KeyBinding, KeybindingPosition, TintColor,
+    prelude::*,
 };
 
 use super::button_icon::ButtonIcon;
@@ -32,7 +29,7 @@ use super::button_icon::ButtonIcon;
 /// use ui::prelude::*;
 ///
 /// Button::new("button_id", "Click me!")
-///     .on_click(|event, cx| {
+///     .on_click(|event, window, cx| {
 ///         // Handle click event
 ///     });
 /// ```
@@ -47,7 +44,7 @@ use super::button_icon::ButtonIcon;
 /// Button::new("button_id", "Click me!")
 ///     .icon(IconName::Check)
 ///     .selected(true)
-///     .on_click(|event, cx| {
+///     .on_click(|event, window, cx| {
 ///         // Handle click event
 ///     });
 /// ```
@@ -61,7 +58,7 @@ use super::button_icon::ButtonIcon;
 /// Button::new("button_id", "Click me!")
 ///     .selected(true)
 ///     .selected_style(ButtonStyle::Tinted(TintColor::Accent))
-///     .on_click(|event, cx| {
+///     .on_click(|event, window, cx| {
 ///         // Handle click event
 ///     });
 /// ```
@@ -75,12 +72,12 @@ use super::button_icon::ButtonIcon;
 ///
 /// let button = Button::new("button_id", "Click me!")
 ///     .full_width()
-///     .on_click(|event, cx| {
+///     .on_click(|event, window, cx| {
 ///         // Handle click event
 ///     });
 /// ```
 ///
-#[derive(IntoElement, IntoComponent)]
+#[derive(IntoElement, Documented, RegisterComponent)]
 pub struct Button {
     base: ButtonLike,
     label: SharedString,
@@ -97,6 +94,7 @@ pub struct Button {
     key_binding: Option<KeyBinding>,
     key_binding_position: KeybindingPosition,
     alpha: Option<f32>,
+    truncate: bool,
 }
 
 impl Button {
@@ -123,6 +121,7 @@ impl Button {
             key_binding: None,
             key_binding_position: KeybindingPosition::default(),
             alpha: None,
+            truncate: false,
         }
     }
 
@@ -206,6 +205,15 @@ impl Button {
         self.alpha = Some(alpha);
         self
     }
+
+    /// Truncates overflowing labels with an ellipsis (`…`) if needed.
+    ///
+    /// Buttons with static labels should _never_ be truncated, ensure
+    /// this is only used when the label is dynamic and may overflow.
+    pub fn truncate(mut self, truncate: bool) -> Self {
+        self.truncate = truncate;
+        self
+    }
 }
 
 impl Toggleable for Button {
@@ -221,7 +229,7 @@ impl Toggleable for Button {
     ///
     /// Button::new("button_id", "Click me!")
     ///     .selected(true)
-    ///     .on_click(|event, cx| {
+    ///     .on_click(|event, window, cx| {
     ///         // Handle click event
     ///     });
     /// ```
@@ -245,7 +253,7 @@ impl SelectableButton for Button {
     /// Button::new("button_id", "Click me!")
     ///     .selected(true)
     ///     .selected_style(ButtonStyle::Tinted(TintColor::Accent))
-    ///     .on_click(|event, cx| {
+    ///     .on_click(|event, window, cx| {
     ///         // Handle click event
     ///     });
     /// ```
@@ -269,7 +277,7 @@ impl Disableable for Button {
     ///
     /// Button::new("button_id", "Click me!")
     ///     .disabled(true)
-    ///     .on_click(|event, cx| {
+    ///     .on_click(|event, window, cx| {
     ///         // Handle click event
     ///     });
     /// ```
@@ -310,7 +318,7 @@ impl FixedWidth for Button {
     ///
     /// Button::new("button_id", "Click me!")
     ///     .width(px(100.).into())
-    ///     .on_click(|event, cx| {
+    ///     .on_click(|event, window, cx| {
     ///         // Handle click event
     ///     });
     /// ```
@@ -330,7 +338,7 @@ impl FixedWidth for Button {
     ///
     /// Button::new("button_id", "Click me!")
     ///     .full_width()
-    ///     .on_click(|event, cx| {
+    ///     .on_click(|event, window, cx| {
     ///         // Handle click event
     ///     });
     /// ```
@@ -374,7 +382,7 @@ impl ButtonCommon for Button {
     ///
     /// Button::new("button_id", "Click me!")
     ///     .tooltip(Tooltip::text_f("This is a tooltip", cx))
-    ///     .on_click(|event, cx| {
+    ///     .on_click(|event, window, cx| {
     ///         // Handle click event
     ///     });
     /// ```
@@ -437,7 +445,7 @@ impl RenderOnce for Button {
                                 .color(label_color)
                                 .size(self.label_size.unwrap_or_default())
                                 .when_some(self.alpha, |this, alpha| this.alpha(alpha))
-                                .line_height_style(LineHeightStyle::UiLabel),
+                                .when(self.truncate, |this| this.truncate()),
                         )
                         .children(self.key_binding),
                 )
@@ -457,125 +465,135 @@ impl RenderOnce for Button {
 }
 
 // View this component preview using `workspace: open component-preview`
-impl ComponentPreview for Button {
-    fn preview(_window: &mut Window, _cx: &App) -> AnyElement {
-        v_flex()
-            .gap_6()
-            .children(vec![
-                example_group_with_title(
-                    "Styles",
-                    vec![
-                        single_example(
-                            "Default",
-                            Button::new("default", "Default").into_any_element(),
-                        ),
-                        single_example(
-                            "Filled",
-                            Button::new("filled", "Filled")
-                                .style(ButtonStyle::Filled)
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Subtle",
-                            Button::new("outline", "Subtle")
-                                .style(ButtonStyle::Subtle)
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Transparent",
-                            Button::new("transparent", "Transparent")
-                                .style(ButtonStyle::Transparent)
-                                .into_any_element(),
-                        ),
-                    ],
-                ),
-                example_group_with_title(
-                    "Tinted",
-                    vec![
-                        single_example(
-                            "Accent",
-                            Button::new("tinted_accent", "Accent")
-                                .style(ButtonStyle::Tinted(TintColor::Accent))
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Error",
-                            Button::new("tinted_negative", "Error")
-                                .style(ButtonStyle::Tinted(TintColor::Error))
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Warning",
-                            Button::new("tinted_warning", "Warning")
-                                .style(ButtonStyle::Tinted(TintColor::Warning))
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Success",
-                            Button::new("tinted_positive", "Success")
-                                .style(ButtonStyle::Tinted(TintColor::Success))
-                                .into_any_element(),
-                        ),
-                    ],
-                ),
-                example_group_with_title(
-                    "States",
-                    vec![
-                        single_example(
-                            "Default",
-                            Button::new("default_state", "Default").into_any_element(),
-                        ),
-                        single_example(
-                            "Disabled",
-                            Button::new("disabled", "Disabled")
-                                .disabled(true)
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Selected",
-                            Button::new("selected", "Selected")
-                                .toggle_state(true)
-                                .into_any_element(),
-                        ),
-                    ],
-                ),
-                example_group_with_title(
-                    "With Icons",
-                    vec![
-                        single_example(
-                            "Icon Start",
-                            Button::new("icon_start", "Icon Start")
-                                .icon(IconName::Check)
-                                .icon_position(IconPosition::Start)
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Icon End",
-                            Button::new("icon_end", "Icon End")
-                                .icon(IconName::Check)
-                                .icon_position(IconPosition::End)
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Icon Color",
-                            Button::new("icon_color", "Icon Color")
-                                .icon(IconName::Check)
-                                .icon_color(Color::Accent)
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Tinted Icons",
-                            Button::new("tinted_icons", "Error")
-                                .style(ButtonStyle::Tinted(TintColor::Error))
-                                .color(Color::Error)
-                                .icon_color(Color::Error)
-                                .icon(IconName::Trash)
-                                .icon_position(IconPosition::Start)
-                                .into_any_element(),
-                        ),
-                    ],
-                ),
-            ])
-            .into_any_element()
+impl Component for Button {
+    fn scope() -> ComponentScope {
+        ComponentScope::Input
+    }
+
+    fn sort_name() -> &'static str {
+        "ButtonA"
+    }
+
+    fn description() -> Option<&'static str> {
+        Some("A button triggers an event or action.")
+    }
+
+    fn preview(_window: &mut Window, _cx: &mut App) -> Option<AnyElement> {
+        Some(
+            v_flex()
+                .gap_6()
+                .children(vec![
+                    example_group_with_title(
+                        "Button Styles",
+                        vec![
+                            single_example(
+                                "Default",
+                                Button::new("default", "Default").into_any_element(),
+                            ),
+                            single_example(
+                                "Filled",
+                                Button::new("filled", "Filled")
+                                    .style(ButtonStyle::Filled)
+                                    .into_any_element(),
+                            ),
+                            single_example(
+                                "Subtle",
+                                Button::new("outline", "Subtle")
+                                    .style(ButtonStyle::Subtle)
+                                    .into_any_element(),
+                            ),
+                            single_example(
+                                "Tinted",
+                                Button::new("tinted_accent_style", "Accent")
+                                    .style(ButtonStyle::Tinted(TintColor::Accent))
+                                    .into_any_element(),
+                            ),
+                            single_example(
+                                "Transparent",
+                                Button::new("transparent", "Transparent")
+                                    .style(ButtonStyle::Transparent)
+                                    .into_any_element(),
+                            ),
+                        ],
+                    ),
+                    example_group_with_title(
+                        "Tint Styles",
+                        vec![
+                            single_example(
+                                "Accent",
+                                Button::new("tinted_accent", "Accent")
+                                    .style(ButtonStyle::Tinted(TintColor::Accent))
+                                    .into_any_element(),
+                            ),
+                            single_example(
+                                "Error",
+                                Button::new("tinted_negative", "Error")
+                                    .style(ButtonStyle::Tinted(TintColor::Error))
+                                    .into_any_element(),
+                            ),
+                            single_example(
+                                "Warning",
+                                Button::new("tinted_warning", "Warning")
+                                    .style(ButtonStyle::Tinted(TintColor::Warning))
+                                    .into_any_element(),
+                            ),
+                            single_example(
+                                "Success",
+                                Button::new("tinted_positive", "Success")
+                                    .style(ButtonStyle::Tinted(TintColor::Success))
+                                    .into_any_element(),
+                            ),
+                        ],
+                    ),
+                    example_group_with_title(
+                        "Special States",
+                        vec![
+                            single_example(
+                                "Default",
+                                Button::new("default_state", "Default").into_any_element(),
+                            ),
+                            single_example(
+                                "Disabled",
+                                Button::new("disabled", "Disabled")
+                                    .disabled(true)
+                                    .into_any_element(),
+                            ),
+                            single_example(
+                                "Selected",
+                                Button::new("selected", "Selected")
+                                    .toggle_state(true)
+                                    .into_any_element(),
+                            ),
+                        ],
+                    ),
+                    example_group_with_title(
+                        "Buttons with Icons",
+                        vec![
+                            single_example(
+                                "Icon Start",
+                                Button::new("icon_start", "Icon Start")
+                                    .icon(IconName::Check)
+                                    .icon_position(IconPosition::Start)
+                                    .into_any_element(),
+                            ),
+                            single_example(
+                                "Icon End",
+                                Button::new("icon_end", "Icon End")
+                                    .icon(IconName::Check)
+                                    .icon_position(IconPosition::End)
+                                    .into_any_element(),
+                            ),
+                            single_example(
+                                "Icon Color",
+                                Button::new("icon_color", "Icon Color")
+                                    .icon(IconName::Check)
+                                    .icon_color(Color::Accent)
+                                    .into_any_element(),
+                            ),
+                        ],
+                    ),
+                ])
+                .into_any_element(),
+        )
     }
 }

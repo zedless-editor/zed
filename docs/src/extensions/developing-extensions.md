@@ -8,7 +8,7 @@ Extensions can add the following capabilities to Zed:
 - [Themes](./themes.md)
 - [Icon Themes](./icon-themes.md)
 - [Slash Commands](./slash-commands.md)
-- [Context Servers](./context-servers.md)
+- [MCP Servers](./mcp-extensions.md)
 
 ## Developing an Extension Locally
 
@@ -70,7 +70,7 @@ crate-type = ["cdylib"]
 zed_extension_api = "0.1.0"
 ```
 
-Make sure to use the latest version of the [`zed_extension_api`](https://crates.io/crates/zed_extension_api) available on crates.io.
+Use the latest version of the [`zed_extension_api`](https://crates.io/crates/zed_extension_api) available on crates.io. Make sure it's still [compatible with Zed versions](https://github.com/zed-industries/zed/blob/main/crates/extension_api#compatible-zed-versions) you want to support.
 
 In the `src/lib.rs` file in your Rust crate you will need to define a struct for your extension and implement the `Extension` trait, as well as use the `register_extension!` macro to register your extension:
 
@@ -110,6 +110,8 @@ git add extensions/foobar
 submodule = "extensions/my-extension"
 version = "0.0.1"
 ```
+
+> If your extension is in a subdirectory within the submodule you can use the `path` field to point to where the extension resides.
 
 3. Run `pnpm sort-extensions` to ensure `extensions.toml` and `.gitmodules` are sorted
 

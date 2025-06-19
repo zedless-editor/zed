@@ -2,7 +2,7 @@
 
 Rust support is available natively in Zed.
 
-- Tree Sitter: [tree-sitter/tree-sitter-rust](https://github.com/tree-sitter/tree-sitter-rust)
+- Tree-sitter: [tree-sitter/tree-sitter-rust](https://github.com/tree-sitter/tree-sitter-rust)
 - Language Server: [rust-lang/rust-analyzer](https://github.com/rust-lang/rust-analyzer)
 
 <!--
@@ -36,7 +36,7 @@ The following configuration can be used to change the inlay hint settings for `r
 }
 ```
 
-See [Inlay Hints](https://rust-analyzer.github.io/manual.html#inlay-hints) in the Rust Analyzer Manual for more information.
+See [Inlay Hints](https://rust-analyzer.github.io/book/features.html#inlay-hints) in the Rust Analyzer Manual for more information.
 
 ## Target directory
 
@@ -95,13 +95,70 @@ If you want to use a binary in a custom location, you can specify a `path` and o
 
 This `"path"` has to be an absolute path.
 
+## Alternate Targets
+
+If want rust-analyzer to provide diagnostics for a target other than you current platform (e.g. for windows when running on macOS) you can use the following Zed lsp settings:
+
+```json
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "cargo": {
+          "target": "x86_64-pc-windows-msvc"
+        }
+      }
+    }
+  }
+}
+```
+
+If you are using `rustup` and you can find a list of available target triples (`aarch64-apple-darwin`, `x86_64-unknown-linux-gnu`, etc) by running:
+
+```sh
+rustup target list --installed
+```
+
+## LSP tasks
+
+Zed provides tasks using tree-sitter, but rust-analyzer has an LSP extension method for querying file-related tasks via LSP.
+This is enabled by default and can be configured as
+
+```json
+"lsp": {
+  "rust-analyzer": {
+    "enable_lsp_tasks": true,
+  }
+}
+```
+
+## Manual Cargo Diagnostics fetch
+
+By default, rust-analyzer has `checkOnSave: true` enabled, which causes every buffer save to trigger a `cargo check --workspace --all-targets` command.
+For lager projects this might introduce excessive wait times, so a more fine-grained triggering could be enabled by altering the
+
+```json
+"diagnostics": {
+  "cargo": {
+    // When enabled, Zed disables rust-analyzer's check on save and starts to query
+    // Cargo diagnostics separately.
+    "fetch_cargo_diagnostics": false
+  }
+}
+```
+
+default settings.
+
+This will stop rust-analyzer from running `cargo check ...` on save, yet still allow to run
+`editor: run/clear/cancel flycheck` commands in Rust files to refresh cargo diagnostics; the project diagnostics editor will also refresh cargo diagnostics with `editor: run flycheck` command when the setting is enabled.
+
 ## More server configuration
 
 <!--
 TBD: Is it possible to specify RUSTFLAGS? https://github.com/zed-industries/zed/issues/14334
 -->
 
-Rust-analyzer [manual](https://rust-analyzer.github.io/manual.html) describes various features and configuration options for rust-analyzer language server.
+Rust-analyzer [manual](https://rust-analyzer.github.io/book/) describes various features and configuration options for rust-analyzer language server.
 Rust-analyzer in Zed runs with the default parameters.
 
 ### Large projects and performance
@@ -129,7 +186,7 @@ While that works fine on small projects, it does not scale well.
 
 The alternatives would be to use [tasks](../tasks.md), as Zed already provides a `cargo check --workspace --all-targets` task and the ability to cmd/ctrl-click on the terminal output to navigate to the error, and limit or turn off the check on save feature entirely.
 
-Check on save feature is responsible for returning part of the diagnostics based on cargo check output, so turning it off will limit rust-analyzer with its own [diagnostics](https://rust-analyzer.github.io/manual.html#diagnostics).
+Check on save feature is responsible for returning part of the diagnostics based on cargo check output, so turning it off will limit rust-analyzer with its own [diagnostics](https://rust-analyzer.github.io/book/diagnostics.html).
 
 Consider more `rust-analyzer.cargo.` and `rust-analyzer.check.` and `rust-analyzer.diagnostics.` settings from the manual for more fine-grained configuration.
 Here's a snippet for Zed settings.json (the language server will restart automatically after the `lsp.rust-analyzer` section is edited and saved):

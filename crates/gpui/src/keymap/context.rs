@@ -1,6 +1,5 @@
 use crate::SharedString;
-use anyhow::{anyhow, Result};
-use smallvec::SmallVec;
+use anyhow::{Context as _, Result};
 use std::fmt;
 
 /// A datastructure for resolving whether an action should be dispatched
@@ -8,7 +7,7 @@ use std::fmt;
 /// and/or key value pairs representing the current context for the
 /// keymap.
 #[derive(Clone, Default, Eq, PartialEq, Hash)]
-pub struct KeyContext(SmallVec<[ContextEntry; 1]>);
+pub struct KeyContext(Vec<ContextEntry>);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 /// An entry in a KeyContext
@@ -244,7 +243,7 @@ impl KeyBindingContextPredicate {
         let source = skip_whitespace(source);
         let (predicate, rest) = Self::parse_expr(source, 0)?;
         if let Some(next) = rest.chars().next() {
-            Err(anyhow!("unexpected character '{next:?}'"))
+            anyhow::bail!("unexpected character '{next:?}'");
         } else {
             Ok(predicate)
         }
@@ -330,20 +329,14 @@ impl KeyBindingContextPredicate {
     }
 
     fn parse_primary(mut source: &str) -> anyhow::Result<(Self, &str)> {
-        let next = source
-            .chars()
-            .next()
-            .ok_or_else(|| anyhow!("unexpected end"))?;
+        let next = source.chars().next().context("unexpected end")?;
         match next {
             '(' => {
                 source = skip_whitespace(&source[1..]);
                 let (predicate, rest) = Self::parse_expr(source, 0)?;
-                if let Some(stripped) = rest.strip_prefix(')') {
-                    source = skip_whitespace(stripped);
-                    Ok((predicate, source))
-                } else {
-                    Err(anyhow!("expected a ')'"))
-                }
+                let stripped = rest.strip_prefix(')').context("expected a ')'")?;
+                source = skip_whitespace(stripped);
+                Ok((predicate, source))
             }
             '!' => {
                 let source = skip_whitespace(&source[1..]);
@@ -369,7 +362,7 @@ impl KeyBindingContextPredicate {
                     source,
                 ))
             }
-            _ => Err(anyhow!("unexpected character '{next:?}'")),
+            _ => anyhow::bail!("unexpected character '{next:?}'"),
         }
     }
 
@@ -389,7 +382,7 @@ impl KeyBindingContextPredicate {
         if let (Self::Identifier(left), Self::Identifier(right)) = (self, other) {
             Ok(Self::Equal(left, right))
         } else {
-            Err(anyhow!("operands of == must be identifiers"))
+            anyhow::bail!("operands of == must be identifiers");
         }
     }
 
@@ -397,7 +390,7 @@ impl KeyBindingContextPredicate {
         if let (Self::Identifier(left), Self::Identifier(right)) = (self, other) {
             Ok(Self::NotEqual(left, right))
         } else {
-            Err(anyhow!("operands of != must be identifiers"))
+            anyhow::bail!("operands of != must be identifiers");
         }
     }
 }
@@ -413,7 +406,7 @@ fn is_identifier_char(c: char) -> bool {
 }
 
 fn is_vim_operator_char(c: char) -> bool {
-    c == '>' || c == '<' || c == '~' || c == '"'
+    c == '>' || c == '<' || c == '~' || c == '"' || c == '?'
 }
 
 fn skip_whitespace(source: &str) -> &str {
@@ -439,14 +432,8 @@ mod tests {
             actions!(
                 test,
                 [
-                A,
-                B,
-                C,
-                D,
-                E,
-                F,
-                G, // Don't wrap, test the trailing comma
-            ]
+                    A, B, C, D, E, F, G, // Don't wrap, test the trailing comma
+                ]
             );
         }
     }

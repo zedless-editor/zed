@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    buffer_tests::{markdown_inline_lang, markdown_lang},
     LanguageConfig, LanguageMatcher,
+    buffer_tests::{markdown_inline_lang, markdown_lang},
 };
 use gpui::App;
 use rand::rngs::StdRng;
@@ -153,14 +153,14 @@ fn test_syntax_map_layers_for_range(cx: &mut App) {
     syntax_map.reparse(language.clone(), &buffer);
 
     assert_layers_for_range(
-            &syntax_map,
-            &buffer,
-            Point::new(2, 14)..Point::new(2, 16),
-            &[
-                "...(function_item ...",
-                "...(tuple_expression (call_expression ... arguments: (arguments (reference_expression value: (array_expression...",
-            ],
-        );
+        &syntax_map,
+        &buffer,
+        Point::new(2, 14)..Point::new(2, 16),
+        &[
+            "...(function_item ...",
+            "...(tuple_expression (call_expression ... arguments: (arguments (reference_expression value: (array_expression...",
+        ],
+    );
 
     // Put the vec! macro back, adding back the syntactic layer.
     buffer.undo();
@@ -207,15 +207,15 @@ fn test_dynamic_language_injection(cx: &mut App) {
     syntax_map.reparse(markdown.clone(), &buffer);
     syntax_map.reparse(markdown_inline.clone(), &buffer);
     assert_layers_for_range(
-            &syntax_map,
-            &buffer,
-            Point::new(3, 0)..Point::new(3, 0),
-            &[
-                "(document (section (paragraph (inline)) (fenced_code_block (fenced_code_block_delimiter) (info_string (language)) (block_continuation) (code_fence_content (block_continuation)) (fenced_code_block_delimiter))))",
-                "(inline (code_span (code_span_delimiter) (code_span_delimiter)))",
-                "...(function_item name: (identifier) parameters: (parameters) body: (block)...",
-            ],
-        );
+        &syntax_map,
+        &buffer,
+        Point::new(3, 0)..Point::new(3, 0),
+        &[
+            "(document (section (paragraph (inline)) (fenced_code_block (fenced_code_block_delimiter) (info_string (language)) (block_continuation) (code_fence_content (block_continuation)) (fenced_code_block_delimiter))))",
+            "(inline (code_span (code_span_delimiter) (code_span_delimiter)))",
+            "...(function_item name: (identifier) parameters: (parameters) body: (block)...",
+        ],
+    );
 
     // Replace `rs` with a path to ending in `.rb` in code block.
     let macro_name_range = range_for_text(&buffer, "rs");
@@ -224,15 +224,15 @@ fn test_dynamic_language_injection(cx: &mut App) {
     syntax_map.reparse(markdown.clone(), &buffer);
     syntax_map.reparse(markdown_inline.clone(), &buffer);
     assert_layers_for_range(
-            &syntax_map,
-            &buffer,
-            Point::new(3, 0)..Point::new(3, 0),
-            &[
-                "(document (section (paragraph (inline)) (fenced_code_block (fenced_code_block_delimiter) (info_string (language)) (block_continuation) (code_fence_content (block_continuation)) (fenced_code_block_delimiter))))",
-                "(inline (code_span (code_span_delimiter) (code_span_delimiter)))",
-                "...(call method: (identifier) arguments: (argument_list (call method: (identifier) arguments: (argument_list) block: (block)...",
-            ],
-        );
+        &syntax_map,
+        &buffer,
+        Point::new(3, 0)..Point::new(3, 0),
+        &[
+            "(document (section (paragraph (inline)) (fenced_code_block (fenced_code_block_delimiter) (info_string (language)) (block_continuation) (code_fence_content (block_continuation)) (fenced_code_block_delimiter))))",
+            "(inline (code_span (code_span_delimiter) (code_span_delimiter)))",
+            "...(call method: (identifier) arguments: (argument_list (call method: (identifier) arguments: (argument_list) block: (block)...",
+        ],
+    );
 
     // Replace Ruby with a language that hasn't been loaded yet.
     let macro_name_range = range_for_text(&buffer, "foo/bar/baz.rb");
@@ -241,29 +241,29 @@ fn test_dynamic_language_injection(cx: &mut App) {
     syntax_map.reparse(markdown.clone(), &buffer);
     syntax_map.reparse(markdown_inline.clone(), &buffer);
     assert_layers_for_range(
-            &syntax_map,
-            &buffer,
-            Point::new(3, 0)..Point::new(3, 0),
-            &[
-                "(document (section (paragraph (inline)) (fenced_code_block (fenced_code_block_delimiter) (info_string (language)) (block_continuation) (code_fence_content (block_continuation)) (fenced_code_block_delimiter))))",
-                "(inline (code_span (code_span_delimiter) (code_span_delimiter)))",
-            ],
-        );
+        &syntax_map,
+        &buffer,
+        Point::new(3, 0)..Point::new(3, 0),
+        &[
+            "(document (section (paragraph (inline)) (fenced_code_block (fenced_code_block_delimiter) (info_string (language)) (block_continuation) (code_fence_content (block_continuation)) (fenced_code_block_delimiter))))",
+            "(inline (code_span (code_span_delimiter) (code_span_delimiter)))",
+        ],
+    );
     assert!(syntax_map.contains_unknown_injections());
 
     registry.add(Arc::new(html_lang()));
     syntax_map.reparse(markdown.clone(), &buffer);
     syntax_map.reparse(markdown_inline.clone(), &buffer);
     assert_layers_for_range(
-            &syntax_map,
-            &buffer,
-            Point::new(3, 0)..Point::new(3, 0),
-            &[
-                "(document (section (paragraph (inline)) (fenced_code_block (fenced_code_block_delimiter) (info_string (language)) (block_continuation) (code_fence_content (block_continuation)) (fenced_code_block_delimiter))))",
-                "(inline (code_span (code_span_delimiter) (code_span_delimiter)))",
-                "(document (text))",
-            ],
-        );
+        &syntax_map,
+        &buffer,
+        Point::new(3, 0)..Point::new(3, 0),
+        &[
+            "(document (section (paragraph (inline)) (fenced_code_block (fenced_code_block_delimiter) (info_string (language)) (block_continuation) (code_fence_content (block_continuation)) (fenced_code_block_delimiter))))",
+            "(inline (code_span (code_span_delimiter) (code_span_delimiter)))",
+            "(document (text))",
+        ],
+    );
     assert!(!syntax_map.contains_unknown_injections());
 }
 
@@ -788,12 +788,96 @@ fn test_empty_combined_injections_inside_injections(cx: &mut App) {
             "(template...",
             // Markdown inline content
             "(inline)",
-            // HTML within the ERB
-            "(document (text))",
             // The ruby syntax tree should be empty, since there are
             // no interpolations in the ERB template.
             "(program)",
+            // HTML within the ERB
+            "(document (text))",
         ],
+    );
+}
+
+#[gpui::test]
+fn test_syntax_map_languages_loading_with_erb(cx: &mut App) {
+    let text = r#"
+        <body>
+            <% if @one %>
+                <div class=one>
+            <% else %>
+                <div class=two>
+            <% end %>
+            </div>
+        </body>
+    "#
+    .unindent();
+
+    let registry = Arc::new(LanguageRegistry::test(cx.background_executor().clone()));
+    let mut buffer = Buffer::new(0, BufferId::new(1).unwrap(), text);
+
+    let mut syntax_map = SyntaxMap::new(&buffer);
+    syntax_map.set_language_registry(registry.clone());
+
+    let language = Arc::new(erb_lang());
+
+    log::info!("parsing");
+    registry.add(language.clone());
+    syntax_map.reparse(language.clone(), &buffer);
+
+    log::info!("loading html");
+    registry.add(Arc::new(html_lang()));
+    syntax_map.reparse(language.clone(), &buffer);
+
+    log::info!("loading ruby");
+    registry.add(Arc::new(ruby_lang()));
+    syntax_map.reparse(language.clone(), &buffer);
+
+    assert_capture_ranges(
+        &syntax_map,
+        &buffer,
+        &["tag", "ivar"],
+        "
+            <«body»>
+                <% if «@one» %>
+                    <«div» class=one>
+                <% else %>
+                    <«div» class=two>
+                <% end %>
+                </«div»>
+            </«body»>
+        ",
+    );
+
+    let text = r#"
+        <body>
+            <% if @one«_hundred» %>
+                <div class=one>
+            <% else %>
+                <div class=two>
+            <% end %>
+            </div>
+        </body>
+    "#
+    .unindent();
+
+    log::info!("editing");
+    buffer.edit_via_marked_text(&text);
+    syntax_map.interpolate(&buffer);
+    syntax_map.reparse(language.clone(), &buffer);
+
+    assert_capture_ranges(
+        &syntax_map,
+        &buffer,
+        &["tag", "ivar"],
+        "
+            <«body»>
+                <% if «@one_hundred» %>
+                    <«div» class=one>
+                <% else %>
+                    <«div» class=two>
+                <% end %>
+                </«div»>
+            </«body»>
+        ",
     );
 }
 
@@ -1076,7 +1160,7 @@ fn test_edit_sequence(language_name: &str, steps: &[&str], cx: &mut App) -> (Buf
         .now_or_never()
         .unwrap()
         .unwrap();
-    let mut buffer = Buffer::new(0, BufferId::new(1).unwrap(), Default::default());
+    let mut buffer = Buffer::new(0, BufferId::new(1).unwrap(), "");
 
     let mut mutated_syntax_map = SyntaxMap::new(&buffer);
     mutated_syntax_map.set_language_registry(registry.clone());
@@ -1134,7 +1218,7 @@ fn html_lang() -> Language {
             },
             ..Default::default()
         },
-        Some(tree_sitter_html::language()),
+        Some(tree_sitter_html::LANGUAGE.into()),
     )
     .with_highlights_query(
         r#"
@@ -1317,6 +1401,7 @@ fn assert_layers_for_range(
     }
 }
 
+#[track_caller]
 fn assert_capture_ranges(
     syntax_map: &SyntaxMap,
     buffer: &BufferSnapshot,

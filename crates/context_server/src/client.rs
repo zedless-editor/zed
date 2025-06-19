@@ -1,26 +1,24 @@
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use collections::HashMap;
-use futures::{channel::oneshot, io::BufWriter, select, AsyncRead, AsyncWrite, FutureExt};
-use gpui::{AsyncApp, BackgroundExecutor, Task};
+use futures::{FutureExt, StreamExt, channel::oneshot, select};
+use gpui::{AppContext as _, AsyncApp, BackgroundExecutor, Task};
 use parking_lot::Mutex;
 use postage::barrier;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json::{value::RawValue, Value};
-use smol::{
-    channel,
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::Child,
-};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::{Value, value::RawValue};
+use smol::channel;
 use std::{
     fmt,
     path::PathBuf,
     sync::{
-        atomic::{AtomicI32, Ordering::SeqCst},
         Arc,
+        atomic::{AtomicI32, Ordering::SeqCst},
     },
     time::{Duration, Instant},
 };
 use util::TryFutureExt;
+
+use crate::transport::{StdioTransport, Transport};
 
 const JSON_RPC_VERSION: &str = "2.0";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -42,7 +40,7 @@ pub enum RequestId {
     Str(String),
 }
 
-pub struct Client {
+pub(crate) struct Client {
     server_id: ContextServerId,
     next_id: AtomicI32,
     outbound_tx: channel::Sender<String>,
@@ -55,12 +53,13 @@ pub struct Client {
     #[allow(dead_code)]
     output_done_rx: Mutex<Option<barrier::Receiver>>,
     executor: BackgroundExecutor,
-    server: Arc<Mutex<Option<Child>>>,
+    #[allow(dead_code)]
+    transport: Arc<dyn Transport>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct ContextServerId(pub Arc<str>);
+pub(crate) struct ContextServerId(pub Arc<str>);
 
 fn is_null_value<T: Serialize>(value: &T) -> bool {
     if let Ok(Value::Null) = serde_json::to_value(value) {
@@ -141,7 +140,7 @@ impl Client {
     /// This function initializes a new Client by spawning a child process for the context server,
     /// setting up communication channels, and initializing handlers for input/output operations.
     /// It takes a server ID, binary information, and an async app context as input.
-    pub fn new(
+    pub fn stdio(
         server_id: ContextServerId,
         binary: ModelContextServerBinary,
         cx: AsyncApp,
@@ -152,26 +151,23 @@ impl Client {
             &binary.args
         );
 
-        let mut command = util::command::new_smol_command(&binary.executable);
-        command
-            .args(&binary.args)
-            .envs(binary.env.unwrap_or_default())
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
+        let server_name = binary
+            .executable
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(String::new);
 
-        let mut server = command.spawn().with_context(|| {
-            format!(
-                "failed to spawn command. (path={:?}, args={:?})",
-                binary.executable, &binary.args
-            )
-        })?;
+        let transport = Arc::new(StdioTransport::new(binary, &cx)?);
+        Self::new(server_id, server_name.into(), transport, cx)
+    }
 
-        let stdin = server.stdin.take().unwrap();
-        let stdout = server.stdout.take().unwrap();
-        let stderr = server.stderr.take().unwrap();
-
+    /// Creates a new Client instance for a context server.
+    pub fn new(
+        server_id: ContextServerId,
+        server_name: Arc<str>,
+        transport: Arc<dyn Transport>,
+        cx: AsyncApp,
+    ) -> Result<Self> {
         let (outbound_tx, outbound_rx) = channel::unbounded::<String>();
         let (output_done_tx, output_done_rx) = barrier::channel();
 
@@ -180,21 +176,29 @@ impl Client {
         let response_handlers =
             Arc::new(Mutex::new(Some(HashMap::<_, ResponseHandler>::default())));
 
-        let stdout_input_task = cx.spawn({
+        let receive_input_task = cx.spawn({
             let notification_handlers = notification_handlers.clone();
             let response_handlers = response_handlers.clone();
-            move |cx| {
-                Self::handle_input(stdout, notification_handlers, response_handlers, cx).log_err()
+            let transport = transport.clone();
+            async move |cx| {
+                Self::handle_input(transport, notification_handlers, response_handlers, cx)
+                    .log_err()
+                    .await
             }
         });
-        let stderr_input_task = cx.spawn(|_| Self::handle_stderr(stderr).log_err());
-        let input_task = cx.spawn(|_| async move {
-            let (stdout, stderr) = futures::join!(stdout_input_task, stderr_input_task);
-            stdout.or(stderr)
+        let receive_err_task = cx.spawn({
+            let transport = transport.clone();
+            async move |_| Self::handle_err(transport).log_err().await
         });
-        let output_task = cx.background_executor().spawn({
+        let input_task = cx.spawn(async move |_| {
+            let (input, err) = futures::join!(receive_input_task, receive_err_task);
+            input.or(err)
+        });
+
+        let output_task = cx.background_spawn({
+            let transport = transport.clone();
             Self::handle_output(
-                stdin,
+                transport,
                 outbound_rx,
                 output_done_tx,
                 response_handlers.clone(),
@@ -202,24 +206,18 @@ impl Client {
             .log_err()
         });
 
-        let mut context_server = Self {
+        Ok(Self {
             server_id,
             notification_handlers,
             response_handlers,
-            name: "".into(),
+            name: server_name,
             next_id: Default::default(),
             outbound_tx,
             executor: cx.background_executor().clone(),
             io_tasks: Mutex::new(Some((input_task, output_task))),
             output_done_rx: Mutex::new(Some(output_done_rx)),
-            server: Arc::new(Mutex::new(Some(server))),
-        };
-
-        if let Some(name) = binary.executable.file_name() {
-            context_server.name = name.to_string_lossy().into();
-        }
-
-        Ok(context_server)
+            transport,
+        })
     }
 
     /// Handles input from the server's stdout.
@@ -228,79 +226,53 @@ impl Client {
     /// parses them as JSON-RPC responses or notifications, and dispatches them
     /// to the appropriate handlers. It processes both responses (which are matched
     /// to pending requests) and notifications (which trigger registered handlers).
-    async fn handle_input<Stdout>(
-        stdout: Stdout,
+    async fn handle_input(
+        transport: Arc<dyn Transport>,
         notification_handlers: Arc<Mutex<HashMap<&'static str, NotificationHandler>>>,
         response_handlers: Arc<Mutex<Option<HashMap<RequestId, ResponseHandler>>>>,
-        cx: AsyncApp,
-    ) -> anyhow::Result<()>
-    where
-        Stdout: AsyncRead + Unpin + Send + 'static,
-    {
-        let mut stdout = BufReader::new(stdout);
-        let mut buffer = String::new();
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<()> {
+        let mut receiver = transport.receive();
 
-        loop {
-            buffer.clear();
-            if stdout.read_line(&mut buffer).await? == 0 {
-                return Ok(());
-            }
-
-            let content = buffer.trim();
-
-            if !content.is_empty() {
-                if let Ok(response) = serde_json::from_str::<AnyResponse>(content) {
-                    if let Some(handlers) = response_handlers.lock().as_mut() {
-                        if let Some(handler) = handlers.remove(&response.id) {
-                            handler(Ok(content.to_string()));
-                        }
-                    }
-                } else if let Ok(notification) = serde_json::from_str::<AnyNotification>(content) {
-                    let mut notification_handlers = notification_handlers.lock();
-                    if let Some(handler) =
-                        notification_handlers.get_mut(notification.method.as_str())
-                    {
-                        handler(notification.params.unwrap_or(Value::Null), cx.clone());
+        while let Some(message) = receiver.next().await {
+            if let Ok(response) = serde_json::from_str::<AnyResponse>(&message) {
+                if let Some(handlers) = response_handlers.lock().as_mut() {
+                    if let Some(handler) = handlers.remove(&response.id) {
+                        handler(Ok(message.to_string()));
                     }
                 }
+            } else if let Ok(notification) = serde_json::from_str::<AnyNotification>(&message) {
+                let mut notification_handlers = notification_handlers.lock();
+                if let Some(handler) = notification_handlers.get_mut(notification.method.as_str()) {
+                    handler(notification.params.unwrap_or(Value::Null), cx.clone());
+                }
             }
-
-            smol::future::yield_now().await;
         }
+
+        smol::future::yield_now().await;
+
+        Ok(())
     }
 
     /// Handles the stderr output from the context server.
     /// Continuously reads and logs any error messages from the server.
-    async fn handle_stderr<Stderr>(stderr: Stderr) -> anyhow::Result<()>
-    where
-        Stderr: AsyncRead + Unpin + Send + 'static,
-    {
-        let mut stderr = BufReader::new(stderr);
-        let mut buffer = String::new();
-
-        loop {
-            buffer.clear();
-            if stderr.read_line(&mut buffer).await? == 0 {
-                return Ok(());
-            }
-            log::warn!("context server stderr: {}", buffer.trim());
-            smol::future::yield_now().await;
+    async fn handle_err(transport: Arc<dyn Transport>) -> anyhow::Result<()> {
+        while let Some(err) = transport.receive_err().next().await {
+            log::warn!("context server stderr: {}", err.trim());
         }
+
+        Ok(())
     }
 
     /// Handles the output to the context server's stdin.
     /// This function continuously receives messages from the outbound channel,
     /// writes them to the server's stdin, and manages the lifecycle of response handlers.
-    async fn handle_output<Stdin>(
-        stdin: Stdin,
+    async fn handle_output(
+        transport: Arc<dyn Transport>,
         outbound_rx: channel::Receiver<String>,
         output_done_tx: barrier::Sender,
         response_handlers: Arc<Mutex<Option<HashMap<RequestId, ResponseHandler>>>>,
-    ) -> anyhow::Result<()>
-    where
-        Stdin: AsyncWrite + Unpin + Send + 'static,
-    {
-        let mut stdin = BufWriter::new(stdin);
+    ) -> anyhow::Result<()> {
         let _clear_response_handlers = util::defer({
             let response_handlers = response_handlers.clone();
             move || {
@@ -309,10 +281,7 @@ impl Client {
         });
         while let Ok(message) = outbound_rx.recv().await {
             log::trace!("outgoing message: {}", message);
-
-            stdin.write_all(message.as_bytes()).await?;
-            stdin.write_all(b"\n").await?;
-            stdin.flush().await?;
+            transport.send(message).await?;
         }
         drop(output_done_tx);
         Ok(())
@@ -339,7 +308,7 @@ impl Client {
             .response_handlers
             .lock()
             .as_mut()
-            .ok_or_else(|| anyhow!("server shut down"))
+            .context("server shut down")
             .map(|handlers| {
                 handlers.insert(
                     RequestId::Int(id),
@@ -372,7 +341,7 @@ impl Client {
                         } else if let Some(result) = parsed.result {
                             Ok(serde_json::from_str(result.get())?)
                         } else {
-                            Err(anyhow!("Invalid response: no result or error"))
+                            anyhow::bail!("Invalid response: no result or error");
                         }
                     }
                     Err(_) => anyhow::bail!("cancelled")
@@ -398,6 +367,7 @@ impl Client {
         Ok(())
     }
 
+    #[allow(unused)]
     pub fn on_notification<F>(&self, method: &'static str, f: F)
     where
         F: 'static + Send + FnMut(Value, AsyncApp),
@@ -405,22 +375,6 @@ impl Client {
         self.notification_handlers
             .lock()
             .insert(method, Box::new(f));
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn server_id(&self) -> ContextServerId {
-        self.server_id.clone()
-    }
-}
-
-impl Drop for Client {
-    fn drop(&mut self) {
-        if let Some(mut server) = self.server.lock().take() {
-            let _ = server.kill();
-        }
     }
 }
 

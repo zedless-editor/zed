@@ -1,16 +1,17 @@
 use fs::Fs;
-use fuzzy::{match_strings, StringMatch, StringMatchCandidate};
+use fuzzy::{StringMatch, StringMatchCandidate, match_strings};
 use gpui::{
     App, Context, DismissEvent, Entity, EventEmitter, Focusable, Render, UpdateGlobal, WeakEntity,
     Window,
 };
 use picker::{Picker, PickerDelegate};
-use settings::{update_settings_file, Settings as _, SettingsStore};
+use settings::{Settings as _, SettingsStore, update_settings_file};
 use std::sync::Arc;
 use theme::{Appearance, IconTheme, ThemeMeta, ThemeRegistry, ThemeSettings};
-use ui::{prelude::*, v_flex, ListItem, ListItemSpacing};
+use ui::{ListItem, ListItemSpacing, prelude::*, v_flex};
 use util::ResultExt;
-use workspace::{ui::HighlightedLabel, ModalView};
+use workspace::{ModalView, ui::HighlightedLabel};
+use zed_actions::{ExtensionCategoryFilter, Extensions};
 
 pub(crate) struct IconThemeSelector {
     picker: Entity<Picker<IconThemeSelectorDelegate>>,
@@ -49,6 +50,7 @@ pub(crate) struct IconThemeSelectorDelegate {
     matches: Vec<StringMatch>,
     original_theme: Arc<IconTheme>,
     selection_completed: bool,
+    selected_theme: Option<Arc<IconTheme>>,
     selected_index: usize,
     selector: WeakEntity<IconThemeSelector>,
 }
@@ -97,6 +99,7 @@ impl IconThemeSelectorDelegate {
             matches,
             original_theme: original_theme.clone(),
             selected_index: 0,
+            selected_theme: None,
             selection_completed: false,
             selector,
         };
@@ -105,17 +108,24 @@ impl IconThemeSelectorDelegate {
         this
     }
 
-    fn show_selected_theme(&mut self, cx: &mut Context<Picker<IconThemeSelectorDelegate>>) {
+    fn show_selected_theme(
+        &mut self,
+        cx: &mut Context<Picker<IconThemeSelectorDelegate>>,
+    ) -> Option<Arc<IconTheme>> {
         if let Some(mat) = self.matches.get(self.selected_index) {
             let registry = ThemeRegistry::global(cx);
             match registry.get_icon_theme(&mat.string) {
                 Ok(theme) => {
-                    Self::set_icon_theme(theme, cx);
+                    Self::set_icon_theme(theme.clone(), cx);
+                    Some(theme)
                 }
                 Err(err) => {
                     log::error!("error loading icon theme {}: {err}", mat.string);
+                    None
                 }
             }
+        } else {
+            None
         }
     }
 
@@ -200,7 +210,7 @@ impl PickerDelegate for IconThemeSelectorDelegate {
         cx: &mut Context<Picker<IconThemeSelectorDelegate>>,
     ) {
         self.selected_index = ix;
-        self.show_selected_theme(cx);
+        self.selected_theme = self.show_selected_theme(cx);
     }
 
     fn update_matches(
@@ -217,7 +227,7 @@ impl PickerDelegate for IconThemeSelectorDelegate {
             .map(|(id, meta)| StringMatchCandidate::new(id, &meta.name))
             .collect::<Vec<_>>();
 
-        cx.spawn_in(window, |this, mut cx| async move {
+        cx.spawn_in(window, async move |this, cx| {
             let matches = if query.is_empty() {
                 candidates
                     .into_iter()
@@ -241,13 +251,26 @@ impl PickerDelegate for IconThemeSelectorDelegate {
                 .await
             };
 
-            this.update(&mut cx, |this, cx| {
+            this.update(cx, |this, cx| {
                 this.delegate.matches = matches;
-                this.delegate.selected_index = this
-                    .delegate
-                    .selected_index
-                    .min(this.delegate.matches.len().saturating_sub(1));
-                this.delegate.show_selected_theme(cx);
+                if query.is_empty() && this.delegate.selected_theme.is_none() {
+                    this.delegate.selected_index = this
+                        .delegate
+                        .selected_index
+                        .min(this.delegate.matches.len().saturating_sub(1));
+                } else if let Some(selected) = this.delegate.selected_theme.as_ref() {
+                    this.delegate.selected_index = this
+                        .delegate
+                        .matches
+                        .iter()
+                        .enumerate()
+                        .find(|(_, mtch)| mtch.string == selected.name)
+                        .map(|(ix, _)| ix)
+                        .unwrap_or_default();
+                } else {
+                    this.delegate.selected_index = 0;
+                }
+                this.delegate.selected_theme = this.delegate.show_selected_theme(cx);
             })
             .log_err();
         })
@@ -271,6 +294,45 @@ impl PickerDelegate for IconThemeSelectorDelegate {
                     theme_match.string.clone(),
                     theme_match.positions.clone(),
                 )),
+        )
+    }
+
+    fn render_footer(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Picker<Self>>,
+    ) -> Option<gpui::AnyElement> {
+        Some(
+            h_flex()
+                .p_2()
+                .w_full()
+                .justify_between()
+                .gap_2()
+                .border_t_1()
+                .border_color(cx.theme().colors().border_variant)
+                .child(
+                    Button::new("docs", "View Icon Theme Docs")
+                        .icon(IconName::ArrowUpRight)
+                        .icon_position(IconPosition::End)
+                        .icon_size(IconSize::XSmall)
+                        .icon_color(Color::Muted)
+                        .on_click(|_event, _window, cx| {
+                            cx.open_url("https://zed.dev/docs/icon-themes");
+                        }),
+                )
+                .child(
+                    Button::new("more-icon-themes", "Install Icon Themes").on_click(
+                        move |_event, window, cx| {
+                            window.dispatch_action(
+                                Box::new(Extensions {
+                                    category_filter: Some(ExtensionCategoryFilter::IconThemes),
+                                }),
+                                cx,
+                            );
+                        },
+                    ),
+                )
+                .into_any_element(),
         )
     }
 }

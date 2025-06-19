@@ -1,20 +1,17 @@
 use crate::{
+    CollaboratorId, DelayedDebouncedEditAction, FollowableViewRegistry, ItemNavHistory,
+    SerializableItemRegistry, ToolbarItemLocation, ViewId, Workspace, WorkspaceId,
     pane::{self, Pane},
     persistence::model::ItemId,
     searchable::SearchableItemHandle,
     workspace_settings::{AutosaveSetting, WorkspaceSettings},
-    DelayedDebouncedEditAction, FollowableViewRegistry, ItemNavHistory, SerializableItemRegistry,
-    ToolbarItemLocation, ViewId, Workspace, WorkspaceId,
 };
 use anyhow::Result;
-use client::{
-    proto::{self, PeerId},
-    Client,
-};
-use futures::{channel::mpsc, StreamExt};
+use client::{Client, proto};
+use futures::{StreamExt, channel::mpsc};
 use gpui::{
-    AnyElement, AnyView, App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
-    Font, HighlightStyle, Pixels, Point, Render, SharedString, Task, WeakEntity, Window,
+    Action, AnyElement, AnyView, App, Context, Entity, EntityId, EventEmitter, FocusHandle,
+    Focusable, Font, HighlightStyle, Pixels, Point, Render, SharedString, Task, WeakEntity, Window,
 };
 use project::{Project, ProjectEntryId, ProjectPath};
 use schemars::JsonSchema;
@@ -30,10 +27,25 @@ use std::{
     time::Duration,
 };
 use theme::Theme;
-use ui::{Color, Element as _, Icon, IntoElement, Label, LabelCommon};
+use ui::{Color, Icon, IntoElement, Label, LabelCommon};
 use util::ResultExt;
 
 pub const LEADER_UPDATE_THROTTLE: Duration = Duration::from_millis(200);
+
+#[derive(Clone, Copy, Debug)]
+pub struct SaveOptions {
+    pub format: bool,
+    pub autosave: bool,
+}
+
+impl Default for SaveOptions {
+    fn default() -> Self {
+        Self {
+            format: true,
+            autosave: false,
+        }
+    }
+}
 
 #[derive(Deserialize)]
 pub struct ItemSettings {
@@ -42,7 +54,7 @@ pub struct ItemSettings {
     pub activate_on_close: ActivateOnClose,
     pub file_icons: bool,
     pub show_diagnostics: ShowDiagnostics,
-    pub always_show_close_button: bool,
+    pub show_close_button: ShowCloseButton,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +70,15 @@ pub enum ClosePosition {
     Left,
     #[default]
     Right,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ShowCloseButton {
+    Always,
+    #[default]
+    Hover,
+    Hidden,
 }
 
 #[derive(Copy, Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -104,7 +125,7 @@ pub struct ItemSettingsContent {
     /// Whether to always show the close button on tabs.
     ///
     /// Default: false
-    always_show_close_button: Option<bool>,
+    show_close_button: Option<ShowCloseButton>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -132,6 +153,35 @@ impl Settings for ItemSettings {
     fn load(sources: SettingsSources<Self::FileContent>, _: &mut App) -> Result<Self> {
         sources.json_merge()
     }
+
+    fn import_from_vscode(vscode: &settings::VsCodeSettings, current: &mut Self::FileContent) {
+        if let Some(b) = vscode.read_bool("workbench.editor.tabActionCloseVisibility") {
+            current.show_close_button = Some(if b {
+                ShowCloseButton::Always
+            } else {
+                ShowCloseButton::Hidden
+            })
+        }
+        vscode.enum_setting(
+            "workbench.editor.tabActionLocation",
+            &mut current.close_position,
+            |s| match s {
+                "right" => Some(ClosePosition::Right),
+                "left" => Some(ClosePosition::Left),
+                _ => None,
+            },
+        );
+        if let Some(b) = vscode.read_bool("workbench.editor.focusRecentEditorAfterClose") {
+            current.activate_on_close = Some(if b {
+                ActivateOnClose::History
+            } else {
+                ActivateOnClose::LeftNeighbour
+            })
+        }
+
+        vscode.bool_setting("workbench.editor.showIcons", &mut current.file_icons);
+        vscode.bool_setting("git.decorations.enabled", &mut current.git_status);
+    }
 }
 
 impl Settings for PreviewTabsSettings {
@@ -141,6 +191,18 @@ impl Settings for PreviewTabsSettings {
 
     fn load(sources: SettingsSources<Self::FileContent>, _: &mut App) -> Result<Self> {
         sources.json_merge()
+    }
+
+    fn import_from_vscode(vscode: &settings::VsCodeSettings, current: &mut Self::FileContent) {
+        vscode.bool_setting("workbench.editor.enablePreview", &mut current.enabled);
+        vscode.bool_setting(
+            "workbench.editor.enablePreviewFromCodeNavigation",
+            &mut current.enable_preview_from_code_navigation,
+        );
+        vscode.bool_setting(
+            "workbench.editor.enablePreviewFromQuickOpen",
+            &mut current.enable_preview_from_file_finder,
+        );
     }
 }
 
@@ -159,17 +221,25 @@ pub struct BreadcrumbText {
     pub font: Option<Font>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct TabContentParams {
     pub detail: Option<usize>,
     pub selected: bool,
     pub preview: bool,
+    /// Tab content should be deemphasized when active pane does not have focus.
+    pub deemphasized: bool,
 }
 
 impl TabContentParams {
     /// Returns the text color to be used for the tab content.
     pub fn text_color(&self) -> Color {
-        if self.selected {
+        if self.deemphasized {
+            if self.selected {
+                Color::Muted
+            } else {
+                Color::Hidden
+            }
+        } else if self.selected {
             Color::Default
         } else {
             Color::Muted
@@ -189,10 +259,8 @@ pub trait Item: Focusable + EventEmitter<Self::Event> + Render + Sized {
     ///
     /// By default this returns a [`Label`] that displays that text from
     /// `tab_content_text`.
-    fn tab_content(&self, params: TabContentParams, window: &Window, cx: &App) -> AnyElement {
-        let Some(text) = self.tab_content_text(window, cx) else {
-            return gpui::Empty.into_any();
-        };
+    fn tab_content(&self, params: TabContentParams, _window: &Window, cx: &App) -> AnyElement {
+        let text = self.tab_content_text(params.detail.unwrap_or_default(), cx);
 
         Label::new(text)
             .color(params.text_color())
@@ -200,11 +268,7 @@ pub trait Item: Focusable + EventEmitter<Self::Event> + Render + Sized {
     }
 
     /// Returns the textual contents of the tab.
-    ///
-    /// Use this if you don't need to customize the tab contents.
-    fn tab_content_text(&self, _window: &Window, _cx: &App) -> Option<SharedString> {
-        None
-    }
+    fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString;
 
     fn tab_icon(&self, _window: &Window, _cx: &App) -> Option<Icon> {
         None
@@ -223,10 +287,6 @@ pub trait Item: Focusable + EventEmitter<Self::Event> + Render + Sized {
     /// `tab_tooltip_text`.
     fn tab_tooltip_content(&self, cx: &App) -> Option<TabTooltipContent> {
         self.tab_tooltip_text(cx).map(TabTooltipContent::Text)
-    }
-
-    fn tab_description(&self, _: usize, _: &App) -> Option<SharedString> {
-        None
     }
 
     fn to_item_events(_event: &Self::Event, _f: impl FnMut(ItemEvent)) {}
@@ -276,9 +336,12 @@ pub trait Item: Focusable + EventEmitter<Self::Event> + Render + Sized {
     fn can_save(&self, _cx: &App) -> bool {
         false
     }
+    fn can_save_as(&self, _: &App) -> bool {
+        false
+    }
     fn save(
         &mut self,
-        _format: bool,
+        _options: SaveOptions,
         _project: Entity<Project>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
@@ -431,8 +494,8 @@ pub trait ItemHandle: 'static + Send {
         cx: &mut App,
         handler: Box<dyn Fn(ItemEvent, &mut Window, &mut App)>,
     ) -> gpui::Subscription;
-    fn tab_description(&self, detail: usize, cx: &App) -> Option<SharedString>;
     fn tab_content(&self, params: TabContentParams, window: &Window, cx: &App) -> AnyElement;
+    fn tab_content_text(&self, detail: usize, cx: &App) -> SharedString;
     fn tab_icon(&self, window: &Window, cx: &App) -> Option<Icon>;
     fn tab_tooltip_text(&self, cx: &App) -> Option<SharedString>;
     fn tab_tooltip_content(&self, cx: &App) -> Option<TabTooltipContent>;
@@ -477,9 +540,10 @@ pub trait ItemHandle: 'static + Send {
     fn has_deleted_file(&self, cx: &App) -> bool;
     fn has_conflict(&self, cx: &App) -> bool;
     fn can_save(&self, cx: &App) -> bool;
+    fn can_save_as(&self, cx: &App) -> bool;
     fn save(
         &self,
-        format: bool,
+        options: SaveOptions,
         project: Entity<Project>,
         window: &mut Window,
         cx: &mut App,
@@ -514,6 +578,11 @@ pub trait ItemHandle: 'static + Send {
     fn workspace_settings<'a>(&self, cx: &'a App) -> &'a WorkspaceSettings;
     fn preserve_preview(&self, cx: &App) -> bool;
     fn include_in_nav_history(&self) -> bool;
+    fn relay_action(&self, action: Box<dyn Action>, window: &mut Window, cx: &mut App);
+    fn can_autosave(&self, cx: &App) -> bool {
+        let is_deleted = self.project_entry_ids(cx).is_empty();
+        self.is_dirty(cx) && !self.has_conflict(cx) && self.can_save(cx) && !is_deleted
+    }
 }
 
 pub trait WeakItemHandle: Send + Sync {
@@ -553,12 +622,11 @@ impl<T: Item> ItemHandle for Entity<T> {
         self.read(cx).telemetry_event_text()
     }
 
-    fn tab_description(&self, detail: usize, cx: &App) -> Option<SharedString> {
-        self.read(cx).tab_description(detail, cx)
-    }
-
     fn tab_content(&self, params: TabContentParams, window: &Window, cx: &App) -> AnyElement {
         self.read(cx).tab_content(params, window, cx)
+    }
+    fn tab_content_text(&self, detail: usize, cx: &App) -> SharedString {
+        self.read(cx).tab_content_text(detail, cx)
     }
 
     fn tab_icon(&self, window: &Window, cx: &App) -> Option<Icon> {
@@ -704,13 +772,13 @@ impl<T: Item> ItemHandle for Entity<T> {
 
                 send_follower_updates = Some(cx.spawn_in(window, {
                     let pending_update = pending_update.clone();
-                    |workspace, mut cx| async move {
+                    async move |workspace, cx| {
                         while let Some(mut leader_id) = pending_update_rx.next().await {
                             while let Ok(Some(id)) = pending_update_rx.try_next() {
                                 leader_id = id;
                             }
 
-                            workspace.update_in(&mut cx, |workspace, window, cx| {
+                            workspace.update_in(cx, |workspace, window, cx| {
                                 let Some(item) = item.upgrade() else { return };
                                 workspace.update_followers(
                                     is_project_item,
@@ -718,7 +786,7 @@ impl<T: Item> ItemHandle for Entity<T> {
                                         proto::UpdateView {
                                             id: item
                                                 .remote_id(workspace.client(), window, cx)
-                                                .map(|id| id.to_proto()),
+                                                .and_then(|id| id.to_proto()),
                                             variant: pending_update.borrow_mut().take(),
                                             leader_id,
                                         },
@@ -758,13 +826,27 @@ impl<T: Item> ItemHandle for Entity<T> {
                         }
 
                         if item.item_focus_handle(cx).contains_focused(window, cx) {
-                            item.add_event_to_update_proto(
-                                event,
-                                &mut pending_update.borrow_mut(),
-                                window,
-                                cx,
-                            );
-                            pending_update_tx.unbounded_send(leader_id).ok();
+                            match leader_id {
+                                Some(CollaboratorId::Agent) => {}
+                                Some(CollaboratorId::PeerId(leader_peer_id)) => {
+                                    item.add_event_to_update_proto(
+                                        event,
+                                        &mut pending_update.borrow_mut(),
+                                        window,
+                                        cx,
+                                    );
+                                    pending_update_tx.unbounded_send(Some(leader_peer_id)).ok();
+                                }
+                                None => {
+                                    item.add_event_to_update_proto(
+                                        event,
+                                        &mut pending_update.borrow_mut(),
+                                        window,
+                                        cx,
+                                    );
+                                    pending_update_tx.unbounded_send(None).ok();
+                                }
+                            }
                         }
                     }
 
@@ -788,10 +870,37 @@ impl<T: Item> ItemHandle for Entity<T> {
                         }
 
                         ItemEvent::UpdateTab => {
-                            pane.update(cx, |_, cx| {
-                                cx.emit(pane::Event::ChangeItemTitle);
-                                cx.notify();
-                            });
+                            workspace.update_item_dirty_state(item, window, cx);
+
+                            if item.has_deleted_file(cx)
+                                && !item.is_dirty(cx)
+                                && item.workspace_settings(cx).close_on_file_delete
+                            {
+                                let item_id = item.item_id();
+                                let close_item_task = pane.update(cx, |pane, cx| {
+                                    pane.close_item_by_id(
+                                        item_id,
+                                        crate::SaveIntent::Close,
+                                        window,
+                                        cx,
+                                    )
+                                });
+                                cx.spawn_in(window, {
+                                    let pane = pane.clone();
+                                    async move |_workspace, cx| {
+                                        close_item_task.await?;
+                                        pane.update(cx, |pane, _cx| {
+                                            pane.nav_history_mut().remove_item(item_id);
+                                        })
+                                    }
+                                })
+                                .detach_and_log_err(cx);
+                            } else {
+                                pane.update(cx, |_, cx| {
+                                    cx.emit(pane::Event::ChangeItemTitle);
+                                    cx.notify();
+                                });
+                            }
                         }
 
                         ItemEvent::Edit => {
@@ -837,6 +946,7 @@ impl<T: Item> ItemHandle for Entity<T> {
             .detach();
 
             let item_id = self.item_id();
+            workspace.update_item_dirty_state(self, window, cx);
             cx.observe_release_in(self, window, move |workspace, _, _, _| {
                 workspace.panes_by_item.remove(&item_id);
                 event_subscription.take();
@@ -890,14 +1000,18 @@ impl<T: Item> ItemHandle for Entity<T> {
         self.read(cx).can_save(cx)
     }
 
+    fn can_save_as(&self, cx: &App) -> bool {
+        self.read(cx).can_save_as(cx)
+    }
+
     fn save(
         &self,
-        format: bool,
+        options: SaveOptions,
         project: Entity<Project>,
         window: &mut Window,
         cx: &mut App,
     ) -> Task<Result<()>> {
-        self.update(cx, |item, cx| item.save(format, project, window, cx))
+        self.update(cx, |item, cx| item.save(options, project, window, cx))
     }
 
     fn save_as(
@@ -970,6 +1084,13 @@ impl<T: Item> ItemHandle for Entity<T> {
     fn include_in_nav_history(&self) -> bool {
         T::include_in_nav_history()
     }
+
+    fn relay_action(&self, action: Box<dyn Action>, window: &mut Window, cx: &mut App) {
+        self.update(cx, |this, cx| {
+            this.focus_handle(cx).focus(window);
+            window.dispatch_action(action, cx);
+        })
+    }
 }
 
 impl From<Box<dyn ItemHandle>> for AnyView {
@@ -1004,11 +1125,19 @@ impl<T: Item> WeakItemHandle for WeakEntity<T> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProjectItemKind(pub &'static str);
+
 pub trait ProjectItem: Item {
     type Item: project::ProjectItem;
 
+    fn project_item_kind() -> Option<ProjectItemKind> {
+        None
+    }
+
     fn for_project_item(
         project: Entity<Project>,
+        pane: Option<&Pane>,
         item: Entity<Self::Item>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1053,19 +1182,31 @@ pub trait FollowableItem: Item {
         cx: &mut Context<Self>,
     ) -> Task<Result<()>>;
     fn is_project_item(&self, window: &Window, cx: &App) -> bool;
-    fn set_leader_peer_id(
+    fn set_leader_id(
         &mut self,
-        leader_peer_id: Option<PeerId>,
+        leader_peer_id: Option<CollaboratorId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     );
     fn dedup(&self, existing: &Self, window: &Window, cx: &App) -> Option<Dedup>;
+    fn update_agent_location(
+        &mut self,
+        _location: language::Anchor,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+    }
 }
 
 pub trait FollowableItemHandle: ItemHandle {
     fn remote_id(&self, client: &Arc<Client>, window: &mut Window, cx: &mut App) -> Option<ViewId>;
     fn downgrade(&self) -> Box<dyn WeakFollowableItemHandle>;
-    fn set_leader_peer_id(&self, leader_peer_id: Option<PeerId>, window: &mut Window, cx: &mut App);
+    fn set_leader_id(
+        &self,
+        leader_peer_id: Option<CollaboratorId>,
+        window: &mut Window,
+        cx: &mut App,
+    );
     fn to_state_proto(&self, window: &mut Window, cx: &mut App) -> Option<proto::view::Variant>;
     fn add_event_to_update_proto(
         &self,
@@ -1089,13 +1230,14 @@ pub trait FollowableItemHandle: ItemHandle {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Dedup>;
+    fn update_agent_location(&self, location: language::Anchor, window: &mut Window, cx: &mut App);
 }
 
 impl<T: FollowableItem> FollowableItemHandle for Entity<T> {
     fn remote_id(&self, client: &Arc<Client>, _: &mut Window, cx: &mut App) -> Option<ViewId> {
         self.read(cx).remote_id().or_else(|| {
             client.peer_id().map(|creator| ViewId {
-                creator,
+                creator: CollaboratorId::PeerId(creator),
                 id: self.item_id().as_u64(),
             })
         })
@@ -1105,15 +1247,8 @@ impl<T: FollowableItem> FollowableItemHandle for Entity<T> {
         Box::new(self.downgrade())
     }
 
-    fn set_leader_peer_id(
-        &self,
-        leader_peer_id: Option<PeerId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        self.update(cx, |this, cx| {
-            this.set_leader_peer_id(leader_peer_id, window, cx)
-        })
+    fn set_leader_id(&self, leader_id: Option<CollaboratorId>, window: &mut Window, cx: &mut App) {
+        self.update(cx, |this, cx| this.set_leader_id(leader_id, window, cx))
     }
 
     fn to_state_proto(&self, window: &mut Window, cx: &mut App) -> Option<proto::view::Variant> {
@@ -1164,6 +1299,12 @@ impl<T: FollowableItem> FollowableItemHandle for Entity<T> {
         let existing = existing.to_any().downcast::<T>().ok()?;
         self.read(cx).dedup(existing.read(cx), window, cx)
     }
+
+    fn update_agent_location(&self, location: language::Anchor, window: &mut Window, cx: &mut App) {
+        self.update(cx, |this, cx| {
+            this.update_agent_location(location, window, cx)
+        })
+    }
 }
 
 pub trait WeakFollowableItemHandle: Send + Sync {
@@ -1179,7 +1320,7 @@ impl<T: FollowableItem> WeakFollowableItemHandle for WeakEntity<T> {
 #[cfg(any(test, feature = "test-support"))]
 pub mod test {
     use super::{Item, ItemEvent, SerializableItem, TabContentParams};
-    use crate::{ItemId, ItemNavHistory, Workspace, WorkspaceId};
+    use crate::{ItemId, ItemNavHistory, Workspace, WorkspaceId, item::SaveOptions};
     use gpui::{
         AnyElement, App, AppContext as _, Context, Entity, EntityId, EventEmitter, Focusable,
         InteractiveElement, IntoElement, Render, SharedString, Task, WeakEntity, Window,
@@ -1203,6 +1344,7 @@ pub mod test {
         pub is_dirty: bool,
         pub is_singleton: bool,
         pub has_conflict: bool,
+        pub has_deleted_file: bool,
         pub project_items: Vec<Entity<TestProjectItem>>,
         pub nav_history: Option<ItemNavHistory>,
         pub tab_descriptions: Option<Vec<&'static str>>,
@@ -1216,7 +1358,7 @@ pub mod test {
             _project: &Entity<Project>,
             _path: &ProjectPath,
             _cx: &mut App,
-        ) -> Option<Task<gpui::Result<Entity<Self>>>> {
+        ) -> Option<Task<anyhow::Result<Entity<Self>>>> {
             None
         }
         fn entry_id(&self, _: &App) -> Option<ProjectEntryId> {
@@ -1282,6 +1424,7 @@ pub mod test {
                 reload_count: 0,
                 is_dirty: false,
                 has_conflict: false,
+                has_deleted_file: false,
                 project_items: Vec::new(),
                 is_singleton: true,
                 nav_history: None,
@@ -1307,6 +1450,10 @@ pub mod test {
         pub fn with_singleton(mut self, singleton: bool) -> Self {
             self.is_singleton = singleton;
             self
+        }
+
+        pub fn set_has_deleted_file(&mut self, deleted: bool) {
+            self.has_deleted_file = deleted;
         }
 
         pub fn with_dirty(mut self, dirty: bool) -> Self {
@@ -1366,11 +1513,15 @@ pub mod test {
             f(*event)
         }
 
-        fn tab_description(&self, detail: usize, _: &App) -> Option<SharedString> {
-            self.tab_descriptions.as_ref().and_then(|descriptions| {
-                let description = *descriptions.get(detail).or_else(|| descriptions.last())?;
-                Some(description.into())
-            })
+        fn tab_content_text(&self, detail: usize, _cx: &App) -> SharedString {
+            self.tab_descriptions
+                .as_ref()
+                .and_then(|descriptions| {
+                    let description = *descriptions.get(detail).or_else(|| descriptions.last())?;
+                    description.into()
+                })
+                .unwrap_or_default()
+                .into()
         }
 
         fn telemetry_event_text(&self) -> Option<&'static str> {
@@ -1442,6 +1593,7 @@ pub mod test {
                 is_dirty: self.is_dirty,
                 is_singleton: self.is_singleton,
                 has_conflict: self.has_conflict,
+                has_deleted_file: self.has_deleted_file,
                 project_items: self.project_items.clone(),
                 nav_history: None,
                 tab_descriptions: None,
@@ -1460,6 +1612,10 @@ pub mod test {
             self.has_conflict
         }
 
+        fn has_deleted_file(&self, _: &App) -> bool {
+            self.has_deleted_file
+        }
+
         fn can_save(&self, cx: &App) -> bool {
             !self.project_items.is_empty()
                 && self
@@ -1468,9 +1624,13 @@ pub mod test {
                     .all(|item| item.read(cx).entry_id.is_some())
         }
 
+        fn can_save_as(&self, _cx: &App) -> bool {
+            self.is_singleton
+        }
+
         fn save(
             &mut self,
-            _: bool,
+            _: SaveOptions,
             _: Entity<Project>,
             _window: &mut Window,
             cx: &mut Context<Self>,

@@ -53,7 +53,7 @@ impl Chunk {
     }
 
     #[inline(always)]
-    pub fn as_slice(&self) -> ChunkSlice {
+    pub fn as_slice(&self) -> ChunkSlice<'_> {
         ChunkSlice {
             chars: self.chars,
             chars_utf16: self.chars_utf16,
@@ -64,7 +64,7 @@ impl Chunk {
     }
 
     #[inline(always)]
-    pub fn slice(&self, range: Range<usize>) -> ChunkSlice {
+    pub fn slice(&self, range: Range<usize>) -> ChunkSlice<'_> {
         self.as_slice().slice(range)
     }
 }
@@ -78,7 +78,7 @@ pub struct ChunkSlice<'a> {
     text: &'a str,
 }
 
-impl<'a> Into<Chunk> for ChunkSlice<'a> {
+impl Into<Chunk> for ChunkSlice<'_> {
     fn into(self) -> Chunk {
         Chunk {
             chars: self.chars,
@@ -906,7 +906,7 @@ mod tests {
             let first_line = text.split('\n').next().unwrap();
             assert_eq!(chunk.first_line_chars(), first_line.chars().count() as u32);
 
-            let last_line = text.split('\n').last().unwrap();
+            let last_line = text.split('\n').next_back().unwrap();
             assert_eq!(chunk.last_line_chars(), last_line.chars().count() as u32);
             assert_eq!(
                 chunk.last_line_len_utf16(),

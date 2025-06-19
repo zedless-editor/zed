@@ -4,8 +4,8 @@ use crate::TelemetrySettings;
 use anyhow::Result;
 use clock::SystemClock;
 use futures::channel::mpsc;
-use futures::{Future, StreamExt};
-use gpui::{App, BackgroundExecutor, Task};
+use futures::{Future, FutureExt, StreamExt};
+use gpui::{App, AppContext as _, BackgroundExecutor, Task};
 use http_client::{self, AsyncBody, HttpClient, HttpClientWithUrl, Method, Request};
 use parking_lot::Mutex;
 use release_channel::ReleaseChannel;
@@ -17,7 +17,7 @@ use std::io::Write;
 use std::sync::LazyLock;
 use std::time::Instant;
 use std::{env, mem, path::PathBuf, sync::Arc, time::Duration};
-use telemetry_events::{AssistantEvent, AssistantPhase, Event, EventRequestBody, EventWrapper};
+use telemetry_events::{AssistantEventData, AssistantPhase, Event, EventRequestBody, EventWrapper};
 use util::{ResultExt, TryFutureExt};
 use worktree::{UpdatedEntriesSet, WorktreeId};
 
@@ -72,15 +72,15 @@ impl ProjectCache {
 
 #[cfg(debug_assertions)]
 const MAX_QUEUE_LEN: usize = 5;
+const MAX_QUEUE_LEN: usize = 50;
 
 #[cfg(not(debug_assertions))]
-const MAX_QUEUE_LEN: usize = 50;
 
 #[cfg(debug_assertions)]
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+const FLUSH_INTERVAL: Duration = Duration::from_secs(60 * 5);
 
 #[cfg(not(debug_assertions))]
-const FLUSH_INTERVAL: Duration = Duration::from_secs(60 * 5);
 static ZED_CLIENT_CHECKSUM_SEED: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
     option_env!("ZED_CLIENT_CHECKSUM_SEED")
         .map(|s| s.as_bytes().into())
@@ -137,18 +137,14 @@ pub fn os_version() -> String {
             log::error!("Failed to load /etc/os-release, /usr/lib/os-release");
             "".to_string()
         };
-        let mut name = "unknown".to_string();
-        let mut version = "unknown".to_string();
+        let mut name = "unknown";
+        let mut version = "unknown";
 
         for line in content.lines() {
-            if line.starts_with("ID=") {
-                name = line.trim_start_matches("ID=").trim_matches('"').to_string();
-            }
-            if line.starts_with("VERSION_ID=") {
-                version = line
-                    .trim_start_matches("VERSION_ID=")
-                    .trim_matches('"')
-                    .to_string();
+            match line.split_once('=') {
+                Some(("ID", val)) => name = val.trim_matches('"'),
+                Some(("VERSION_ID", val)) => version = val.trim_matches('"'),
+                _ => {}
             }
         }
 
@@ -219,18 +215,17 @@ impl Telemetry {
         }));
         Self::log_file_path();
 
-        cx.background_executor()
-            .spawn({
-                let state = state.clone();
-                let os_version = os_version();
-                state.lock().os_version = Some(os_version.clone());
-                async move {
-                    if let Some(tempfile) = File::create(Self::log_file_path()).log_err() {
-                        state.lock().log_file = Some(tempfile);
-                    }
+        cx.background_spawn({
+            let state = state.clone();
+            let os_version = os_version();
+            state.lock().os_version = Some(os_version);
+            async move {
+                if let Some(tempfile) = File::create(Self::log_file_path()).log_err() {
+                    state.lock().log_file = Some(tempfile);
                 }
-            })
-            .detach();
+            }
+        })
+        .detach();
 
         cx.observe_global::<SettingsStore>({
             let state = state.clone();
@@ -253,21 +248,25 @@ impl Telemetry {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    fn shutdown_telemetry(self: &Arc<Self>) -> impl Future<Output = ()> {
+    fn shutdown_telemetry(self: &Arc<Self>) -> impl Future<Output = ()> + use<> {
+        Task::ready(())
+    }
+    fn shutdown_telemetry(self: &Arc<Self>) -> impl Future<Output = ()> + use<> {
+        telemetry::event!("App Closed");
+        // TODO: close final edit period and make sure it's sent
         Task::ready(())
     }
 
     // Skip calling this function in tests.
     // TestAppContext ends up calling this function on shutdown and it panics when trying to find the TelemetrySettings
     #[cfg(not(any(test, feature = "test-support")))]
-    fn shutdown_telemetry(self: &Arc<Self>) -> impl Future<Output = ()> {
-        telemetry::event!("App Closed");
-        // TODO: close final edit period and make sure it's sent
-        Task::ready(())
-    }
 
     pub fn log_file_path() -> PathBuf {
         paths::logs_dir().join("telemetry.log")
+    }
+
+    pub fn has_checksum_seed(&self) -> bool {
+        ZED_CLIENT_CHECKSUM_SEED.is_some()
     }
 
     pub fn start(
@@ -306,7 +305,7 @@ impl Telemetry {
         drop(state);
     }
 
-    pub fn report_assistant_event(self: &Arc<Self>, event: AssistantEvent) {
+    pub fn report_assistant_event(self: &Arc<Self>, event: AssistantEventData) {
         let event_type = match event.phase {
             AssistantPhase::Response => "Assistant Responded",
             AssistantPhase::Invoked => "Assistant Invoked",
@@ -342,7 +341,7 @@ impl Telemetry {
             telemetry::event!(
                 "Editor Edited",
                 duration = duration,
-                environment = environment.to_string(),
+                environment = environment,
                 is_via_ssh = is_via_ssh
             );
         }
@@ -395,6 +394,8 @@ impl Telemetry {
 
     fn report_event(self: &Arc<Self>, event: Event) {
         let mut state = self.state.lock();
+        // RUST_LOG=telemetry=trace to debug telemetry events
+        log::trace!(target: "telemetry", "{:?}", event);
 
         if !state.settings.metrics {
             return;
@@ -402,10 +403,9 @@ impl Telemetry {
 
         if state.flush_events_task.is_none() {
             let this = self.clone();
-            let executor = self.executor.clone();
             state.flush_events_task = Some(self.executor.spawn(async move {
-                executor.timer(FLUSH_INTERVAL).await;
-                this.flush_events();
+                this.executor.timer(FLUSH_INTERVAL).await;
+                this.flush_events().detach();
             }));
         }
 
@@ -431,7 +431,7 @@ impl Telemetry {
 
         if state.installation_id.is_some() && state.events_queue.len() >= state.max_queue_size {
             drop(state);
-            self.flush_events();
+            self.flush_events().detach();
         }
     }
 
@@ -455,12 +455,12 @@ impl Telemetry {
         self: &Arc<Self>,
         // We take in the JSON bytes buffer so we can reuse the existing allocation.
         mut json_bytes: Vec<u8>,
-        event_request: EventRequestBody,
+        event_request: &EventRequestBody,
     ) -> Result<Request<AsyncBody>> {
         json_bytes.clear();
-        serde_json::to_writer(&mut json_bytes, &event_request)?;
+        serde_json::to_writer(&mut json_bytes, event_request)?;
 
-        let checksum = calculate_json_checksum(&json_bytes).unwrap_or("".to_string());
+        let checksum = calculate_json_checksum(&json_bytes).unwrap_or_default();
 
         Ok(Request::builder()
             .method(Method::POST)
@@ -474,60 +474,59 @@ impl Telemetry {
             .body(json_bytes.into())?)
     }
 
-    pub fn flush_events(self: &Arc<Self>) {
+    pub fn flush_events(self: &Arc<Self>) -> Task<()> {
         let mut state = self.state.lock();
         state.first_event_date_time = None;
-        let mut events = mem::take(&mut state.events_queue);
+        let events = mem::take(&mut state.events_queue);
         state.flush_events_task.take();
         drop(state);
         if events.is_empty() {
-            return;
+            return Task::ready(());
         }
 
         let this = self.clone();
-        self.executor
-            .spawn(
-                async move {
-                    let mut json_bytes = Vec::new();
+        self.executor.spawn(
+            async move {
+                let mut json_bytes = Vec::new();
 
-                    if let Some(file) = &mut this.state.lock().log_file {
-                        for event in &mut events {
-                            json_bytes.clear();
-                            serde_json::to_writer(&mut json_bytes, event)?;
-                            file.write_all(&json_bytes)?;
-                            file.write_all(b"\n")?;
-                        }
+                if let Some(file) = &mut this.state.lock().log_file {
+                    for event in &events {
+                        json_bytes.clear();
+                        serde_json::to_writer(&mut json_bytes, event)?;
+                        file.write_all(&json_bytes)?;
+                        file.write_all(b"\n")?;
                     }
-
-                    let request_body = {
-                        let state = this.state.lock();
-
-                        EventRequestBody {
-                            system_id: state.system_id.as_deref().map(Into::into),
-                            installation_id: state.installation_id.as_deref().map(Into::into),
-                            session_id: state.session_id.clone(),
-                            metrics_id: state.metrics_id.as_deref().map(Into::into),
-                            is_staff: state.is_staff,
-                            app_version: state.app_version.clone(),
-                            os_name: state.os_name.clone(),
-                            os_version: state.os_version.clone(),
-                            architecture: state.architecture.to_string(),
-
-                            release_channel: state.release_channel.map(Into::into),
-                            events,
-                        }
-                    };
-
-                    let request = this.build_request(json_bytes, request_body)?;
-                    let response = this.http_client.send(request).await?;
-                    if response.status() != 200 {
-                        log::error!("Failed to send events: HTTP {:?}", response.status());
-                    }
-                    anyhow::Ok(())
                 }
-                .log_err(),
-            )
-            .detach();
+
+                let request_body = {
+                    let state = this.state.lock();
+
+                    EventRequestBody {
+                        system_id: state.system_id.as_deref().map(Into::into),
+                        installation_id: state.installation_id.as_deref().map(Into::into),
+                        session_id: state.session_id.clone(),
+                        metrics_id: state.metrics_id.as_deref().map(Into::into),
+                        is_staff: state.is_staff,
+                        app_version: state.app_version.clone(),
+                        os_name: state.os_name.clone(),
+                        os_version: state.os_version.clone(),
+                        architecture: state.architecture.to_string(),
+
+                        release_channel: state.release_channel.map(Into::into),
+                        events,
+                    }
+                };
+
+                let request = this.build_request(json_bytes, &request_body)?;
+                let response = this.http_client.send(request).await?;
+                if response.status() != 200 {
+                    log::error!("Failed to send events: HTTP {:?}", response.status());
+                }
+                anyhow::Ok(())
+            }
+            .log_err()
+            .map(|_| ()),
+        )
     }
 }
 

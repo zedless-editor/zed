@@ -1,24 +1,37 @@
+mod head;
+pub mod highlighted_match_with_paths;
+pub mod popover_menu;
+
 use anyhow::Result;
-use editor::{scroll::Autoscroll, Editor};
+use editor::{
+    Editor,
+    actions::{MoveDown, MoveUp},
+    scroll::Autoscroll,
+};
 use gpui::{
-    actions, div, impl_actions, list, prelude::*, uniform_list, AnyElement, App, ClickEvent,
-    Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Length,
-    ListSizingBehavior, ListState, MouseButton, MouseUpEvent, Render, ScrollStrategy, Task,
-    UniformListScrollHandle, Window,
+    AnyElement, App, ClickEvent, Context, DismissEvent, Entity, EventEmitter, FocusHandle,
+    Focusable, Length, ListSizingBehavior, ListState, MouseButton, MouseUpEvent, Render,
+    ScrollStrategy, Stateful, Task, UniformListScrollHandle, Window, actions, div, impl_actions,
+    list, prelude::*, uniform_list,
 };
 use head::Head;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use std::{sync::Arc, time::Duration};
-use ui::{prelude::*, v_flex, Color, Divider, Label, ListItem, ListItemSpacing};
+use std::{ops::Range, sync::Arc, time::Duration};
+use ui::{
+    Color, Divider, Label, ListItem, ListItemSpacing, Scrollbar, ScrollbarState, prelude::*, v_flex,
+};
+use util::ResultExt;
 use workspace::ModalView;
-
-mod head;
-pub mod highlighted_match_with_paths;
 
 enum ElementContainer {
     List(ListState),
     UniformList(UniformListScrollHandle),
+}
+
+pub enum Direction {
+    Up,
+    Down,
 }
 
 actions!(picker, [ConfirmCompletion]);
@@ -45,8 +58,15 @@ pub struct Picker<D: PickerDelegate> {
     pending_update_matches: Option<PendingUpdateMatches>,
     confirm_on_update: Option<bool>,
     width: Option<Length>,
+    widest_item: Option<usize>,
     max_height: Option<Length>,
-
+    focus_handle: FocusHandle,
+    /// An external control to display a scrollbar in the `Picker`.
+    show_scrollbar: bool,
+    /// An internal state that controls whether to show the scrollbar based on the user's focus.
+    scrollbar_visibility: bool,
+    scrollbar_state: ScrollbarState,
+    hide_scrollbar_task: Option<Task<()>>,
     /// Whether the `Picker` is rendered as a self-contained modal.
     ///
     /// Set this to `false` when rendering the `Picker` as part of a larger modal.
@@ -76,6 +96,15 @@ pub trait PickerDelegate: Sized + 'static {
         window: &mut Window,
         cx: &mut Context<Picker<Self>>,
     );
+    fn can_select(
+        &mut self,
+        _ix: usize,
+        _window: &mut Window,
+        _cx: &mut Context<Picker<Self>>,
+    ) -> bool {
+        true
+    }
+
     // Allows binding some optional effect to when the selection changes.
     fn selected_index_changed(
         &self,
@@ -86,8 +115,8 @@ pub trait PickerDelegate: Sized + 'static {
         None
     }
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str>;
-    fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> SharedString {
-        "No matches".into()
+    fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
+        Some("No matches".into())
     }
     fn update_matches(
         &mut self,
@@ -161,7 +190,7 @@ pub trait PickerDelegate: Sized + 'static {
                     .overflow_hidden()
                     .flex_none()
                     .h_9()
-                    .px_3()
+                    .px_2p5()
                     .child(editor.clone()),
             )
             .when(
@@ -256,15 +285,29 @@ impl<D: PickerDelegate> Picker<D> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let element_container = Self::create_element_container(container, cx);
+        let scrollbar_state = match &element_container {
+            ElementContainer::UniformList(scroll_handle) => {
+                ScrollbarState::new(scroll_handle.clone())
+            }
+            ElementContainer::List(state) => ScrollbarState::new(state.clone()),
+        };
+        let focus_handle = cx.focus_handle();
         let mut this = Self {
             delegate,
             head,
-            element_container: Self::create_element_container(container, cx),
+            element_container,
             pending_update_matches: None,
             confirm_on_update: None,
             width: None,
+            widest_item: None,
             max_height: Some(rems(18.).into()),
+            focus_handle,
+            show_scrollbar: false,
+            scrollbar_visibility: true,
+            scrollbar_state,
             is_modal: true,
+            hide_scrollbar_task: None,
         };
         this.update_matches("".to_string(), window, cx);
         // give the delegate 4ms to render the first set of suggestions.
@@ -307,8 +350,18 @@ impl<D: PickerDelegate> Picker<D> {
         self
     }
 
+    pub fn widest_item(mut self, ix: Option<usize>) -> Self {
+        self.widest_item = ix;
+        self
+    }
+
     pub fn max_height(mut self, max_height: Option<gpui::Length>) -> Self {
         self.max_height = max_height;
+        self
+    }
+
+    pub fn show_scrollbar(mut self, show_scrollbar: bool) -> Self {
+        self.show_scrollbar = show_scrollbar;
         self
     }
 
@@ -322,16 +375,58 @@ impl<D: PickerDelegate> Picker<D> {
     }
 
     /// Handles the selecting an index, and passing the change to the delegate.
-    /// If `scroll_to_index` is true, the new selected index will be scrolled into view.
+    /// If `fallback_direction` is set to `None`, the index will not be selected
+    /// if the element at that index cannot be selected.
+    /// If `fallback_direction` is set to
+    /// `Some(..)`, the next selectable element will be selected in the
+    /// specified direction (Down or Up), cycling through all elements until
+    /// finding one that can be selected or returning if there are no selectable elements.
+    /// If `scroll_to_index` is true, the new selected index will be scrolled into
+    /// view.
     ///
     /// If some effect is bound to `selected_index_changed`, it will be executed.
     pub fn set_selected_index(
         &mut self,
-        ix: usize,
+        mut ix: usize,
+        fallback_direction: Option<Direction>,
         scroll_to_index: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let match_count = self.delegate.match_count();
+        if match_count == 0 {
+            return;
+        }
+
+        if let Some(bias) = fallback_direction {
+            let mut curr_ix = ix;
+            while !self.delegate.can_select(curr_ix, window, cx) {
+                curr_ix = match bias {
+                    Direction::Down => {
+                        if curr_ix == match_count - 1 {
+                            0
+                        } else {
+                            curr_ix + 1
+                        }
+                    }
+                    Direction::Up => {
+                        if curr_ix == 0 {
+                            match_count - 1
+                        } else {
+                            curr_ix - 1
+                        }
+                    }
+                };
+                // There is no item that can be selected
+                if ix == curr_ix {
+                    return;
+                }
+            }
+            ix = curr_ix;
+        } else if !self.delegate.can_select(ix, window, cx) {
+            return;
+        }
+
         let previous_index = self.delegate.selected_index();
         self.delegate.set_selected_index(ix, window, cx);
         let current_index = self.delegate.selected_index();
@@ -356,25 +451,43 @@ impl<D: PickerDelegate> Picker<D> {
         if count > 0 {
             let index = self.delegate.selected_index();
             let ix = if index == count - 1 { 0 } else { index + 1 };
-            self.set_selected_index(ix, true, window, cx);
+            self.set_selected_index(ix, Some(Direction::Down), true, window, cx);
             cx.notify();
         }
     }
 
-    fn select_prev(&mut self, _: &menu::SelectPrev, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn editor_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_previous(&Default::default(), window, cx);
+    }
+
+    fn select_previous(
+        &mut self,
+        _: &menu::SelectPrevious,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let count = self.delegate.match_count();
         if count > 0 {
             let index = self.delegate.selected_index();
             let ix = if index == 0 { count - 1 } else { index - 1 };
-            self.set_selected_index(ix, true, window, cx);
+            self.set_selected_index(ix, Some(Direction::Up), true, window, cx);
             cx.notify();
         }
     }
 
-    fn select_first(&mut self, _: &menu::SelectFirst, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn editor_move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_next(&Default::default(), window, cx);
+    }
+
+    pub fn select_first(
+        &mut self,
+        _: &menu::SelectFirst,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let count = self.delegate.match_count();
         if count > 0 {
-            self.set_selected_index(0, true, window, cx);
+            self.set_selected_index(0, Some(Direction::Down), true, window, cx);
             cx.notify();
         }
     }
@@ -382,7 +495,7 @@ impl<D: PickerDelegate> Picker<D> {
     fn select_last(&mut self, _: &menu::SelectLast, window: &mut Window, cx: &mut Context<Self>) {
         let count = self.delegate.match_count();
         if count > 0 {
-            self.set_selected_index(count - 1, true, window, cx);
+            self.set_selected_index(count - 1, Some(Direction::Up), true, window, cx);
             cx.notify();
         }
     }
@@ -391,7 +504,7 @@ impl<D: PickerDelegate> Picker<D> {
         let count = self.delegate.match_count();
         let index = self.delegate.selected_index();
         let new_index = if index + 1 == count { 0 } else { index + 1 };
-        self.set_selected_index(new_index, true, window, cx);
+        self.set_selected_index(new_index, Some(Direction::Down), true, window, cx);
         cx.notify();
     }
 
@@ -464,14 +577,14 @@ impl<D: PickerDelegate> Picker<D> {
     ) {
         cx.stop_propagation();
         window.prevent_default();
-        self.set_selected_index(ix, false, window, cx);
+        self.set_selected_index(ix, None, false, window, cx);
         self.do_confirm(secondary, window, cx)
     }
 
     fn do_confirm(&mut self, secondary: bool, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(update_query) = self.delegate.confirm_update_query(window, cx) {
             self.set_query(update_query, window, cx);
-            self.delegate.set_selected_index(0, window, cx);
+            self.set_selected_index(0, Some(Direction::Down), false, window, cx);
         } else {
             self.delegate.confirm(secondary, window, cx)
         }
@@ -484,7 +597,7 @@ impl<D: PickerDelegate> Picker<D> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Head::Editor(ref editor) = &self.head else {
+        let Head::Editor(editor) = &self.head else {
             panic!("unexpected call");
         };
         match event {
@@ -493,7 +606,9 @@ impl<D: PickerDelegate> Picker<D> {
                 self.update_matches(query, window, cx);
             }
             editor::EditorEvent::Blurred => {
-                self.cancel(&menu::Cancel, window, cx);
+                if self.is_modal {
+                    self.cancel(&menu::Cancel, window, cx);
+                }
             }
             _ => {}
         }
@@ -536,8 +651,8 @@ impl<D: PickerDelegate> Picker<D> {
         // asynchronously.
         self.pending_update_matches = Some(PendingUpdateMatches {
             delegate_update_matches: Some(delegate_pending_update_matches),
-            _task: cx.spawn_in(window, |this, mut cx| async move {
-                let delegate_pending_update_matches = this.update(&mut cx, |this, _| {
+            _task: cx.spawn_in(window, async move |this, cx| {
+                let delegate_pending_update_matches = this.update(cx, |this, _| {
                     this.pending_update_matches
                         .as_mut()
                         .unwrap()
@@ -546,7 +661,7 @@ impl<D: PickerDelegate> Picker<D> {
                         .unwrap()
                 })?;
                 delegate_pending_update_matches.await;
-                this.update_in(&mut cx, |this, window, cx| {
+                this.update_in(cx, |this, window, cx| {
                     this.matches_updated(window, cx);
                 })
             }),
@@ -575,7 +690,7 @@ impl<D: PickerDelegate> Picker<D> {
     }
 
     pub fn set_query(&self, query: impl Into<Arc<str>>, window: &mut Window, cx: &mut App) {
-        if let Head::Editor(ref editor) = &self.head {
+        if let Head::Editor(editor) = &self.head {
             editor.update(cx, |editor, cx| {
                 editor.set_text(query, window, cx);
                 let editor_offset = editor.buffer().read(cx).len(cx);
@@ -600,7 +715,7 @@ impl<D: PickerDelegate> Picker<D> {
         window: &mut Window,
         cx: &mut Context<Self>,
         ix: usize,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<D> {
         div()
             .id(("item", ix))
             .cursor_pointer()
@@ -642,18 +757,21 @@ impl<D: PickerDelegate> Picker<D> {
         } else {
             ListSizingBehavior::Auto
         };
+
         match &self.element_container {
             ElementContainer::UniformList(scroll_handle) => uniform_list(
-                cx.entity().clone(),
                 "candidates",
                 self.delegate.match_count(),
-                move |picker, visible_range, window, cx| {
+                cx.processor(move |picker, visible_range: Range<usize>, window, cx| {
                     visible_range
                         .map(|ix| picker.render_element(window, cx, ix))
                         .collect()
-                },
+                }),
             )
             .with_sizing_behavior(sizing_behavior)
+            .when_some(self.widest_item, |el, widest_item| {
+                el.with_width_from_item(Some(widest_item))
+            })
             .flex_grow()
             .py_1()
             .track_scroll(scroll_handle.clone())
@@ -675,6 +793,67 @@ impl<D: PickerDelegate> Picker<D> {
             }
         }
     }
+
+    fn hide_scrollbar(&mut self, cx: &mut Context<Self>) {
+        const SCROLLBAR_SHOW_INTERVAL: Duration = Duration::from_secs(1);
+        self.hide_scrollbar_task = Some(cx.spawn(async move |panel, cx| {
+            cx.background_executor()
+                .timer(SCROLLBAR_SHOW_INTERVAL)
+                .await;
+            panel
+                .update(cx, |panel, cx| {
+                    panel.scrollbar_visibility = false;
+                    cx.notify();
+                })
+                .log_err();
+        }))
+    }
+
+    fn render_scrollbar(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        if !self.show_scrollbar
+            || !(self.scrollbar_visibility || self.scrollbar_state.is_dragging())
+        {
+            return None;
+        }
+        Some(
+            div()
+                .occlude()
+                .id("picker-scroll")
+                .h_full()
+                .absolute()
+                .right_1()
+                .top_1()
+                .bottom_0()
+                .w(px(12.))
+                .cursor_default()
+                .on_mouse_move(cx.listener(|_, _, _window, cx| {
+                    cx.notify();
+                    cx.stop_propagation()
+                }))
+                .on_hover(|_, _window, cx| {
+                    cx.stop_propagation();
+                })
+                .on_any_mouse_down(|_, _window, cx| {
+                    cx.stop_propagation();
+                })
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|picker, _, window, cx| {
+                        if !picker.scrollbar_state.is_dragging()
+                            && !picker.focus_handle.contains_focused(window, cx)
+                        {
+                            picker.hide_scrollbar(cx);
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    }),
+                )
+                .on_scroll_wheel(cx.listener(|_, _, _window, cx| {
+                    cx.notify();
+                }))
+                .children(Scrollbar::vertical(self.scrollbar_state.clone())),
+        )
+    }
 }
 
 impl<D: PickerDelegate> EventEmitter<DismissEvent> for Picker<D> {}
@@ -683,7 +862,6 @@ impl<D: PickerDelegate> ModalView for Picker<D> {}
 impl<D: PickerDelegate> Render for Picker<D> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor_position = self.delegate.editor_position();
-
         v_flex()
             .key_context("Picker")
             .size_full()
@@ -695,7 +873,9 @@ impl<D: PickerDelegate> Render for Picker<D> {
             // We should revisit how the `Picker` is styled to make it more composable.
             .when(self.is_modal, |this| this.elevation_3(cx))
             .on_action(cx.listener(Self::select_next))
-            .on_action(cx.listener(Self::select_prev))
+            .on_action(cx.listener(Self::select_previous))
+            .on_action(cx.listener(Self::editor_move_down))
+            .on_action(cx.listener(Self::editor_move_up))
             .on_action(cx.listener(Self::select_first))
             .on_action(cx.listener(Self::select_last))
             .on_action(cx.listener(Self::cancel))
@@ -716,26 +896,39 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .when(self.delegate.match_count() > 0, |el| {
                 el.child(
                     v_flex()
+                        .id("element-container")
+                        .relative()
                         .flex_grow()
                         .when_some(self.max_height, |div, max_h| div.max_h(max_h))
                         .overflow_hidden()
                         .children(self.delegate.render_header(window, cx))
-                        .child(self.render_element_container(cx)),
+                        .child(self.render_element_container(cx))
+                        .on_hover(cx.listener(|this, hovered, window, cx| {
+                            if *hovered {
+                                this.scrollbar_visibility = true;
+                                this.hide_scrollbar_task.take();
+                                cx.notify();
+                            } else if !this.focus_handle.contains_focused(window, cx) {
+                                this.hide_scrollbar(cx);
+                            }
+                        }))
+                        .when_some(self.render_scrollbar(cx), |div, scrollbar| {
+                            div.child(scrollbar)
+                        }),
                 )
             })
             .when(self.delegate.match_count() == 0, |el| {
-                el.child(
-                    v_flex().flex_grow().py_2().child(
-                        ListItem::new("empty_state")
-                            .inset(true)
-                            .spacing(ListItemSpacing::Sparse)
-                            .disabled(true)
-                            .child(
-                                Label::new(self.delegate.no_matches_text(window, cx))
-                                    .color(Color::Muted),
-                            ),
-                    ),
-                )
+                el.when_some(self.delegate.no_matches_text(window, cx), |el, text| {
+                    el.child(
+                        v_flex().flex_grow().py_2().child(
+                            ListItem::new("empty_state")
+                                .inset(true)
+                                .spacing(ListItemSpacing::Sparse)
+                                .disabled(true)
+                                .child(Label::new(text).color(Color::Muted)),
+                        ),
+                    )
+                })
             })
             .children(self.delegate.render_footer(window, cx))
             .children(match &self.head {

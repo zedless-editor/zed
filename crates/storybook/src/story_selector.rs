@@ -2,9 +2,8 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 use crate::stories::*;
-use anyhow::anyhow;
-use clap::builder::PossibleValue;
 use clap::ValueEnum;
+use clap::builder::PossibleValue;
 use gpui::AnyView;
 use strum::{EnumIter, EnumString, IntoEnumIterator};
 use ui::prelude::*;
@@ -14,15 +13,10 @@ use ui::prelude::*;
 pub enum ComponentStory {
     ApplicationMenu,
     AutoHeightEditor,
-    Avatar,
-    Button,
     CollabNotification,
     ContextMenu,
     Cursor,
-    DefaultColors,
-    Disclosure,
     Focus,
-    Icon,
     IconButton,
     Keybinding,
     List,
@@ -37,7 +31,6 @@ pub enum ComponentStory {
     ToggleButton,
     ViewportUnits,
     WithRemSize,
-    Vector,
 }
 
 impl ComponentStory {
@@ -47,17 +40,12 @@ impl ComponentStory {
                 .new(|cx| title_bar::ApplicationMenuStory::new(window, cx))
                 .into(),
             Self::AutoHeightEditor => AutoHeightEditorStory::new(window, cx).into(),
-            Self::Avatar => cx.new(|_| ui::AvatarStory).into(),
-            Self::Button => cx.new(|_| ui::ButtonStory).into(),
             Self::CollabNotification => cx
                 .new(|_| collab_ui::notifications::CollabNotificationStory)
                 .into(),
             Self::ContextMenu => cx.new(|_| ui::ContextMenuStory).into(),
             Self::Cursor => cx.new(|_| crate::stories::CursorStory).into(),
-            Self::DefaultColors => DefaultColorsStory::model(cx).into(),
-            Self::Disclosure => cx.new(|_| ui::DisclosureStory).into(),
             Self::Focus => FocusStory::model(window, cx).into(),
-            Self::Icon => cx.new(|_| ui::IconStory).into(),
             Self::IconButton => cx.new(|_| ui::IconButtonStory).into(),
             Self::Keybinding => cx.new(|_| ui::KeybindingStory).into(),
             Self::List => cx.new(|_| ui::ListStory).into(),
@@ -72,7 +60,6 @@ impl ComponentStory {
             Self::ToggleButton => cx.new(|_| ui::ToggleButtonStory).into(),
             Self::ViewportUnits => cx.new(|_| crate::stories::ViewportUnitsStory).into(),
             Self::WithRemSize => cx.new(|_| crate::stories::WithRemSizeStory).into(),
-            Self::Vector => cx.new(|_| ui::VectorStory).into(),
         }
     }
 }
@@ -102,7 +89,7 @@ impl FromStr for StorySelector {
             return Ok(Self::Component(component_story));
         }
 
-        Err(anyhow!("story not found for '{raw_story_name}'"))
+        anyhow::bail!("story not found for '{raw_story_name}'")
     }
 }
 

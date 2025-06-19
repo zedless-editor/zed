@@ -1,28 +1,29 @@
-use crate::{seal::Sealed, App, AppContext, VisualContext, Window};
-use anyhow::{anyhow, Result};
+use crate::{App, AppContext, VisualContext, Window, seal::Sealed};
+use anyhow::{Context as _, Result};
 use collections::FxHashSet;
 use derive_more::{Deref, DerefMut};
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use slotmap::{KeyData, SecondaryMap, SlotMap};
 use std::{
-    any::{type_name, Any, TypeId},
+    any::{Any, TypeId, type_name},
     cell::RefCell,
+    cmp::Ordering,
     fmt::{self, Display},
     hash::{Hash, Hasher},
     marker::PhantomData,
     mem,
     num::NonZeroU64,
     sync::{
-        atomic::{AtomicUsize, Ordering::SeqCst},
         Arc, Weak,
+        atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst},
     },
     thread::panicking,
 };
 
-#[cfg(any(test, feature = "test-support"))]
-use collections::HashMap;
-
 use super::Context;
+use crate::util::atomic_incr_if_not_zero;
+#[cfg(any(test, feature = "leak-detection"))]
+use collections::HashMap;
 
 slotmap::new_key_type! {
     /// A unique identifier for a entity across the application.
@@ -62,7 +63,7 @@ pub(crate) struct EntityMap {
 struct EntityRefCounts {
     counts: SlotMap<EntityId, AtomicUsize>,
     dropped_entity_ids: Vec<EntityId>,
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "leak-detection"))]
     leak_detector: LeakDetector,
 }
 
@@ -74,7 +75,7 @@ impl EntityMap {
             ref_counts: Arc::new(RwLock::new(EntityRefCounts {
                 counts: SlotMap::with_key(),
                 dropped_entity_ids: Vec::new(),
-                #[cfg(any(test, feature = "test-support"))]
+                #[cfg(any(test, feature = "leak-detection"))]
                 leak_detector: LeakDetector {
                     next_handle_id: 0,
                     entity_handles: HashMap::default(),
@@ -178,6 +179,7 @@ impl EntityMap {
     }
 }
 
+#[track_caller]
 fn double_lease_panic<T>(operation: &str) -> ! {
     panic!(
         "cannot {operation} {} while it is already being updated",
@@ -191,7 +193,7 @@ pub(crate) struct Lease<'a, T> {
     entity_type: PhantomData<T>,
 }
 
-impl<'a, T: 'static> core::ops::Deref for Lease<'a, T> {
+impl<T: 'static> core::ops::Deref for Lease<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -199,13 +201,13 @@ impl<'a, T: 'static> core::ops::Deref for Lease<'a, T> {
     }
 }
 
-impl<'a, T: 'static> core::ops::DerefMut for Lease<'a, T> {
+impl<T: 'static> core::ops::DerefMut for Lease<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.entity.as_mut().unwrap().downcast_mut().unwrap()
     }
 }
 
-impl<'a, T> Drop for Lease<'a, T> {
+impl<T> Drop for Lease<'_, T> {
     fn drop(&mut self) {
         if self.entity.is_some() && !panicking() {
             panic!("Leases must be ended with EntityMap::end_lease")
@@ -221,7 +223,7 @@ pub struct AnyEntity {
     pub(crate) entity_id: EntityId,
     pub(crate) entity_type: TypeId,
     entity_map: Weak<RwLock<EntityRefCounts>>,
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "leak-detection"))]
     handle_id: HandleId,
 }
 
@@ -231,7 +233,7 @@ impl AnyEntity {
             entity_id: id,
             entity_type,
             entity_map: entity_map.clone(),
-            #[cfg(any(test, feature = "test-support"))]
+            #[cfg(any(test, feature = "leak-detection"))]
             handle_id: entity_map
                 .upgrade()
                 .unwrap()
@@ -290,7 +292,7 @@ impl Clone for AnyEntity {
             entity_id: self.entity_id,
             entity_type: self.entity_type,
             entity_map: self.entity_map.clone(),
-            #[cfg(any(test, feature = "test-support"))]
+            #[cfg(any(test, feature = "leak-detection"))]
             handle_id: self
                 .entity_map
                 .upgrade()
@@ -319,7 +321,7 @@ impl Drop for AnyEntity {
             }
         }
 
-        #[cfg(any(test, feature = "test-support"))]
+        #[cfg(any(test, feature = "leak-detection"))]
         if let Some(entity_map) = self.entity_map.upgrade() {
             entity_map
                 .write()
@@ -348,6 +350,18 @@ impl PartialEq for AnyEntity {
 }
 
 impl Eq for AnyEntity {}
+
+impl Ord for AnyEntity {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.entity_id.cmp(&other.entity_id)
+    }
+}
+
+impl PartialOrd for AnyEntity {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 impl std::fmt::Debug for AnyEntity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -395,17 +409,6 @@ impl<T: 'static> Entity<T> {
         }
     }
 
-    /// Upgrade the given weak pointer to a retaining pointer, if it still exists
-    pub fn upgrade_from(weak: &WeakEntity<T>) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        Some(Entity {
-            any_entity: weak.any_entity.upgrade()?,
-            entity_type: weak.entity_type,
-        })
-    }
-
     /// Convert this into a dynamically typed entity.
     pub fn into_any(self) -> AnyEntity {
         self.any_entity
@@ -426,32 +429,22 @@ impl<T: 'static> Entity<T> {
     }
 
     /// Updates the entity referenced by this handle with the given function.
-    ///
-    /// The update function receives a context appropriate for its environment.
-    /// When updating in an `App`, it receives a `Context`.
-    /// When updating in a `Window`, it receives a `Window` and a `Context`.
-    pub fn update<C, R>(
+    pub fn update<R, C: AppContext>(
         &self,
         cx: &mut C,
-        update: impl FnOnce(&mut T, &mut Context<'_, T>) -> R,
-    ) -> C::Result<R>
-    where
-        C: AppContext,
-    {
+        update: impl FnOnce(&mut T, &mut Context<T>) -> R,
+    ) -> C::Result<R> {
         cx.update_entity(self, update)
     }
 
     /// Updates the entity referenced by this handle with the given function if
     /// the referenced entity still exists, within a visual context that has a window.
     /// Returns an error if the entity has been released.
-    pub fn update_in<C, R>(
+    pub fn update_in<R, C: VisualContext>(
         &self,
         cx: &mut C,
-        update: impl FnOnce(&mut T, &mut Window, &mut Context<'_, T>) -> R,
-    ) -> C::Result<R>
-    where
-        C: VisualContext,
-    {
+        update: impl FnOnce(&mut T, &mut Window, &mut Context<T>) -> R,
+    ) -> C::Result<R> {
         cx.update_window_entity(self, update)
     }
 }
@@ -494,6 +487,18 @@ impl<T> PartialEq<WeakEntity<T>> for Entity<T> {
     }
 }
 
+impl<T: 'static> Ord for Entity<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.entity_id().cmp(&other.entity_id())
+    }
+}
+
+impl<T: 'static> PartialOrd for Entity<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// A type erased, weak reference to a entity.
 #[derive(Clone)]
 pub struct AnyWeakEntity {
@@ -524,18 +529,17 @@ impl AnyWeakEntity {
         let ref_counts = ref_counts.read();
         let ref_count = ref_counts.counts.get(self.entity_id)?;
 
-        // entity_id is in dropped_entity_ids
-        if ref_count.load(SeqCst) == 0 {
+        if atomic_incr_if_not_zero(ref_count) == 0 {
+            // entity_id is in dropped_entity_ids
             return None;
         }
-        ref_count.fetch_add(1, SeqCst);
         drop(ref_counts);
 
         Some(AnyEntity {
             entity_id: self.entity_id,
             entity_type: self.entity_type,
             entity_map: self.entity_ref_counts.clone(),
-            #[cfg(any(test, feature = "test-support"))]
+            #[cfg(any(test, feature = "leak-detection"))]
             handle_id: self
                 .entity_ref_counts
                 .upgrade()
@@ -547,7 +551,7 @@ impl AnyWeakEntity {
     }
 
     /// Assert that entity referenced by this weak handle has been released.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "leak-detection"))]
     pub fn assert_released(&self) {
         self.entity_ref_counts
             .upgrade()
@@ -565,6 +569,30 @@ impl AnyWeakEntity {
             panic!(
                 "entity was recently dropped but resources are retained until the end of the effect cycle."
             )
+        }
+    }
+
+    /// Creates a weak entity that can never be upgraded.
+    pub fn new_invalid() -> Self {
+        /// To hold the invariant that all ids are unique, and considering that slotmap
+        /// increases their IDs from `0`, we can decrease ours from `u64::MAX` so these
+        /// two will never conflict (u64 is way too large).
+        static UNIQUE_NON_CONFLICTING_ID_GENERATOR: AtomicU64 = AtomicU64::new(u64::MAX);
+        let entity_id = UNIQUE_NON_CONFLICTING_ID_GENERATOR.fetch_sub(1, SeqCst);
+
+        Self {
+            // Safety:
+            //   Docs say this is safe but can be unspecified if slotmap changes the representation
+            //   after `1.0.7`, that said, providing a valid entity_id here is not necessary as long
+            //   as we guarantee that `entity_id` is never used if `entity_ref_counts` equals
+            //   to `Weak::new()` (that is, it's unable to upgrade), that is the invariant that
+            //   actually needs to be hold true.
+            //
+            //   And there is no sane reason to read an entity slot if `entity_ref_counts` can't be
+            //   read in the first place, so we're good!
+            entity_id: entity_id.into(),
+            entity_type: TypeId::of::<()>(),
+            entity_ref_counts: Weak::new(),
         }
     }
 }
@@ -597,6 +625,18 @@ impl PartialEq for AnyWeakEntity {
 }
 
 impl Eq for AnyWeakEntity {}
+
+impl Ord for AnyWeakEntity {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.entity_id.cmp(&other.entity_id)
+    }
+}
+
+impl PartialOrd for AnyWeakEntity {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 /// A weak reference to a entity of the given type.
 #[derive(Deref, DerefMut)]
@@ -631,8 +671,10 @@ impl<T> Clone for WeakEntity<T> {
 impl<T: 'static> WeakEntity<T> {
     /// Upgrade this weak entity reference into a strong entity reference
     pub fn upgrade(&self) -> Option<Entity<T>> {
-        // Delegate to the trait implementation to keep behavior in one place.
-        Entity::upgrade_from(self)
+        Some(Entity {
+            any_entity: self.any_entity.upgrade()?,
+            entity_type: self.entity_type,
+        })
     }
 
     /// Updates the entity referenced by this handle with the given function if
@@ -641,7 +683,7 @@ impl<T: 'static> WeakEntity<T> {
     pub fn update<C, R>(
         &self,
         cx: &mut C,
-        update: impl FnOnce(&mut T, &mut Context<'_, T>) -> R,
+        update: impl FnOnce(&mut T, &mut Context<T>) -> R,
     ) -> Result<R>
     where
         C: AppContext,
@@ -649,7 +691,7 @@ impl<T: 'static> WeakEntity<T> {
     {
         crate::Flatten::flatten(
             self.upgrade()
-                .ok_or_else(|| anyhow!("entity released"))
+                .context("entity released")
                 .map(|this| cx.update_entity(&this, update)),
         )
     }
@@ -660,14 +702,14 @@ impl<T: 'static> WeakEntity<T> {
     pub fn update_in<C, R>(
         &self,
         cx: &mut C,
-        update: impl FnOnce(&mut T, &mut Window, &mut Context<'_, T>) -> R,
+        update: impl FnOnce(&mut T, &mut Window, &mut Context<T>) -> R,
     ) -> Result<R>
     where
         C: VisualContext,
         Result<C::Result<R>>: crate::Flatten<R>,
     {
         let window = cx.window_handle();
-        let this = self.upgrade().ok_or_else(|| anyhow!("entity released"))?;
+        let this = self.upgrade().context("entity released")?;
 
         crate::Flatten::flatten(window.update(cx, |_, window, cx| {
             this.update(cx, |entity, cx| update(entity, window, cx))
@@ -684,9 +726,17 @@ impl<T: 'static> WeakEntity<T> {
     {
         crate::Flatten::flatten(
             self.upgrade()
-                .ok_or_else(|| anyhow!("entity release"))
+                .context("entity released")
                 .map(|this| cx.read_entity(&this, read)),
         )
+    }
+
+    /// Create a new weak entity that can never be upgraded.
+    pub fn new_invalid() -> Self {
+        Self {
+            any_entity: AnyWeakEntity::new_invalid(),
+            entity_type: PhantomData,
+        }
     }
 }
 
@@ -710,23 +760,35 @@ impl<T> PartialEq<Entity<T>> for WeakEntity<T> {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+impl<T: 'static> Ord for WeakEntity<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.entity_id().cmp(&other.entity_id())
+    }
+}
+
+impl<T: 'static> PartialOrd for WeakEntity<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[cfg(any(test, feature = "leak-detection"))]
 static LEAK_BACKTRACE: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var("LEAK_BACKTRACE").map_or(false, |b| !b.is_empty()));
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "leak-detection"))]
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub(crate) struct HandleId {
     id: u64, // id of the handle itself, not the pointed at object
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "leak-detection"))]
 pub(crate) struct LeakDetector {
     next_handle_id: u64,
     entity_handles: HashMap<EntityId, HashMap<HandleId, Option<backtrace::Backtrace>>>,
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "leak-detection"))]
 impl LeakDetector {
     #[track_caller]
     pub fn handle_created(&mut self, entity_id: EntityId) -> HandleId {

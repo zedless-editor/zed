@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context as _;
 use rpc::Notification;
 use sea_orm::{SelectColumns, TryInsertResult};
 use time::OffsetDateTime;
@@ -229,7 +230,6 @@ impl Database {
     }
 
     /// Creates a new channel message.
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_channel_message(
         &self,
         channel_id: ChannelId,
@@ -331,7 +331,7 @@ impl Database {
                         .filter(channel_message::Column::Nonce.eq(Uuid::from_u128(nonce)))
                         .one(&*tx)
                         .await?
-                        .ok_or_else(|| anyhow!("failed to insert message"))?
+                        .context("failed to insert message")?
                         .id;
                 }
             }
@@ -481,7 +481,7 @@ impl Database {
         self.notification_kinds_by_id
             .iter()
             .find(|(_, kind)| **kind == notification_kind)
-            .map(|kind| kind.0 .0)
+            .map(|kind| kind.0.0)
     }
 
     /// Removes the channel message with the given ID.

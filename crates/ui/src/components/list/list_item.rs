@@ -1,11 +1,9 @@
-#![allow(missing_docs)]
-
 use std::sync::Arc;
 
-use gpui::{px, AnyElement, AnyView, ClickEvent, MouseButton, MouseDownEvent, Pixels};
+use gpui::{AnyElement, AnyView, ClickEvent, MouseButton, MouseDownEvent, Pixels, px};
 use smallvec::SmallVec;
 
-use crate::{prelude::*, Disclosure};
+use crate::{Disclosure, prelude::*};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Default)]
 pub enum ListItemSpacing {
@@ -18,6 +16,7 @@ pub enum ListItemSpacing {
 #[derive(IntoElement)]
 pub struct ListItem {
     id: ElementId,
+    group_name: Option<SharedString>,
     disabled: bool,
     selected: bool,
     spacing: ListItemSpacing,
@@ -34,12 +33,15 @@ pub struct ListItem {
     toggle: Option<bool>,
     inset: bool,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+    on_hover: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
     on_toggle: Option<Arc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     tooltip: Option<Box<dyn Fn(&mut Window, &mut App) -> AnyView + 'static>>,
     on_secondary_mouse_down: Option<Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>>,
     children: SmallVec<[AnyElement; 2]>,
     selectable: bool,
+    always_show_disclosure_icon: bool,
     outlined: bool,
+    rounded: bool,
     overflow_x: bool,
     focused: Option<bool>,
 }
@@ -48,6 +50,7 @@ impl ListItem {
     pub fn new(id: impl Into<ElementId>) -> Self {
         Self {
             id: id.into(),
+            group_name: None,
             disabled: false,
             selected: false,
             spacing: ListItemSpacing::Dense,
@@ -61,13 +64,21 @@ impl ListItem {
             on_click: None,
             on_secondary_mouse_down: None,
             on_toggle: None,
+            on_hover: None,
             tooltip: None,
             children: SmallVec::new(),
             selectable: true,
+            always_show_disclosure_icon: false,
             outlined: false,
+            rounded: false,
             overflow_x: false,
             focused: None,
         }
+    }
+
+    pub fn group_name(mut self, group_name: impl Into<SharedString>) -> Self {
+        self.group_name = Some(group_name.into());
+        self
     }
 
     pub fn spacing(mut self, spacing: ListItemSpacing) -> Self {
@@ -80,11 +91,21 @@ impl ListItem {
         self
     }
 
+    pub fn always_show_disclosure_icon(mut self, show: bool) -> Self {
+        self.always_show_disclosure_icon = show;
+        self
+    }
+
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_click = Some(Box::new(handler));
+        self
+    }
+
+    pub fn on_hover(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_hover = Some(Box::new(handler));
         self
     }
 
@@ -149,6 +170,11 @@ impl ListItem {
         self
     }
 
+    pub fn rounded(mut self) -> Self {
+        self.rounded = true;
+        self
+    }
+
     pub fn overflow_x(mut self) -> Self {
         self.overflow_x = true;
         self
@@ -184,6 +210,7 @@ impl RenderOnce for ListItem {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         h_flex()
             .id(self.id)
+            .when_some(self.group_name, |this, group| this.group(group))
             .w_full()
             .relative()
             // When an item is inset draw the indent spacing outside of the item
@@ -206,19 +233,20 @@ impl RenderOnce for ListItem {
                     .when(self.selectable, |this| {
                         this.hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
                             .active(|style| style.bg(cx.theme().colors().ghost_element_active))
-                            .when(self.outlined, |this| this.rounded_md())
+                            .when(self.outlined, |this| this.rounded_sm())
                             .when(self.selected, |this| {
                                 this.bg(cx.theme().colors().ghost_element_selected)
                             })
                     })
             })
+            .when(self.rounded, |this| this.rounded_sm())
+            .when_some(self.on_hover, |this, on_hover| this.on_hover(on_hover))
             .child(
                 h_flex()
                     .id("inner_list_item")
                     .group("list_item")
                     .w_full()
                     .relative()
-                    .items_center()
                     .gap_1()
                     .px(DynamicSpacing::Base06.rems(cx))
                     .map(|this| match self.spacing {
@@ -255,7 +283,7 @@ impl RenderOnce for ListItem {
                     .when(self.outlined, |this| {
                         this.border_1()
                             .border_color(cx.theme().colors().border)
-                            .rounded_md()
+                            .rounded_sm()
                             .overflow_hidden()
                     })
                     .when_some(self.on_secondary_mouse_down, |this, on_mouse_down| {
@@ -266,7 +294,7 @@ impl RenderOnce for ListItem {
                     .when_some(self.tooltip, |this, tooltip| this.tooltip(tooltip))
                     .map(|this| {
                         if self.inset {
-                            this.rounded_md()
+                            this.rounded_sm()
                         } else {
                             // When an item is not inset draw the indent spacing inside of the item
                             this.ml(self.indent_level as f32 * self.indent_step_size)
@@ -277,7 +305,9 @@ impl RenderOnce for ListItem {
                             .flex()
                             .absolute()
                             .left(rems(-1.))
-                            .when(is_open, |this| this.visible_on_hover(""))
+                            .when(is_open && !self.always_show_disclosure_icon, |this| {
+                                this.visible_on_hover("")
+                            })
                             .child(Disclosure::new("toggle", is_open).on_toggle(self.on_toggle))
                     }))
                     .child(

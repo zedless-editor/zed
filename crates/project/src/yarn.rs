@@ -15,7 +15,7 @@ use anyhow::Result;
 use collections::HashMap;
 use fs::Fs;
 use gpui::{App, AppContext as _, Context, Entity, Task};
-use util::ResultExt;
+use util::{ResultExt, archive::extract_zip};
 
 pub(crate) struct YarnPathStore {
     temp_dirs: HashMap<Arc<Path>, tempfile::TempDir>,
@@ -91,9 +91,9 @@ impl YarnPathStore {
         };
         if let Some(zip_file) = zip_path(&path) {
             let zip_file: Arc<Path> = Arc::from(zip_file);
-            cx.spawn(|this, mut cx| async move {
+            cx.spawn(async move |this, cx| {
                 let dir = this
-                    .update(&mut cx, |this, _| {
+                    .read_with(cx, |this, _| {
                         this.temp_dirs
                             .get(&zip_file)
                             .map(|temp| temp.path().to_owned())
@@ -102,10 +102,10 @@ impl YarnPathStore {
                 let zip_root = if let Some(dir) = dir {
                     dir
                 } else {
-                    let fs = this.update(&mut cx, |this, _| this.fs.clone()).ok()?;
+                    let fs = this.update(cx, |this, _| this.fs.clone()).ok()?;
                     let tempdir = dump_zip(zip_file.clone(), fs).await.log_err()?;
                     let new_path = tempdir.path().to_owned();
-                    this.update(&mut cx, |this, _| {
+                    this.update(cx, |this, _| {
                         this.temp_dirs.insert(zip_file.clone(), tempdir);
                     })
                     .ok()?;
@@ -131,7 +131,7 @@ fn zip_path(path: &Path) -> Option<&Path> {
 async fn dump_zip(path: Arc<Path>, fs: Arc<dyn Fs>) -> Result<tempfile::TempDir> {
     let dir = tempfile::tempdir()?;
     let contents = fs.load_bytes(&path).await?;
-    node_runtime::extract_zip(dir.path(), futures::io::Cursor::new(contents)).await?;
+    extract_zip(dir.path(), futures::io::Cursor::new(contents)).await?;
     Ok(dir)
 }
 

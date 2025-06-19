@@ -1,11 +1,10 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
-use anyhow::anyhow;
 use gpui::{
-    black, div, img, prelude::*, pulsating_between, px, red, size, Animation, AnimationExt, App,
-    Application, Asset, AssetLogger, AssetSource, Bounds, Context, Hsla, ImageAssetLoader,
-    ImageCacheError, ImgResourceLoader, Length, Pixels, RenderImage, Resource, SharedString,
-    Window, WindowBounds, WindowOptions, LOADING_DELAY,
+    Animation, AnimationExt, App, Application, Asset, AssetLogger, AssetSource, Bounds, Context,
+    Hsla, ImageAssetLoader, ImageCacheError, ImgResourceLoader, LOADING_DELAY, Length, Pixels,
+    RenderImage, Resource, SharedString, Window, WindowBounds, WindowOptions, black, div, img,
+    prelude::*, pulsating_between, px, red, size,
 };
 
 struct Assets {}
@@ -57,7 +56,7 @@ impl Asset for LoadImageWithParameters {
             timer.await;
             if parameters.fail {
                 log::error!("Intentionally failed to load image");
-                Err(anyhow!("Failed to load image").into())
+                Err(anyhow::anyhow!("Failed to load image").into())
             } else {
                 data.await
             }
@@ -69,7 +68,7 @@ struct ImageLoadingExample {}
 
 impl ImageLoadingExample {
     fn loading_element() -> impl IntoElement {
-        div().size_full().flex_none().p_0p5().rounded_sm().child(
+        div().size_full().flex_none().p_0p5().rounded_xs().child(
             div().size_full().with_animation(
                 "loading-bg",
                 Animation::new(Duration::from_secs(3))
@@ -89,7 +88,7 @@ impl ImageLoadingExample {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded_sm()
+                .rounded_xs()
                 .text_sm()
                 .text_color(fallback_color)
                 .border_1()
@@ -177,7 +176,7 @@ impl Render for ImageLoadingExample {
                         )
                         .to_path_buf();
                         img(image_source.clone())
-                            .id("image-1")
+                            .id("image-4")
                             .border_1()
                             .size_12()
                             .with_fallback(|| Self::fallback_element().into_any_element())

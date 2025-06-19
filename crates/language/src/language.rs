@@ -11,21 +11,22 @@ mod diagnostic_set;
 mod highlight_map;
 mod language_registry;
 pub mod language_settings;
+mod manifest;
 mod outline;
 pub mod proto;
 mod syntax_map;
 mod task_context;
+mod text_diff;
 mod toolchain;
 
 #[cfg(test)]
 pub mod buffer_tests;
-pub mod markdown;
 
 pub use crate::language_settings::EditPredictionsMode;
 use crate::language_settings::SoftWrap;
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
-use collections::{HashMap, HashSet};
+use collections::{HashMap, HashSet, IndexSet};
 use fs::Fs;
 use futures::Future;
 use gpui::{App, AsyncApp, Entity, SharedString, Task};
@@ -33,18 +34,18 @@ pub use highlight_map::HighlightMap;
 use http_client::HttpClient;
 pub use language_registry::{LanguageName, LoadedLanguage};
 use lsp::{CodeActionKind, InitializeParams, LanguageServerBinary, LanguageServerBinaryOptions};
+pub use manifest::{ManifestDelegate, ManifestName, ManifestProvider, ManifestQuery};
 use parking_lot::Mutex;
 use regex::Regex;
 use schemars::{
-    gen::SchemaGenerator,
-    schema::{InstanceType, Schema, SchemaObject},
     JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{InstanceType, Schema, SchemaObject},
 };
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 use settings::WorktreeId;
 use smol::future::FutureExt as _;
-use std::num::NonZeroU32;
 use std::{
     any::Any,
     ffi::OsStr,
@@ -56,24 +57,28 @@ use std::{
     pin::Pin,
     str,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst},
         Arc, LazyLock,
+        atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst},
     },
 };
+use std::{num::NonZeroU32, sync::OnceLock};
 use syntax_map::{QueryCursorHandle, SyntaxSnapshot};
 use task::RunnableTag;
-pub use task_context::{ContextProvider, RunnableRange};
+pub use task_context::{ContextLocation, ContextProvider, RunnableRange};
+pub use text_diff::{
+    DiffOptions, apply_diff_patch, line_diff, text_diff, text_diff_with_options, unified_diff,
+};
 use theme::SyntaxTheme;
 pub use toolchain::{LanguageToolchainStore, Toolchain, ToolchainList, ToolchainLister};
-use tree_sitter::{self, wasmtime, Query, QueryCursor, WasmStore};
+use tree_sitter::{self, Query, QueryCursor, WasmStore, wasmtime};
 use util::serde::default_true;
 
 pub use buffer::Operation;
 pub use buffer::*;
 pub use diagnostic_set::{DiagnosticEntry, DiagnosticGroup};
 pub use language_registry::{
-    AvailableLanguage, LanguageNotFound, LanguageQueries, LanguageRegistry,
-    LanguageServerBinaryStatus, QUERY_FILENAME_PREFIXES,
+    AvailableLanguage, BinaryStatus, LanguageNotFound, LanguageQueries, LanguageRegistry,
+    QUERY_FILENAME_PREFIXES,
 };
 pub use lsp::{LanguageServerId, LanguageServerName};
 pub use outline::*;
@@ -162,6 +167,8 @@ pub struct CachedLspAdapter {
     pub adapter: Arc<dyn LspAdapter>,
     pub reinstall_attempt_count: AtomicU64,
     cached_binary: futures::lock::Mutex<Option<LanguageServerBinary>>,
+    manifest_name: OnceLock<Option<ManifestName>>,
+    attach_kind: OnceLock<Attach>,
 }
 
 impl Debug for CachedLspAdapter {
@@ -197,6 +204,8 @@ impl CachedLspAdapter {
             adapter,
             cached_binary: Default::default(),
             reinstall_attempt_count: AtomicU64::new(0),
+            attach_kind: Default::default(),
+            manifest_name: Default::default(),
         })
     }
 
@@ -222,8 +231,26 @@ impl CachedLspAdapter {
         self.adapter.code_action_kinds()
     }
 
-    pub fn process_diagnostics(&self, params: &mut lsp::PublishDiagnosticsParams) {
-        self.adapter.process_diagnostics(params)
+    pub fn process_diagnostics(
+        &self,
+        params: &mut lsp::PublishDiagnosticsParams,
+        server_id: LanguageServerId,
+        existing_diagnostics: Option<&'_ Buffer>,
+    ) {
+        self.adapter
+            .process_diagnostics(params, server_id, existing_diagnostics)
+    }
+
+    pub fn retain_old_diagnostic(&self, previous_diagnostic: &Diagnostic, cx: &App) -> bool {
+        self.adapter.retain_old_diagnostic(previous_diagnostic, cx)
+    }
+
+    pub fn underline_diagnostic(&self, diagnostic: &lsp::Diagnostic) -> bool {
+        self.adapter.underline_diagnostic(diagnostic)
+    }
+
+    pub fn diagnostic_message_to_markdown(&self, message: &str) -> Option<String> {
+        self.adapter.diagnostic_message_to_markdown(message)
     }
 
     pub async fn process_completions(&self, completion_items: &mut [lsp::CompletionItem]) {
@@ -258,6 +285,34 @@ impl CachedLspAdapter {
             .cloned()
             .unwrap_or_else(|| language_name.lsp_id())
     }
+    pub fn manifest_name(&self) -> Option<ManifestName> {
+        self.manifest_name
+            .get_or_init(|| self.adapter.manifest_name())
+            .clone()
+    }
+    pub fn attach_kind(&self) -> Attach {
+        *self.attach_kind.get_or_init(|| self.adapter.attach_kind())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Attach {
+    /// Create a single language server instance per subproject root.
+    InstancePerRoot,
+    /// Use one shared language server instance for all subprojects within a project.
+    Shared,
+}
+
+impl Attach {
+    pub fn root_path(
+        &self,
+        root_subproject_path: (WorktreeId, Arc<Path>),
+    ) -> (WorktreeId, Arc<Path>) {
+        match self {
+            Attach::InstancePerRoot => root_subproject_path,
+            Attach::Shared => (root_subproject_path.0, Arc::from(Path::new(""))),
+        }
+    }
 }
 
 /// [`LspAdapterDelegate`] allows [`LspAdapter]` implementations to interface with the application
@@ -268,7 +323,8 @@ pub trait LspAdapterDelegate: Send + Sync {
     fn http_client(&self) -> Arc<dyn HttpClient>;
     fn worktree_id(&self) -> WorktreeId;
     fn worktree_root_path(&self) -> &Path;
-    fn update_status(&self, language: LanguageServerName, status: LanguageServerBinaryStatus);
+    fn update_status(&self, language: LanguageServerName, status: BinaryStatus);
+    fn registered_lsp_adapters(&self) -> Vec<Arc<dyn LspAdapter>>;
     async fn language_server_download_dir(&self, name: &LanguageServerName) -> Option<Arc<Path>>;
 
     async fn npm_package_installed_version(
@@ -317,9 +373,7 @@ pub trait LspAdapter: 'static + Send + Sync {
                 }
             }
 
-            if !binary_options.allow_binary_download {
-                return Err(anyhow!("downloading language servers disabled"));
-            }
+            anyhow::ensure!(binary_options.allow_binary_download, "downloading language servers disabled");
 
             if let Some(cached_binary) = cached_binary.as_ref() {
                 return Ok(cached_binary.clone());
@@ -346,7 +400,7 @@ pub trait LspAdapter: 'static + Send + Sync {
                 } else {
                     delegate.update_status(
                         self.name(),
-                        LanguageServerBinaryStatus::Failed {
+                        BinaryStatus::Failed {
                             error: format!("{error:?}"),
                         },
                     );
@@ -406,10 +460,35 @@ pub trait LspAdapter: 'static + Send + Sync {
         delegate: &dyn LspAdapterDelegate,
     ) -> Option<LanguageServerBinary>;
 
-    fn process_diagnostics(&self, _: &mut lsp::PublishDiagnosticsParams) {}
+    fn process_diagnostics(
+        &self,
+        _: &mut lsp::PublishDiagnosticsParams,
+        _: LanguageServerId,
+        _: Option<&'_ Buffer>,
+    ) {
+    }
+
+    /// When processing new `lsp::PublishDiagnosticsParams` diagnostics, whether to retain previous one(s) or not.
+    fn retain_old_diagnostic(&self, _previous_diagnostic: &Diagnostic, _cx: &App) -> bool {
+        false
+    }
+
+    /// Whether to underline a given diagnostic or not, when rendering in the editor.
+    ///
+    /// https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#diagnosticTag
+    /// states that
+    /// > Clients are allowed to render diagnostics with this tag faded out instead of having an error squiggle.
+    /// for the unnecessary diagnostics, so do not underline them.
+    fn underline_diagnostic(&self, _diagnostic: &lsp::Diagnostic) -> bool {
+        true
+    }
 
     /// Post-processes completions provided by the language server.
     async fn process_completions(&self, _: &mut [lsp::CompletionItem]) {}
+
+    fn diagnostic_message_to_markdown(&self, _message: &str) -> Option<String> {
+        None
+    }
 
     async fn labels_for_completions(
         self: Arc<Self>,
@@ -479,15 +558,29 @@ pub trait LspAdapter: 'static + Send + Sync {
         Ok(serde_json::json!({}))
     }
 
+    async fn additional_initialization_options(
+        self: Arc<Self>,
+        _target_language_server_id: LanguageServerName,
+        _: &dyn Fs,
+        _: &Arc<dyn LspAdapterDelegate>,
+    ) -> Result<Option<Value>> {
+        Ok(None)
+    }
+
+    async fn additional_workspace_configuration(
+        self: Arc<Self>,
+        _target_language_server_id: LanguageServerName,
+        _: &dyn Fs,
+        _: &Arc<dyn LspAdapterDelegate>,
+        _: Arc<dyn LanguageToolchainStore>,
+        _cx: &mut AsyncApp,
+    ) -> Result<Option<Value>> {
+        Ok(None)
+    }
+
     /// Returns a list of code actions supported by a given LspAdapter
     fn code_action_kinds(&self) -> Option<Vec<CodeActionKind>> {
-        Some(vec![
-            CodeActionKind::EMPTY,
-            CodeActionKind::QUICKFIX,
-            CodeActionKind::REFACTOR,
-            CodeActionKind::REFACTOR_EXTRACT,
-            CodeActionKind::SOURCE,
-        ])
+        None
     }
 
     fn disk_based_diagnostic_sources(&self) -> Vec<String> {
@@ -503,8 +596,39 @@ pub trait LspAdapter: 'static + Send + Sync {
     }
 
     /// Support custom initialize params.
-    fn prepare_initialize_params(&self, original: InitializeParams) -> Result<InitializeParams> {
+    fn prepare_initialize_params(
+        &self,
+        original: InitializeParams,
+        _: &App,
+    ) -> Result<InitializeParams> {
         Ok(original)
+    }
+
+    fn attach_kind(&self) -> Attach {
+        Attach::Shared
+    }
+
+    fn manifest_name(&self) -> Option<ManifestName> {
+        None
+    }
+
+    /// Method only implemented by the default JSON language server adapter.
+    /// Used to provide dynamic reloading of the JSON schemas used to
+    /// provide autocompletion and diagnostics in Zed setting and keybind
+    /// files
+    fn is_primary_zed_json_schema_adapter(&self) -> bool {
+        false
+    }
+
+    /// Method only implemented by the default JSON language server adapter.
+    /// Used to clear the cache of JSON schemas that are used to provide
+    /// autocompletion and diagnostics in Zed settings and keybinds files.
+    /// Should not be called unless the callee is sure that
+    /// `Self::is_primary_zed_json_schema_adapter` returns `true`
+    async fn clear_zed_json_schema_cache(&self) {
+        unreachable!(
+            "Not implemented for this adapter. This method should only be called on the default JSON language server adapter"
+        );
     }
 }
 
@@ -520,7 +644,7 @@ async fn try_fetch_server_binary<L: LspAdapter + 'static + Send + Sync + ?Sized>
 
     let name = adapter.name();
     log::info!("fetching latest version of language server {:?}", name.0);
-    delegate.update_status(name.clone(), LanguageServerBinaryStatus::CheckingForUpdate);
+    delegate.update_status(name.clone(), BinaryStatus::CheckingForUpdate);
 
     let latest_version = adapter
         .fetch_latest_server_version(delegate.as_ref())
@@ -531,16 +655,16 @@ async fn try_fetch_server_binary<L: LspAdapter + 'static + Send + Sync + ?Sized>
         .await
     {
         log::info!("language server {:?} is already installed", name.0);
-        delegate.update_status(name.clone(), LanguageServerBinaryStatus::None);
+        delegate.update_status(name.clone(), BinaryStatus::None);
         Ok(binary)
     } else {
         log::info!("downloading language server {:?}", name.0);
-        delegate.update_status(adapter.name(), LanguageServerBinaryStatus::Downloading);
+        delegate.update_status(adapter.name(), BinaryStatus::Downloading);
         let binary = adapter
             .fetch_server_binary(latest_version, container_dir, delegate.as_ref())
             .await;
 
-        delegate.update_status(name.clone(), LanguageServerBinaryStatus::None);
+        delegate.update_status(name.clone(), BinaryStatus::None);
         binary
     }
 }
@@ -570,6 +694,10 @@ pub struct LanguageConfig {
     #[serde(default)]
     #[schemars(schema_with = "bracket_pair_config_json_schema")]
     pub brackets: BracketPairConfig,
+    /// If set to true, indicates the language uses significant whitespace/indentation
+    /// for syntax structure (like Python) rather than brackets/braces for code blocks.
+    #[serde(default)]
+    pub significant_indentation: bool,
     /// If set to true, auto indentation uses last non empty line to determine
     /// the indentation level for a new line.
     #[serde(default = "auto_indent_using_last_non_empty_line_default")]
@@ -631,6 +759,19 @@ pub struct LanguageConfig {
     /// languages, but should not appear to the user as a distinct language.
     #[serde(default)]
     pub hidden: bool,
+    /// If configured, this language contains JSX style tags, and should support auto-closing of those tags.
+    #[serde(default)]
+    pub jsx_tag_auto_close: Option<JsxTagAutoCloseConfig>,
+    /// A list of characters that Zed should treat as word characters for completion queries.
+    #[serde(default)]
+    pub completion_query_characters: HashSet<char>,
+    /// A list of preferred debuggers for this language.
+    #[serde(default)]
+    pub debuggers: IndexSet<SharedString>,
+    /// Whether to treat documentation comment of this language differently by
+    /// auto adding prefix on new line, adjusting the indenting , etc.
+    #[serde(default)]
+    pub documentation: Option<DocumentationConfig>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, JsonSchema)]
@@ -646,6 +787,52 @@ pub struct LanguageMatcher {
     )]
     #[schemars(schema_with = "regex_json_schema")]
     pub first_line_pattern: Option<Regex>,
+}
+
+/// The configuration for JSX tag auto-closing.
+#[derive(Clone, Deserialize, JsonSchema)]
+pub struct JsxTagAutoCloseConfig {
+    /// The name of the node for a opening tag
+    pub open_tag_node_name: String,
+    /// The name of the node for an closing tag
+    pub close_tag_node_name: String,
+    /// The name of the node for a complete element with children for open and close tags
+    pub jsx_element_node_name: String,
+    /// The name of the node found within both opening and closing
+    /// tags that describes the tag name
+    pub tag_name_node_name: String,
+    /// Alternate Node names for tag names.
+    /// Specifically needed as TSX represents the name in `<Foo.Bar>`
+    /// as `member_expression` rather than `identifier` as usual
+    #[serde(default)]
+    pub tag_name_node_name_alternates: Vec<String>,
+    /// Some grammars are smart enough to detect a closing tag
+    /// that is not valid i.e. doesn't match it's corresponding
+    /// opening tag or does not have a corresponding opening tag
+    /// This should be set to the name of the node for invalid
+    /// closing tags if the grammar contains such a node, otherwise
+    /// detecting already closed tags will not work properly
+    #[serde(default)]
+    pub erroneous_close_tag_node_name: Option<String>,
+    /// See above for erroneous_close_tag_node_name for details
+    /// This should be set if the node used for the tag name
+    /// within erroneous closing tags is different from the
+    /// normal tag name node name
+    #[serde(default)]
+    pub erroneous_close_tag_name_node_name: Option<String>,
+}
+
+/// The configuration for documentation block for this language.
+#[derive(Clone, Deserialize, JsonSchema)]
+pub struct DocumentationConfig {
+    /// A start tag of documentation block.
+    pub start: Arc<str>,
+    /// A end tag of documentation block.
+    pub end: Arc<str>,
+    /// A character to add as a prefix when a new line is added to a documentation block.
+    pub prefix: Arc<str>,
+    /// A indent to add for prefix and end line upon new line.
+    pub tab_size: NonZeroU32,
 }
 
 /// Represents a language for the given range. Some languages (e.g. HTML)
@@ -668,7 +855,11 @@ pub struct LanguageConfigOverride {
     #[serde(default)]
     pub word_characters: Override<HashSet<char>>,
     #[serde(default)]
+    pub completion_query_characters: Override<HashSet<char>>,
+    #[serde(default)]
     pub opt_into_language_servers: Vec<LanguageServerName>,
+    #[serde(default)]
+    pub prefer_label_for_snippet: Option<bool>,
 }
 
 #[derive(Clone, Deserialize, Debug, Serialize, JsonSchema)]
@@ -718,6 +909,11 @@ impl Default for LanguageConfig {
             soft_wrap: None,
             prettier_parser_name: None,
             hidden: false,
+            jsx_tag_auto_close: None,
+            completion_query_characters: Default::default(),
+            debuggers: Default::default(),
+            significant_indentation: Default::default(),
+            documentation: None,
         }
     }
 }
@@ -788,8 +984,14 @@ pub struct BracketPairConfig {
     pub disabled_scopes_by_bracket_ix: Vec<Vec<String>>,
 }
 
-fn bracket_pair_config_json_schema(gen: &mut SchemaGenerator) -> Schema {
-    Option::<Vec<BracketPairContent>>::json_schema(gen)
+impl BracketPairConfig {
+    pub fn is_closing_brace(&self, c: char) -> bool {
+        self.pairs.iter().any(|pair| pair.end.starts_with(c))
+    }
+}
+
+fn bracket_pair_config_json_schema(r#gen: &mut SchemaGenerator) -> Schema {
+    Option::<Vec<BracketPairContent>>::json_schema(r#gen)
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -839,7 +1041,7 @@ pub struct BracketPair {
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
-pub(crate) struct LanguageId(usize);
+pub struct LanguageId(usize);
 
 impl LanguageId {
     pub(crate) fn new() -> Self {
@@ -867,9 +1069,9 @@ impl GrammarId {
 pub struct Grammar {
     id: GrammarId,
     pub ts_language: tree_sitter::Language,
-    pub(crate) error_query: Query,
+    pub(crate) error_query: Option<Query>,
     pub(crate) highlights_query: Option<Query>,
-    pub(crate) brackets_config: Option<BracketConfig>,
+    pub(crate) brackets_config: Option<BracketsConfig>,
     pub(crate) redactions_config: Option<RedactionConfig>,
     pub(crate) runnable_config: Option<RunnableConfig>,
     pub(crate) indents_config: Option<IndentConfig>,
@@ -990,15 +1192,25 @@ struct InjectionPatternConfig {
     combined: bool,
 }
 
-struct BracketConfig {
+struct BracketsConfig {
     query: Query,
     open_capture_ix: u32,
     close_capture_ix: u32,
+    patterns: Vec<BracketsPatternConfig>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct BracketsPatternConfig {
+    newline_only: bool,
 }
 
 impl Language {
     pub fn new(config: LanguageConfig, ts_language: Option<tree_sitter::Language>) -> Self {
         Self::new_with_id(LanguageId::new(), config, ts_language)
+    }
+
+    pub fn id(&self) -> LanguageId {
+        self.id
     }
 
     fn new_with_id(
@@ -1022,7 +1234,7 @@ impl Language {
                     override_config: None,
                     redactions_config: None,
                     runnable_config: None,
-                    error_query: Query::new(&ts_language, "(ERROR) @error").unwrap(),
+                    error_query: Query::new(&ts_language, "(ERROR) @error").ok(),
                     ts_language,
                     highlight_map: Default::default(),
                 })
@@ -1097,17 +1309,13 @@ impl Language {
     }
 
     pub fn with_highlights_query(mut self, source: &str) -> Result<Self> {
-        let grammar = self
-            .grammar_mut()
-            .ok_or_else(|| anyhow!("cannot mutate grammar"))?;
+        let grammar = self.grammar_mut().context("cannot mutate grammar")?;
         grammar.highlights_query = Some(Query::new(&grammar.ts_language, source)?);
         Ok(self)
     }
 
     pub fn with_runnable_query(mut self, source: &str) -> Result<Self> {
-        let grammar = self
-            .grammar_mut()
-            .ok_or_else(|| anyhow!("cannot mutate grammar"))?;
+        let grammar = self.grammar_mut().context("cannot mutate grammar")?;
 
         let query = Query::new(&grammar.ts_language, source)?;
         let mut extra_captures = Vec::with_capacity(query.capture_names().len());
@@ -1130,9 +1338,7 @@ impl Language {
     }
 
     pub fn with_outline_query(mut self, source: &str) -> Result<Self> {
-        let grammar = self
-            .grammar_mut()
-            .ok_or_else(|| anyhow!("cannot mutate grammar"))?;
+        let grammar = self.grammar_mut().context("cannot mutate grammar")?;
         let query = Query::new(&grammar.ts_language, source)?;
         let mut item_capture_ix = None;
         let mut name_capture_ix = None;
@@ -1169,9 +1375,7 @@ impl Language {
     }
 
     pub fn with_text_object_query(mut self, source: &str) -> Result<Self> {
-        let grammar = self
-            .grammar_mut()
-            .ok_or_else(|| anyhow!("cannot mutate grammar"))?;
+        let grammar = self.grammar_mut().context("cannot mutate grammar")?;
         let query = Query::new(&grammar.ts_language, source)?;
 
         let mut text_objects_by_capture_ix = Vec::new();
@@ -1189,9 +1393,7 @@ impl Language {
     }
 
     pub fn with_embedding_query(mut self, source: &str) -> Result<Self> {
-        let grammar = self
-            .grammar_mut()
-            .ok_or_else(|| anyhow!("cannot mutate grammar"))?;
+        let grammar = self.grammar_mut().context("cannot mutate grammar")?;
         let query = Query::new(&grammar.ts_language, source)?;
         let mut item_capture_ix = None;
         let mut name_capture_ix = None;
@@ -1222,9 +1424,7 @@ impl Language {
     }
 
     pub fn with_brackets_query(mut self, source: &str) -> Result<Self> {
-        let grammar = self
-            .grammar_mut()
-            .ok_or_else(|| anyhow!("cannot mutate grammar"))?;
+        let grammar = self.grammar_mut().context("cannot mutate grammar")?;
         let query = Query::new(&grammar.ts_language, source)?;
         let mut open_capture_ix = None;
         let mut close_capture_ix = None;
@@ -1235,20 +1435,31 @@ impl Language {
                 ("close", &mut close_capture_ix),
             ],
         );
+        let patterns = (0..query.pattern_count())
+            .map(|ix| {
+                let mut config = BracketsPatternConfig::default();
+                for setting in query.property_settings(ix) {
+                    match setting.key.as_ref() {
+                        "newline.only" => config.newline_only = true,
+                        _ => {}
+                    }
+                }
+                config
+            })
+            .collect();
         if let Some((open_capture_ix, close_capture_ix)) = open_capture_ix.zip(close_capture_ix) {
-            grammar.brackets_config = Some(BracketConfig {
+            grammar.brackets_config = Some(BracketsConfig {
                 query,
                 open_capture_ix,
                 close_capture_ix,
+                patterns,
             });
         }
         Ok(self)
     }
 
     pub fn with_indents_query(mut self, source: &str) -> Result<Self> {
-        let grammar = self
-            .grammar_mut()
-            .ok_or_else(|| anyhow!("cannot mutate grammar"))?;
+        let grammar = self.grammar_mut().context("cannot mutate grammar")?;
         let query = Query::new(&grammar.ts_language, source)?;
         let mut indent_capture_ix = None;
         let mut start_capture_ix = None;
@@ -1276,9 +1487,7 @@ impl Language {
     }
 
     pub fn with_injection_query(mut self, source: &str) -> Result<Self> {
-        let grammar = self
-            .grammar_mut()
-            .ok_or_else(|| anyhow!("cannot mutate grammar"))?;
+        let grammar = self.grammar_mut().context("cannot mutate grammar")?;
         let query = Query::new(&grammar.ts_language, source)?;
         let mut language_capture_ix = None;
         let mut injection_language_capture_ix = None;
@@ -1296,18 +1505,14 @@ impl Language {
         language_capture_ix = match (language_capture_ix, injection_language_capture_ix) {
             (None, Some(ix)) => Some(ix),
             (Some(_), Some(_)) => {
-                return Err(anyhow!(
-                    "both language and injection.language captures are present"
-                ));
+                anyhow::bail!("both language and injection.language captures are present");
             }
             _ => language_capture_ix,
         };
         content_capture_ix = match (content_capture_ix, injection_content_capture_ix) {
             (None, Some(ix)) => Some(ix),
             (Some(_), Some(_)) => {
-                return Err(anyhow!(
-                    "both content and injection.content captures are present"
-                ));
+                anyhow::bail!("both content and injection.content captures are present")
             }
             _ => content_capture_ix,
         };
@@ -1341,10 +1546,7 @@ impl Language {
 
     pub fn with_override_query(mut self, source: &str) -> anyhow::Result<Self> {
         let query = {
-            let grammar = self
-                .grammar
-                .as_ref()
-                .ok_or_else(|| anyhow!("no grammar for language"))?;
+            let grammar = self.grammar.as_ref().context("no grammar for language")?;
             Query::new(&grammar.ts_language, source)?
         };
 
@@ -1366,7 +1568,9 @@ impl Language {
                     .scope_opt_in_language_servers
                     .contains(server_name)
                 {
-                    util::debug_panic!("Server {server_name:?} has been opted-in by scope {name:?} but has not been marked as an opt-in server");
+                    util::debug_panic!(
+                        "Server {server_name:?} has been opted-in by scope {name:?} but has not been marked as an opt-in server"
+                    );
                 }
             }
 
@@ -1393,10 +1597,10 @@ impl Language {
                 .values()
                 .any(|entry| entry.name == *referenced_name)
             {
-                Err(anyhow!(
+                anyhow::bail!(
                     "language {:?} has overrides in config not in query: {referenced_name:?}",
                     self.config.name
-                ))?;
+                );
             }
         }
 
@@ -1419,9 +1623,7 @@ impl Language {
 
         self.config.brackets.disabled_scopes_by_bracket_ix.clear();
 
-        let grammar = self
-            .grammar_mut()
-            .ok_or_else(|| anyhow!("cannot mutate grammar"))?;
+        let grammar = self.grammar_mut().context("cannot mutate grammar")?;
         grammar.override_config = Some(OverrideConfig {
             query,
             values: override_configs_by_id,
@@ -1430,9 +1632,7 @@ impl Language {
     }
 
     pub fn with_redaction_query(mut self, source: &str) -> anyhow::Result<Self> {
-        let grammar = self
-            .grammar_mut()
-            .ok_or_else(|| anyhow!("cannot mutate grammar"))?;
+        let grammar = self.grammar_mut().context("cannot mutate grammar")?;
 
         let query = Query::new(&grammar.ts_language, source)?;
         let mut redaction_capture_ix = None;
@@ -1584,6 +1784,36 @@ impl LanguageScope {
         )
     }
 
+    /// Returns a list of language-specific characters that are considered part of
+    /// a completion query.
+    pub fn completion_query_characters(&self) -> Option<&HashSet<char>> {
+        Override::as_option(
+            self.config_override()
+                .map(|o| &o.completion_query_characters),
+            Some(&self.language.config.completion_query_characters),
+        )
+    }
+
+    /// Returns whether to prefer snippet `label` over `new_text` to replace text when
+    /// completion is accepted.
+    ///
+    /// In cases like when cursor is in string or renaming existing function,
+    /// you don't want to expand function signature instead just want function name
+    /// to replace existing one.
+    pub fn prefers_label_for_snippet_in_completion(&self) -> bool {
+        self.config_override()
+            .and_then(|o| o.prefer_label_for_snippet)
+            .unwrap_or(false)
+    }
+
+    /// Returns config to documentation block for this language.
+    ///
+    /// Used for documentation styles that require a leading character on each line,
+    /// such as the asterisk in JSDoc, Javadoc, etc.
+    pub fn documentation(&self) -> Option<&DocumentationConfig> {
+        self.language.config.documentation.as_ref()
+    }
+
     /// Returns a list of bracket pairs for a given language with an additional
     /// piece of information about whether the particular bracket pair is currently active for a given language.
     pub fn brackets(&self) -> impl Iterator<Item = (&BracketPair, bool)> {
@@ -1615,9 +1845,9 @@ impl LanguageScope {
     pub fn language_allowed(&self, name: &LanguageServerName) -> bool {
         let config = &self.language.config;
         let opt_in_servers = &config.scope_opt_in_language_servers;
-        if opt_in_servers.iter().any(|o| *o == *name) {
+        if opt_in_servers.contains(name) {
             if let Some(over) = self.config_override() {
-                over.opt_into_language_servers.iter().any(|o| *o == *name)
+                over.opt_into_language_servers.contains(name)
             } else {
                 false
             }
@@ -1675,12 +1905,13 @@ impl Grammar {
                 .expect("incompatible grammar");
             let mut chunks = text.chunks_in_range(0..text.len());
             parser
-                .parse_with(
+                .parse_with_options(
                     &mut move |offset, _| {
                         chunks.seek(offset);
                         chunks.next().unwrap_or("").as_bytes()
                     },
                     old_tree.as_ref(),
+                    None,
                 )
                 .unwrap()
         })
@@ -1714,6 +1945,9 @@ impl CodeLabel {
                 Kind::ENUM => grammar
                     .highlight_id_for_name("enum")
                     .or_else(|| grammar.highlight_id_for_name("type")),
+                Kind::ENUM_MEMBER => grammar
+                    .highlight_id_for_name("variant")
+                    .or_else(|| grammar.highlight_id_for_name("property")),
                 Kind::FIELD => grammar.highlight_id_for_name("property"),
                 Kind::FUNCTION => grammar.highlight_id_for_name("function"),
                 Kind::INTERFACE => grammar.highlight_id_for_name("type"),
@@ -1734,12 +1968,13 @@ impl CodeLabel {
         let runs = highlight_id
             .map(|highlight_id| vec![(0..label_length, highlight_id)])
             .unwrap_or_default();
-        let text = if let Some(detail) = &item.detail {
+        let text = if let Some(detail) = item.detail.as_deref().filter(|detail| detail != label) {
             format!("{label} {detail}")
         } else if let Some(description) = item
             .label_details
             .as_ref()
-            .and_then(|label_details| label_details.description.as_ref())
+            .and_then(|label_details| label_details.description.as_deref())
+            .filter(|description| description != label)
         {
             format!("{label} {description}")
         } else {
@@ -1895,8 +2130,6 @@ impl LspAdapter for FakeLspAdapter {
         unreachable!();
     }
 
-    fn process_diagnostics(&self, _: &mut lsp::PublishDiagnosticsParams) {}
-
     fn disk_based_diagnostic_sources(&self) -> Vec<String> {
         self.disk_based_diagnostics_sources.clone()
     }
@@ -1943,18 +2176,16 @@ pub fn point_from_lsp(point: lsp::Position) -> Unclipped<PointUtf16> {
 }
 
 pub fn range_to_lsp(range: Range<PointUtf16>) -> Result<lsp::Range> {
-    if range.start > range.end {
-        Err(anyhow!(
-            "Inverted range provided to an LSP request: {:?}-{:?}",
-            range.start,
-            range.end
-        ))
-    } else {
-        Ok(lsp::Range {
-            start: point_to_lsp(range.start),
-            end: point_to_lsp(range.end),
-        })
-    }
+    anyhow::ensure!(
+        range.start <= range.end,
+        "Inverted range provided to an LSP request: {:?}-{:?}",
+        range.start,
+        range.end
+    );
+    Ok(lsp::Range {
+        start: point_to_lsp(range.start),
+        end: point_to_lsp(range.end),
+    })
 }
 
 pub fn range_from_lsp(range: lsp::Range) -> Range<Unclipped<PointUtf16>> {
@@ -2035,5 +2266,101 @@ mod tests {
 
         // Loading an unknown language returns an error.
         assert!(languages.language_for_name("Unknown").await.is_err());
+    }
+
+    #[gpui::test]
+    async fn test_completion_label_omits_duplicate_data() {
+        let regular_completion_item_1 = lsp::CompletionItem {
+            label: "regular1".to_string(),
+            detail: Some("detail1".to_string()),
+            label_details: Some(lsp::CompletionItemLabelDetails {
+                detail: None,
+                description: Some("description 1".to_string()),
+            }),
+            ..lsp::CompletionItem::default()
+        };
+
+        let regular_completion_item_2 = lsp::CompletionItem {
+            label: "regular2".to_string(),
+            label_details: Some(lsp::CompletionItemLabelDetails {
+                detail: None,
+                description: Some("description 2".to_string()),
+            }),
+            ..lsp::CompletionItem::default()
+        };
+
+        let completion_item_with_duplicate_detail_and_proper_description = lsp::CompletionItem {
+            detail: Some(regular_completion_item_1.label.clone()),
+            ..regular_completion_item_1.clone()
+        };
+
+        let completion_item_with_duplicate_detail = lsp::CompletionItem {
+            detail: Some(regular_completion_item_1.label.clone()),
+            label_details: None,
+            ..regular_completion_item_1.clone()
+        };
+
+        let completion_item_with_duplicate_description = lsp::CompletionItem {
+            label_details: Some(lsp::CompletionItemLabelDetails {
+                detail: None,
+                description: Some(regular_completion_item_2.label.clone()),
+            }),
+            ..regular_completion_item_2.clone()
+        };
+
+        assert_eq!(
+            CodeLabel::fallback_for_completion(&regular_completion_item_1, None).text,
+            format!(
+                "{} {}",
+                regular_completion_item_1.label,
+                regular_completion_item_1.detail.unwrap()
+            ),
+            "LSP completion items with both detail and label_details.description should prefer detail"
+        );
+        assert_eq!(
+            CodeLabel::fallback_for_completion(&regular_completion_item_2, None).text,
+            format!(
+                "{} {}",
+                regular_completion_item_2.label,
+                regular_completion_item_2
+                    .label_details
+                    .as_ref()
+                    .unwrap()
+                    .description
+                    .as_ref()
+                    .unwrap()
+            ),
+            "LSP completion items without detail but with label_details.description should use that"
+        );
+        assert_eq!(
+            CodeLabel::fallback_for_completion(
+                &completion_item_with_duplicate_detail_and_proper_description,
+                None
+            )
+            .text,
+            format!(
+                "{} {}",
+                regular_completion_item_1.label,
+                regular_completion_item_1
+                    .label_details
+                    .as_ref()
+                    .unwrap()
+                    .description
+                    .as_ref()
+                    .unwrap()
+            ),
+            "LSP completion items with both detail and label_details.description should prefer description only if the detail duplicates the completion label"
+        );
+        assert_eq!(
+            CodeLabel::fallback_for_completion(&completion_item_with_duplicate_detail, None).text,
+            regular_completion_item_1.label,
+            "LSP completion items with duplicate label and detail, should omit the detail"
+        );
+        assert_eq!(
+            CodeLabel::fallback_for_completion(&completion_item_with_duplicate_description, None)
+                .text,
+            regular_completion_item_2.label,
+            "LSP completion items with duplicate label and detail, should omit the detail"
+        );
     }
 }

@@ -2,8 +2,8 @@ use std::cmp;
 
 use crate::InlineCompletion;
 use gpui::{
-    point, prelude::*, quad, size, AnyElement, App, Bounds, Corners, Edges, HighlightStyle, Hsla,
-    StyledText, TextLayout, TextStyle,
+    AnyElement, App, BorderStyle, Bounds, Corners, Edges, HighlightStyle, Hsla, StyledText,
+    TextLayout, TextStyle, point, prelude::*, quad, size,
 };
 use language::OffsetRangeExt;
 use settings::Settings;
@@ -69,7 +69,7 @@ impl CompletionDiffElement {
         let settings = ThemeSettings::get_global(cx).clone();
         let text_style = TextStyle {
             color: cx.theme().colors().editor_foreground,
-            font_size: settings.buffer_font_size().into(),
+            font_size: settings.buffer_font_size(cx).into(),
             font_family: settings.buffer_font.family,
             font_features: settings.buffer_font.features,
             font_fallbacks: settings.buffer_font.fallbacks,
@@ -78,7 +78,7 @@ impl CompletionDiffElement {
             font_style: settings.buffer_font.style,
             ..Default::default()
         };
-        let element = StyledText::new(diff).with_highlights(&text_style, diff_highlights);
+        let element = StyledText::new(diff).with_default_highlights(&text_style, diff_highlights);
         let text_layout = element.layout().clone();
 
         CompletionDiffElement {
@@ -105,9 +105,14 @@ impl Element for CompletionDiffElement {
         None
     }
 
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
     fn request_layout(
         &mut self,
         _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
@@ -117,6 +122,7 @@ impl Element for CompletionDiffElement {
     fn prepaint(
         &mut self,
         _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
         _bounds: gpui::Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
@@ -128,6 +134,7 @@ impl Element for CompletionDiffElement {
     fn paint(
         &mut self,
         _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
         _bounds: gpui::Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         _prepaint: &mut Self::PrepaintState,
@@ -150,6 +157,7 @@ impl Element for CompletionDiffElement {
                 cx.theme().colors().editor_active_line_background,
                 Edges::default(),
                 Hsla::transparent_black(),
+                BorderStyle::default(),
             ));
             self.element.paint(window, cx);
             window.paint_quad(quad(
@@ -158,6 +166,7 @@ impl Element for CompletionDiffElement {
                 cx.theme().players().local().cursor,
                 Edges::default(),
                 Hsla::transparent_black(),
+                BorderStyle::default(),
             ));
         }
     }

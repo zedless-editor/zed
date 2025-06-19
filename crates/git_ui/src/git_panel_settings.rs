@@ -58,15 +58,29 @@ pub struct GitPanelSettingsContent {
     ///
     /// Default: inherits editor scrollbar settings
     pub scrollbar: Option<ScrollbarSettings>,
+
+    /// What the default branch name should be when
+    /// `init.defaultBranch` is not set in git
+    ///
+    /// Default: main
+    pub fallback_branch_name: Option<String>,
+
+    /// Whether to sort entries in the panel by path
+    /// or by status (the default).
+    ///
+    /// Default: false
+    pub sort_by_path: Option<bool>,
 }
 
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct GitPanelSettings {
     pub button: bool,
     pub dock: DockPosition,
     pub default_width: Pixels,
     pub status_style: StatusStyle,
     pub scrollbar: ScrollbarSettings,
+    pub fallback_branch_name: String,
+    pub sort_by_path: bool,
 }
 
 impl Settings for GitPanelSettings {
@@ -79,5 +93,10 @@ impl Settings for GitPanelSettings {
         _: &mut gpui::App,
     ) -> anyhow::Result<Self> {
         sources.json_merge()
+    }
+
+    fn import_from_vscode(vscode: &settings::VsCodeSettings, current: &mut Self::FileContent) {
+        vscode.bool_setting("git.enabled", &mut current.button);
+        vscode.string_setting("git.defaultBranchName", &mut current.fallback_branch_name);
     }
 }

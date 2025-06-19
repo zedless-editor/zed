@@ -1,4 +1,4 @@
-use gpui::{prelude::*, AnyElement};
+use gpui::{AnyElement, prelude::*};
 use smallvec::SmallVec;
 use ui::prelude::*;
 
@@ -48,15 +48,12 @@ impl RenderOnce for ExtensionCard {
                             .absolute()
                             .top_0()
                             .left_0()
-                            .block_mouse_down()
+                            .block_mouse_except_scroll()
                             .cursor_default()
                             .size_full()
                             .items_center()
                             .justify_center()
-                            .bg(theme::color_alpha(
-                                cx.theme().colors().elevated_surface_background,
-                                0.8,
-                            ))
+                            .bg(cx.theme().colors().elevated_surface_background.alpha(0.8))
                             .child(Label::new("Overridden by dev extension.")),
                     )
                 }),

@@ -57,13 +57,16 @@ pub trait LabelCommon {
     fn alpha(self, alpha: f32) -> Self;
 
     /// Truncates overflowing text with an ellipsis (`…`) if needed.
-    fn text_ellipsis(self) -> Self;
+    fn truncate(self) -> Self;
 
     /// Sets the label to render as a single line.
     fn single_line(self) -> Self;
 
     /// Sets the font to the buffer's
     fn buffer_font(self, cx: &App) -> Self;
+
+    /// Styles the label to look like inline code.
+    fn inline_code(self, cx: &App) -> Self;
 }
 
 /// A label-like element that can be used to create a custom label when
@@ -84,7 +87,7 @@ pub struct LabelLike {
     alpha: Option<f32>,
     underline: bool,
     single_line: bool,
-    text_ellipsis: bool,
+    truncate: bool,
 }
 
 impl Default for LabelLike {
@@ -109,7 +112,7 @@ impl LabelLike {
             alpha: None,
             underline: false,
             single_line: false,
-            text_ellipsis: false,
+            truncate: false,
         }
     }
 }
@@ -166,8 +169,9 @@ impl LabelCommon for LabelLike {
         self
     }
 
-    fn text_ellipsis(mut self) -> Self {
-        self.text_ellipsis = true;
+    /// Truncates overflowing text with an ellipsis (`…`) if needed.
+    fn truncate(mut self) -> Self {
+        self.truncate = true;
         self
     }
 
@@ -180,6 +184,16 @@ impl LabelCommon for LabelLike {
         self.base = self
             .base
             .font(theme::ThemeSettings::get_global(cx).buffer_font.clone());
+        self
+    }
+
+    fn inline_code(mut self, cx: &App) -> Self {
+        self.base = self
+            .base
+            .font(theme::ThemeSettings::get_global(cx).buffer_font.clone())
+            .bg(cx.theme().colors().element_background)
+            .rounded_sm()
+            .px_0p5();
         self
     }
 }
@@ -220,7 +234,7 @@ impl RenderOnce for LabelLike {
             })
             .when(self.strikethrough, |this| this.line_through())
             .when(self.single_line, |this| this.whitespace_nowrap())
-            .when(self.text_ellipsis, |this| {
+            .when(self.truncate, |this| {
                 this.overflow_x_hidden().text_ellipsis()
             })
             .text_color(color)
@@ -229,5 +243,73 @@ impl RenderOnce for LabelLike {
                     .unwrap_or(ThemeSettings::get_global(cx).ui_font.weight),
             )
             .children(self.children)
+    }
+}
+
+impl Component for LabelLike {
+    fn scope() -> ComponentScope {
+        ComponentScope::Typography
+    }
+
+    fn name() -> &'static str {
+        "LabelLike"
+    }
+
+    fn description() -> Option<&'static str> {
+        Some(
+            "A flexible, customizable label-like component that serves as a base for other label types.",
+        )
+    }
+
+    fn preview(_window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+        Some(
+            v_flex()
+                .gap_6()
+                .children(vec![
+                    example_group_with_title(
+                        "Sizes",
+                        vec![
+                            single_example("Default", LabelLike::new().child("Default size").into_any_element()),
+                            single_example("Large", LabelLike::new().size(LabelSize::Large).child("Large size").into_any_element()),
+                            single_example("Small", LabelLike::new().size(LabelSize::Small).child("Small size").into_any_element()),
+                            single_example("XSmall", LabelLike::new().size(LabelSize::XSmall).child("Extra small size").into_any_element()),
+                        ],
+                    ),
+                    example_group_with_title(
+                        "Styles",
+                        vec![
+                            single_example("Bold", LabelLike::new().weight(FontWeight::BOLD).child("Bold text").into_any_element()),
+                            single_example("Italic", LabelLike::new().italic().child("Italic text").into_any_element()),
+                            single_example("Underline", LabelLike::new().underline().child("Underlined text").into_any_element()),
+                            single_example("Strikethrough", LabelLike::new().strikethrough().child("Strikethrough text").into_any_element()),
+                            single_example("Inline Code", LabelLike::new().inline_code(cx).child("const value = 42;").into_any_element()),
+                        ],
+                    ),
+                    example_group_with_title(
+                        "Colors",
+                        vec![
+                            single_example("Default", LabelLike::new().child("Default color").into_any_element()),
+                            single_example("Accent", LabelLike::new().color(Color::Accent).child("Accent color").into_any_element()),
+                            single_example("Error", LabelLike::new().color(Color::Error).child("Error color").into_any_element()),
+                            single_example("Alpha", LabelLike::new().alpha(0.5).child("50% opacity").into_any_element()),
+                        ],
+                    ),
+                    example_group_with_title(
+                        "Line Height",
+                        vec![
+                            single_example("Default", LabelLike::new().child("Default line height\nMulti-line text").into_any_element()),
+                            single_example("UI Label", LabelLike::new().line_height_style(LineHeightStyle::UiLabel).child("UI label line height\nMulti-line text").into_any_element()),
+                        ],
+                    ),
+                    example_group_with_title(
+                        "Special Cases",
+                        vec![
+                            single_example("Single Line", LabelLike::new().single_line().child("This is a very long text that should be displayed in a single line").into_any_element()),
+                            single_example("Truncate", LabelLike::new().truncate().child("This is a very long text that should be truncated with an ellipsis").into_any_element()),
+                        ],
+                    ),
+                ])
+                .into_any_element()
+        )
     }
 }

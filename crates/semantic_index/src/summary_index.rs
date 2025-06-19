@@ -1,12 +1,12 @@
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use arrayvec::ArrayString;
 use fs::{Fs, MTime};
-use futures::{stream::StreamExt, TryFutureExt};
+use futures::{TryFutureExt, stream::StreamExt};
 use futures_batch::ChunksTimeoutStreamExt;
-use gpui::{App, Entity, Task};
+use gpui::{App, AppContext as _, Entity, Task};
 use heed::{
-    types::{SerdeBincode, Str},
     RoTxn,
+    types::{SerdeBincode, Str},
 };
 use language_model::{
     LanguageModelCompletionEvent, LanguageModelId, LanguageModelRegistry, LanguageModelRequest,
@@ -130,7 +130,7 @@ impl SummaryIndex {
         &self,
         is_auto_available: bool,
         cx: &App,
-    ) -> impl Future<Output = Result<()>> {
+    ) -> impl Future<Output = Result<()>> + use<> {
         let start = Instant::now();
         let backlogged;
         let digest;
@@ -193,7 +193,7 @@ impl SummaryIndex {
         updated_entries: UpdatedEntriesSet,
         is_auto_available: bool,
         cx: &App,
-    ) -> impl Future<Output = Result<()>> {
+    ) -> impl Future<Output = Result<()>> + use<> {
         let start = Instant::now();
         let backlogged;
         let digest;
@@ -254,7 +254,7 @@ impl SummaryIndex {
         let db_connection = self.db_connection.clone();
         let db = self.summary_db;
         let (needs_summary_tx, needs_summary_rx) = channel::bounded(512);
-        let task = cx.background_executor().spawn(async move {
+        let task = cx.background_spawn(async move {
             let mut might_need_summary = pin!(might_need_summary);
             while let Some(file) = might_need_summary.next().await {
                 let tx = db_connection
@@ -291,7 +291,7 @@ impl SummaryIndex {
         let db_connection = self.db_connection.clone();
         let digest_db = self.file_digest_db;
         let backlog = Arc::clone(&self.backlog);
-        let task = cx.background_executor().spawn(async move {
+        let task = cx.background_spawn(async move {
             let txn = db_connection
                 .read_txn()
                 .context("failed to create read transaction")?;
@@ -368,7 +368,7 @@ impl SummaryIndex {
         let db_connection = self.db_connection.clone();
         let digest_db = self.file_digest_db;
         let backlog = Arc::clone(&self.backlog);
-        let task = cx.background_executor().spawn(async move {
+        let task = cx.background_spawn(async move {
             let txn = db_connection
                 .read_txn()
                 .context("failed to create read transaction")?;
@@ -422,7 +422,7 @@ impl SummaryIndex {
     ) -> MightNeedSummaryFiles {
         let fs = self.fs.clone();
         let (rx, tx) = channel::bounded(2048);
-        let task = cx.spawn(|cx| async move {
+        let task = cx.spawn(async move |cx| {
             cx.background_executor()
                 .scoped(|cx| {
                     for _ in 0..cx.num_cpus() {
@@ -490,7 +490,7 @@ impl SummaryIndex {
         cx: &App,
     ) -> SummarizeFiles {
         let (summarized_tx, summarized_rx) = channel::bounded(512);
-        let task = cx.spawn(|cx| async move {
+        let task = cx.spawn(async move |cx| {
             while let Ok(file) = unsummarized_files.recv().await {
                 log::debug!("Summarizing {:?}", file);
                 let summary = cx
@@ -528,7 +528,11 @@ impl SummaryIndex {
         }
     }
 
-    fn summarize_code(code: &str, path: &Path, cx: &App) -> impl Future<Output = Result<String>> {
+    fn summarize_code(
+        code: &str,
+        path: &Path,
+        cx: &App,
+    ) -> impl Future<Output = Result<String>> + use<> {
         let start = Instant::now();
         let (summary_model_id, use_cache): (LanguageModelId, bool) = (
             "Qwen/Qwen2-7B-Instruct".to_string().into(), // TODO read this from the user's settings.
@@ -538,8 +542,8 @@ impl SummaryIndex {
             .available_models(cx)
             .find(|model| &model.id() == &summary_model_id)
         else {
-            return cx.background_executor().spawn(async move {
-                Err(anyhow!("Couldn't find the preferred summarization model ({:?}) in the language registry's available models", summary_model_id))
+            return cx.background_spawn(async move {
+                anyhow::bail!("Couldn't find the preferred summarization model ({summary_model_id:?}) in the language registry's available models")
             });
         };
         let utf8_path = path.to_string_lossy();
@@ -553,44 +557,48 @@ impl SummaryIndex {
         );
 
         let request = LanguageModelRequest {
+            thread_id: None,
+            prompt_id: None,
+            mode: None,
+            intent: None,
             messages: vec![LanguageModelRequestMessage {
                 role: Role::User,
                 content: vec![prompt.into()],
                 cache: use_cache,
             }],
             tools: Vec::new(),
+            tool_choice: None,
             stop: Vec::new(),
             temperature: None,
         };
 
         let code_len = code.len();
-        cx.spawn(|cx| async move {
+        cx.spawn(async move |cx| {
             let stream = model.stream_completion(request, &cx);
-            cx.background_executor()
-                .spawn(async move {
-                    let answer: String = stream
-                        .await?
-                        .filter_map(|event| async {
-                            if let Ok(LanguageModelCompletionEvent::Text(text)) = event {
-                                Some(text)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                        .await;
+            cx.background_spawn(async move {
+                let answer: String = stream
+                    .await?
+                    .filter_map(|event| async {
+                        if let Ok(LanguageModelCompletionEvent::Text(text)) = event {
+                            Some(text)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+                    .await;
 
-                    log::info!(
-                        "It took {:?} to summarize {:?} bytes of code.",
-                        start.elapsed(),
-                        code_len
-                    );
+                log::info!(
+                    "It took {:?} to summarize {:?} bytes of code.",
+                    start.elapsed(),
+                    code_len
+                );
 
-                    log::debug!("Summary was: {:?}", &answer);
+                log::debug!("Summary was: {:?}", &answer);
 
-                    Ok(answer)
-                })
-                .await
+                Ok(answer)
+            })
+            .await
 
             // TODO if summarization failed, put it back in the backlog!
         })
@@ -604,7 +612,7 @@ impl SummaryIndex {
         let db_connection = self.db_connection.clone();
         let digest_db = self.file_digest_db;
         let summary_db = self.summary_db;
-        cx.background_executor().spawn(async move {
+        cx.background_spawn(async move {
             let mut summaries = pin!(summaries.chunks_timeout(4096, Duration::from_secs(2)));
             while let Some(summaries) = summaries.next().await {
                 let mut txn = db_connection.write_txn()?;
@@ -640,7 +648,7 @@ impl SummaryIndex {
         &self,
         worktree_abs_path: Arc<Path>,
         cx: &App,
-    ) -> impl Future<Output = Result<()>> {
+    ) -> impl Future<Output = Result<()>> + use<> {
         let start = Instant::now();
         let backlogged = {
             let (tx, rx) = channel::bounded(512);
@@ -650,7 +658,7 @@ impl SummaryIndex {
                 backlog.drain().collect()
             };
 
-            let task = cx.background_executor().spawn(async move {
+            let task = cx.background_spawn(async move {
                 tx.send(needs_summary).await?;
                 Ok(())
             });

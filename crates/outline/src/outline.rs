@@ -4,19 +4,20 @@ use std::{
     sync::Arc,
 };
 
-use editor::{scroll::Autoscroll, Anchor, AnchorRangeExt, Editor, EditorMode};
+use editor::RowHighlightOptions;
+use editor::{Anchor, AnchorRangeExt, Editor, scroll::Autoscroll};
 use fuzzy::StringMatch;
 use gpui::{
-    div, rems, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
-    HighlightStyle, ParentElement, Point, Render, Styled, StyledText, Task, TextStyle, WeakEntity,
-    Window,
+    App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle,
+    ParentElement, Point, Render, Styled, StyledText, Task, TextStyle, WeakEntity, Window, div,
+    rems,
 };
 use language::{Outline, OutlineItem};
 use ordered_float::OrderedFloat;
 use picker::{Picker, PickerDelegate};
 use settings::Settings;
-use theme::{color_alpha, ActiveTheme, ThemeSettings};
-use ui::{prelude::*, ListItem, ListItemSpacing};
+use theme::{ActiveTheme, ThemeSettings};
+use ui::{ListItem, ListItemSpacing, prelude::*};
 use util::ResultExt;
 use workspace::{DismissDecision, ModalView};
 
@@ -87,7 +88,7 @@ impl Render for OutlineView {
 
 impl OutlineView {
     fn register(editor: &mut Editor, _: Option<&mut Window>, cx: &mut Context<Editor>) {
-        if editor.mode() == EditorMode::Full {
+        if editor.mode().is_full() {
             let handle = cx.entity().downgrade();
             editor
                 .register_action(move |action, window, cx| {
@@ -171,7 +172,10 @@ impl OutlineViewDelegate {
                 active_editor.highlight_rows::<OutlineRowHighlights>(
                     outline_item.range.start..outline_item.range.end,
                     cx.theme().colors().editor_highlighted_line_background,
-                    true,
+                    RowHighlightOptions {
+                        autoscroll: true,
+                        ..Default::default()
+                    },
                     cx,
                 );
                 active_editor.request_autoscroll(Autoscroll::center(), cx);
@@ -277,6 +281,7 @@ impl PickerDelegate for OutlineViewDelegate {
         cx: &mut Context<Picker<OutlineViewDelegate>>,
     ) {
         self.prev_scroll_position.take();
+        self.set_selected_index(self.selected_match_index, true, cx);
 
         self.active_editor.update(cx, |active_editor, cx| {
             let highlight = active_editor
@@ -332,7 +337,7 @@ pub fn render_item<T>(
     cx: &App,
 ) -> StyledText {
     let highlight_style = HighlightStyle {
-        background_color: Some(color_alpha(cx.theme().colors().text_accent, 0.3)),
+        background_color: Some(cx.theme().colors().text_accent.alpha(0.3)),
         ..Default::default()
     };
     let custom_highlights = match_ranges
@@ -349,7 +354,7 @@ pub fn render_item<T>(
         font_family: settings.buffer_font.family.clone(),
         font_features: settings.buffer_font.features.clone(),
         font_fallbacks: settings.buffer_font.fallbacks.clone(),
-        font_size: settings.buffer_font_size().into(),
+        font_size: settings.buffer_font_size(cx).into(),
         font_weight: settings.buffer_font.weight,
         line_height: relative(1.),
         ..Default::default()
@@ -359,7 +364,7 @@ pub fn render_item<T>(
         outline_item.highlight_ranges.iter().cloned(),
     );
 
-    StyledText::new(outline_item.text.clone()).with_highlights(&text_style, highlights)
+    StyledText::new(outline_item.text.clone()).with_default_highlights(&text_style, highlights)
 }
 
 #[cfg(test)]
@@ -370,6 +375,7 @@ mod tests {
     use language::{Language, LanguageConfig, LanguageMatcher};
     use project::{FakeFs, Project};
     use serde_json::json;
+    use util::path;
     use workspace::{AppState, Workspace};
 
     #[gpui::test]
@@ -377,21 +383,22 @@ mod tests {
         init_test(cx);
         let fs = FakeFs::new(cx.executor());
         fs.insert_tree(
-            "/dir",
+            path!("/dir"),
             json!({
                 "a.rs": indoc!{"
-                    struct SingleLine; // display line 0
-                                       // display line 1
-                    struct MultiLine { // display line 2
-                        field_1: i32,  // display line 3
-                        field_2: i32,  // display line 4
-                    }                  // display line 5
+                                       // display line 0
+                    struct SingleLine; // display line 1
+                                       // display line 2
+                    struct MultiLine { // display line 3
+                        field_1: i32,  // display line 4
+                        field_2: i32,  // display line 5
+                    }                  // display line 6
                 "}
             }),
         )
         .await;
 
-        let project = Project::test(fs, ["/dir".as_ref()], cx).await;
+        let project = Project::test(fs, [path!("/dir").as_ref()], cx).await;
         project.read_with(cx, |project, _| project.languages().add(rust_lang()));
 
         let (workspace, cx) =
@@ -402,7 +409,9 @@ mod tests {
             })
         });
         let _buffer = project
-            .update(cx, |project, cx| project.open_local_buffer("/dir/a.rs", cx))
+            .update(cx, |project, cx| {
+                project.open_local_buffer(path!("/dir/a.rs"), cx)
+            })
             .await
             .unwrap();
         let editor = workspace
@@ -436,23 +445,29 @@ mod tests {
         );
         assert_single_caret_at_row(&editor, 0, cx);
 
+        cx.dispatch_action(menu::Confirm);
+        // Ensures that outline still goes to entry even if no queries have been made
+        assert_single_caret_at_row(&editor, 1, cx);
+
+        let outline_view = open_outline_view(&workspace, cx);
+
         cx.dispatch_action(menu::SelectNext);
         ensure_outline_view_contents(&outline_view, cx);
         assert_eq!(
             highlighted_display_rows(&editor, cx),
-            vec![2, 3, 4, 5],
+            vec![3, 4, 5, 6],
             "Second struct's rows should be highlighted"
         );
-        assert_single_caret_at_row(&editor, 0, cx);
+        assert_single_caret_at_row(&editor, 1, cx);
 
-        cx.dispatch_action(menu::SelectPrev);
+        cx.dispatch_action(menu::SelectPrevious);
         ensure_outline_view_contents(&outline_view, cx);
         assert_eq!(
             highlighted_display_rows(&editor, cx),
-            vec![0],
+            vec![1],
             "First struct's row should be highlighted"
         );
-        assert_single_caret_at_row(&editor, 0, cx);
+        assert_single_caret_at_row(&editor, 1, cx);
 
         cx.dispatch_action(menu::Cancel);
         ensure_outline_view_contents(&outline_view, cx);
@@ -461,7 +476,7 @@ mod tests {
             Vec::<u32>::new(),
             "No rows should be highlighted after outline view is cancelled and closed"
         );
-        assert_single_caret_at_row(&editor, 0, cx);
+        assert_single_caret_at_row(&editor, 1, cx);
 
         let outline_view = open_outline_view(&workspace, cx);
         ensure_outline_view_contents(&outline_view, cx);
@@ -470,16 +485,16 @@ mod tests {
             Vec::<u32>::new(),
             "Reopened outline view should have no highlights"
         );
-        assert_single_caret_at_row(&editor, 0, cx);
+        assert_single_caret_at_row(&editor, 1, cx);
 
-        let expected_first_highlighted_row = 2;
+        let expected_first_highlighted_row = 3;
         cx.dispatch_action(menu::SelectNext);
         ensure_outline_view_contents(&outline_view, cx);
         assert_eq!(
             highlighted_display_rows(&editor, cx),
-            vec![expected_first_highlighted_row, 3, 4, 5]
+            vec![expected_first_highlighted_row, 4, 5, 6]
         );
-        assert_single_caret_at_row(&editor, 0, cx);
+        assert_single_caret_at_row(&editor, 1, cx);
         cx.dispatch_action(menu::Confirm);
         ensure_outline_view_contents(&outline_view, cx);
         assert_eq!(
@@ -517,7 +532,7 @@ mod tests {
         outline_view: &Entity<Picker<OutlineViewDelegate>>,
         cx: &mut VisualTestContext,
     ) -> Vec<String> {
-        outline_view.update(cx, |outline_view, _| {
+        outline_view.read_with(cx, |outline_view, _| {
             let items = &outline_view.delegate.outline.items;
             outline_view
                 .delegate

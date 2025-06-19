@@ -7,15 +7,17 @@ use std::{
 use calloop::{LoopHandle, PostAction};
 use filedescriptor::Pipe;
 use strum::IntoEnumIterator;
-use wayland_client::{protocol::wl_data_offer::WlDataOffer, Connection};
+use wayland_client::{Connection, protocol::wl_data_offer::WlDataOffer};
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
 
 use crate::{
-    hash, platform::linux::platform::read_fd, ClipboardEntry, ClipboardItem, Image, ImageFormat,
-    WaylandClientStatePtr,
+    ClipboardEntry, ClipboardItem, Image, ImageFormat, WaylandClientStatePtr, hash,
+    platform::linux::platform::read_fd,
 };
 
-pub(crate) const TEXT_MIME_TYPE: &str = "text/plain;charset=utf-8";
+/// Text mime types that we'll offer to other programs.
+pub(crate) const TEXT_MIME_TYPES: [&str; 3] =
+    ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
 pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
 
 /// Text mime types that we'll accept from other programs.
@@ -119,15 +121,7 @@ impl<T: ReceiveData> DataOffer<T> {
 
     fn read_image(&self, connection: &Connection) -> Option<ClipboardItem> {
         for format in ImageFormat::iter() {
-            let mime_type = match format {
-                ImageFormat::Png => "image/png",
-                ImageFormat::Jpeg => "image/jpeg",
-                ImageFormat::Webp => "image/webp",
-                ImageFormat::Gif => "image/gif",
-                ImageFormat::Svg => "image/svg+xml",
-                ImageFormat::Bmp => "image/bmp",
-                ImageFormat::Tiff => "image/tiff",
-            };
+            let mime_type = format.mime_type();
             if !self.has_mime_type(mime_type) {
                 continue;
             }
@@ -256,7 +250,7 @@ impl Clipboard {
                             }
                             Ok(n) => written += n,
                             Err(err) if err.kind() == ErrorKind::WouldBlock => {
-                                break Ok(PostAction::Continue)
+                                break Ok(PostAction::Continue);
                             }
                             Err(_) => break Ok(PostAction::Remove),
                         }

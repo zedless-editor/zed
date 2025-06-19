@@ -22,12 +22,12 @@ use alacritty_terminal::{
     term::Config,
     vte::ansi::Processor,
 };
-use gpui::{canvas, size, ClipboardItem, Entity, FontStyle, TextStyle, WhiteSpace};
+use gpui::{Bounds, ClipboardItem, Entity, FontStyle, TextStyle, WhiteSpace, canvas, size};
 use language::Buffer;
 use settings::Settings as _;
 use terminal_view::terminal_element::TerminalElement;
 use theme::ThemeSettings;
-use ui::{prelude::*, IntoElement};
+use ui::{IntoElement, prelude::*};
 
 use crate::outputs::OutputContent;
 
@@ -59,7 +59,7 @@ const DEFAULT_NUM_COLUMNS: usize = 128;
 pub fn text_style(window: &mut Window, cx: &mut App) -> TextStyle {
     let settings = ThemeSettings::get_global(cx).clone();
 
-    let font_size = settings.buffer_font_size().into();
+    let font_size = settings.buffer_font_size(cx).into();
     let font_family = settings.buffer_font.family;
     let font_features = settings.buffer_font.features;
     let font_weight = settings.buffer_font.weight;
@@ -86,7 +86,7 @@ pub fn text_style(window: &mut Window, cx: &mut App) -> TextStyle {
 }
 
 /// Returns the default terminal size for the terminal output.
-pub fn terminal_size(window: &mut Window, cx: &mut App) -> terminal::TerminalSize {
+pub fn terminal_size(window: &mut Window, cx: &mut App) -> terminal::TerminalBounds {
     let text_style = text_style(window, cx);
     let text_system = window.text_system();
 
@@ -107,10 +107,13 @@ pub fn terminal_size(window: &mut Window, cx: &mut App) -> terminal::TerminalSiz
     let width = columns as f32 * cell_width;
     let height = num_lines as f32 * window.line_height();
 
-    terminal::TerminalSize {
+    terminal::TerminalBounds {
         cell_width,
         line_height,
-        size: size(width, height),
+        bounds: Bounds {
+            origin: gpui::Point::default(),
+            size: size(width, height),
+        },
     }
 }
 
@@ -255,7 +258,7 @@ impl Render for TerminalOutput {
                 cell: ic.cell.clone(),
             });
         let (cells, rects) =
-            TerminalElement::layout_grid(grid, &text_style, text_system, None, window, cx);
+            TerminalElement::layout_grid(grid, 0, &text_style, text_system, None, window, cx);
 
         // lines are 0-indexed, so we must add 1 to get the number of lines
         let text_line_height = text_style.line_height_in_pixels(window.rem_size());
@@ -278,10 +281,10 @@ impl Render for TerminalOutput {
                 for rect in rects {
                     rect.paint(
                         bounds.origin,
-                        &terminal::TerminalSize {
+                        &terminal::TerminalBounds {
                             cell_width,
                             line_height: text_line_height,
-                            size: bounds.size,
+                            bounds,
                         },
                         window,
                     );
@@ -290,10 +293,10 @@ impl Render for TerminalOutput {
                 for cell in cells {
                     cell.paint(
                         bounds.origin,
-                        &terminal::TerminalSize {
+                        &terminal::TerminalBounds {
                             cell_width,
                             line_height: text_line_height,
-                            size: bounds.size,
+                            bounds,
                         },
                         bounds,
                         window,

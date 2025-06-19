@@ -7,6 +7,7 @@
 (property_identifier) @property
 (shorthand_property_identifier) @property
 (shorthand_property_identifier_pattern) @property
+(private_property_identifier) @property
 
 ; Function and method calls
 
@@ -15,7 +16,7 @@
 
 (call_expression
   function: (member_expression
-    property: (property_identifier) @function.method))
+    property: [(property_identifier) (private_property_identifier)] @function.method))
 
 ; Function and method definitions
 
@@ -24,15 +25,18 @@
 (function_declaration
   name: (identifier) @function)
 (method_definition
-  name: (property_identifier) @function.method)
+  name: [(property_identifier) (private_property_identifier)] @function.method)
+(method_definition
+    name: (property_identifier) @constructor
+    (#eq? @constructor "constructor"))
 
 (pair
-  key: (property_identifier) @function.method
+  key: [(property_identifier) (private_property_identifier)] @function.method
   value: [(function_expression) (arrow_function)])
 
 (assignment_expression
   left: (member_expression
-    property: (property_identifier) @function.method)
+    property: [(property_identifier) (private_property_identifier)] @function.method)
   right: [(function_expression) (arrow_function)])
 
 (variable_declarator
@@ -44,9 +48,6 @@
   right: [(function_expression) (arrow_function)])
 
 ; Special identifiers
-
-((identifier) @constructor
- (#match? @constructor "^[A-Z]"))
 
 ((identifier) @type
  (#match? @type "^[A-Z]"))
@@ -86,6 +87,7 @@
 (escape_sequence) @string.escape
 
 (regex) @string.regex
+(regex_flags) @keyword.operator.regex
 (number) @number
 
 ; Tokens
@@ -145,6 +147,8 @@
   "||="
   "??="
 ] @operator
+
+(regex "/" @string.regex)
 
 [
   "("
@@ -221,6 +225,8 @@
   "<" @punctuation.bracket
   ">" @punctuation.bracket)
 
+(decorator "@" @punctuation.special)
+
 ; Keywords
 
 [ "abstract"
@@ -240,11 +246,13 @@
 ] @keyword
 
 ; JSX elements
-(jsx_opening_element (identifier) @tag (#match? @tag "^[a-z][^.]*$"))
-(jsx_closing_element (identifier) @tag (#match? @tag "^[a-z][^.]*$"))
-(jsx_self_closing_element (identifier) @tag (#match? @tag "^[a-z][^.]*$"))
+(jsx_opening_element (identifier) @tag.jsx (#match? @tag.jsx "^[a-z][^.]*$"))
+(jsx_closing_element (identifier) @tag.jsx (#match? @tag.jsx "^[a-z][^.]*$"))
+(jsx_self_closing_element (identifier) @tag.jsx (#match? @tag.jsx "^[a-z][^.]*$"))
 
-(jsx_attribute (property_identifier) @attribute)
-(jsx_opening_element (["<" ">"]) @punctuation.bracket)
-(jsx_closing_element (["</" ">"]) @punctuation.bracket)
-(jsx_self_closing_element (["<" "/>"]) @punctuation.bracket)
+(jsx_attribute (property_identifier) @attribute.jsx)
+(jsx_opening_element (["<" ">"]) @punctuation.bracket.jsx)
+(jsx_closing_element (["</" ">"]) @punctuation.bracket.jsx)
+(jsx_self_closing_element (["<" "/>"]) @punctuation.bracket.jsx)
+(jsx_attribute "=" @punctuation.delimiter.jsx)
+(jsx_text) @text.jsx

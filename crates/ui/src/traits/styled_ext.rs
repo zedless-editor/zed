@@ -1,23 +1,24 @@
-use gpui::{hsla, App, Styled};
+use gpui::{App, Styled, hsla};
 
-use crate::prelude::*;
 use crate::ElevationIndex;
+use crate::prelude::*;
 
 fn elevated<E: Styled>(this: E, cx: &App, index: ElevationIndex) -> E {
     this.bg(cx.theme().colors().elevated_surface_background)
         .rounded_lg()
         .border_1()
         .border_color(cx.theme().colors().border_variant)
-        .shadow(index.shadow())
+        .shadow(index.shadow(cx))
 }
 
 fn elevated_borderless<E: Styled>(this: E, cx: &mut App, index: ElevationIndex) -> E {
     this.bg(cx.theme().colors().elevated_surface_background)
         .rounded_lg()
-        .shadow(index.shadow())
+        .shadow(index.shadow(cx))
 }
 
 /// Extends [`gpui::Styled`] with Zed-specific styling methods.
+#[cfg_attr(debug_assertions, gpui_macros::derive_inspector_reflection)]
 pub trait StyledExt: Styled + Sized {
     /// Horizontally stacks elements.
     ///
@@ -74,7 +75,7 @@ pub trait StyledExt: Styled + Sized {
     /// Sets `bg()`, `rounded_lg()`, `border()`, `border_color()`, `shadow()`
     ///
     /// Examples: Settings Modal, Channel Management, Wizards/Setup UI, Dialogs
-    fn elevation_3(self, cx: &mut App) -> Self {
+    fn elevation_3(self, cx: &App) -> Self {
         elevated(self, cx, ElevationIndex::ModalSurface)
     }
 

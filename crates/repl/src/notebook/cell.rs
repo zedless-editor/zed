@@ -3,18 +3,20 @@ use std::sync::Arc;
 
 use editor::{Editor, EditorMode, MultiBuffer};
 use futures::future::Shared;
-use gpui::{prelude::*, App, Entity, Hsla, Task, TextStyleRefinement};
+use gpui::{
+    App, Entity, Hsla, RetainAllImageCache, Task, TextStyleRefinement, image_cache, prelude::*,
+};
 use language::{Buffer, Language, LanguageRegistry};
 use markdown_preview::{markdown_parser::parse_markdown, markdown_renderer::render_markdown_block};
 use nbformat::v4::{CellId, CellMetadata, CellType};
 use settings::Settings as _;
 use theme::ThemeSettings;
-use ui::{prelude::*, IconButtonShape};
+use ui::{IconButtonShape, prelude::*};
 use util::ResultExt;
 
 use crate::{
     notebook::{CODE_BLOCK_INSET, GUTTER_WIDTH},
-    outputs::{plain::TerminalOutput, user_error::ErrorView, Output},
+    outputs::{Output, plain::TerminalOutput, user_error::ErrorView},
 };
 
 #[derive(Copy, Clone, PartialEq, PartialOrd)]
@@ -132,15 +134,14 @@ impl Cell {
                         let languages = languages.clone();
                         let source = source.clone();
 
-                        cx.spawn_in(window, |this, mut cx| async move {
+                        cx.spawn_in(window, async move |this, cx| {
                             let parsed_markdown = cx
-                                .background_executor()
-                                .spawn(async move {
+                                .background_spawn(async move {
                                     parse_markdown(&source, None, Some(languages)).await
                                 })
                                 .await;
 
-                            this.update(&mut cx, |cell: &mut MarkdownCell, _| {
+                            this.update(cx, |cell: &mut MarkdownCell, _| {
                                 cell.parsed_markdown = Some(parsed_markdown);
                             })
                             .log_err();
@@ -149,6 +150,7 @@ impl Cell {
 
                     MarkdownCell {
                         markdown_parsing_task,
+                        image_cache: RetainAllImageCache::new(cx),
                         languages: languages.clone(),
                         id: id.clone(),
                         metadata: metadata.clone(),
@@ -178,7 +180,6 @@ impl Cell {
                         EditorMode::AutoHeight { max_lines: 1024 },
                         multi_buffer,
                         None,
-                        false,
                         window,
                         cx,
                     );
@@ -187,7 +188,7 @@ impl Cell {
 
                     let refinement = TextStyleRefinement {
                         font_family: Some(theme.buffer_font.family.clone()),
-                        font_size: Some(theme.buffer_font_size.into()),
+                        font_size: Some(theme.buffer_font_size(cx).into()),
                         color: Some(cx.theme().colors().editor_foreground),
                         background_color: Some(gpui::transparent_black()),
                         ..Default::default()
@@ -202,10 +203,10 @@ impl Cell {
                 });
 
                 let buffer = buffer.clone();
-                let language_task = cx.spawn_in(window, |this, mut cx| async move {
+                let language_task = cx.spawn_in(window, async move |this, cx| {
                     let language = notebook_language.await;
 
-                    buffer.update(&mut cx, |buffer, cx| {
+                    buffer.update(cx, |buffer, cx| {
                         buffer.set_language(language.clone(), cx);
                     });
                 });
@@ -331,6 +332,7 @@ pub trait RunnableCell: RenderableCell {
 pub struct MarkdownCell {
     id: CellId,
     metadata: CellMetadata,
+    image_cache: Entity<RetainAllImageCache>,
     source: String,
     parsed_markdown: Option<markdown_preview::markdown_elements::ParsedMarkdown>,
     markdown_parsing_task: Task<()>,
@@ -398,19 +400,19 @@ impl Render for MarkdownCell {
                 h_flex()
                     .w_full()
                     .pr_6()
-                    .rounded_sm()
+                    .rounded_xs()
                     .items_start()
                     .gap(DynamicSpacing::Base08.rems(cx))
                     .bg(self.selected_bg_color(window, cx))
                     .child(self.gutter(window, cx))
                     .child(
                         v_flex()
+                            .image_cache(self.image_cache.clone())
                             .size_full()
                             .flex_1()
                             .p_3()
                             .font_ui(cx)
                             .text_size(TextSize::Default.rems(cx))
-                            //
                             .children(parsed.children.iter().map(|child| {
                                 div().relative().child(div().relative().child(
                                     render_markdown_block(child, &mut markdown_render_context),
@@ -573,7 +575,7 @@ impl Render for CodeCell {
                 h_flex()
                     .w_full()
                     .pr_6()
-                    .rounded_sm()
+                    .rounded_xs()
                     .items_start()
                     .gap(DynamicSpacing::Base08.rems(cx))
                     .bg(self.selected_bg_color(window, cx))
@@ -599,7 +601,7 @@ impl Render for CodeCell {
                 h_flex()
                     .w_full()
                     .pr_6()
-                    .rounded_sm()
+                    .rounded_xs()
                     .items_start()
                     .gap(DynamicSpacing::Base08.rems(cx))
                     .bg(self.selected_bg_color(window, cx))
@@ -647,7 +649,7 @@ impl Render for CodeCell {
                                             // .w_full()
                                             // .mt_3()
                                             // .p_3()
-                                            // .rounded_md()
+                                            // .rounded_sm()
                                             // .bg(cx.theme().colors().editor_background)
                                             // .border(px(1.))
                                             // .border_color(cx.theme().colors().border)
@@ -719,7 +721,7 @@ impl Render for RawCell {
                 h_flex()
                     .w_full()
                     .pr_2()
-                    .rounded_sm()
+                    .rounded_xs()
                     .items_start()
                     .gap(DynamicSpacing::Base08.rems(cx))
                     .bg(self.selected_bg_color(window, cx))

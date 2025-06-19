@@ -1,7 +1,7 @@
 use super::*;
 use editor::Editor;
 use gpui::{TestAppContext, VisualTestContext};
-use menu::SelectPrev;
+use menu::SelectPrevious;
 use project::{Project, ProjectPath};
 use serde_json::json;
 use std::path::Path;
@@ -10,9 +10,7 @@ use workspace::{AppState, Workspace};
 
 #[ctor::ctor]
 fn init_logger() {
-    if std::env::var("RUST_LOG").is_ok() {
-        env_logger::init();
-    }
+    zlog::init_test();
 }
 
 #[gpui::test]
@@ -64,7 +62,7 @@ async fn test_open_with_prev_tab_selected_and_cycle_on_toggle_action(
         assert_match_selection(tab_switcher, 3, tab_1.boxed_clone());
     });
 
-    cx.dispatch_action(SelectPrev);
+    cx.dispatch_action(SelectPrevious);
     tab_switcher.update(cx, |tab_switcher, _| {
         assert_eq!(tab_switcher.delegate.matches.len(), 4);
         assert_match_at_position(tab_switcher, 0, tab_4.boxed_clone());
@@ -117,7 +115,7 @@ async fn test_open_item_on_modifiers_release(cx: &mut gpui::TestAppContext) {
         .fs
         .as_fake()
         .insert_tree(
-            "/root",
+            path!("/root"),
             json!({
                 "1.txt": "First file",
                 "2.txt": "Second file",
@@ -125,7 +123,7 @@ async fn test_open_item_on_modifiers_release(cx: &mut gpui::TestAppContext) {
         )
         .await;
 
-    let project = Project::test(app_state.fs.clone(), ["/root".as_ref()], cx).await;
+    let project = Project::test(app_state.fs.clone(), [path!("/root").as_ref()], cx).await;
     let (workspace, cx) =
         cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
 
@@ -326,7 +324,7 @@ async fn open_buffer(
     workspace: &Entity<Workspace>,
     cx: &mut gpui::VisualTestContext,
 ) -> Box<dyn ItemHandle> {
-    let project = workspace.update(cx, |workspace, _| workspace.project().clone());
+    let project = workspace.read_with(cx, |workspace, _| workspace.project().clone());
     let worktree_id = project.update(cx, |project, cx| {
         let worktree = project.worktrees(cx).last().expect("worktree not found");
         worktree.read(cx).id()

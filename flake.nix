@@ -20,7 +20,7 @@
       "aarch64-darwin"
     ];
 
-    forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f (nixpkgs.legacyPackages.${system}));
+    forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
   in {
     packages = forAllSystems (pkgs: {
       zed-editor = pkgs.callPackage ./nix/package.nix {};

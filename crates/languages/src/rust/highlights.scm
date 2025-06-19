@@ -1,4 +1,7 @@
+(identifier) @variable
+(metavariable) @variable
 (type_identifier) @type
+(fragment_specifier) @type
 (primitive_type) @type.builtin
 (self) @variable.special
 (field_identifier) @property
@@ -99,6 +102,7 @@
   "mod"
   "move"
   "pub"
+  "raw"
   "ref"
   "return"
   "static"
@@ -129,7 +133,7 @@
   (float_literal)
 ] @number
 
-(boolean_literal) @constant
+(boolean_literal) @boolean
 
 [
   (line_comment)
@@ -188,5 +192,15 @@ operator: "/" @operator
 
 (parameter (identifier) @variable.parameter)
 
-(attribute_item) @attribute
-(inner_attribute_item) @attribute
+(attribute_item (attribute [
+  (identifier) @attribute
+  (scoped_identifier name: (identifier) @attribute)
+]))
+(inner_attribute_item (attribute [
+  (identifier) @attribute
+  (scoped_identifier name: (identifier) @attribute)
+]))
+; Match nested snake case identifiers in attribute items.
+(token_tree (identifier) @attribute (#match? @attribute "^[a-z\\d_]*$"))
+; Override the attribute match for paths in scoped type/enum identifiers.
+(token_tree (identifier) @variable "::" (identifier) @type (#match? @type "^[A-Z]"))

@@ -1,5 +1,9 @@
-use anyhow::{bail, Context};
-use serde::de::{self, Deserialize, Deserializer, Visitor};
+use anyhow::{Context as _, bail};
+use schemars::{JsonSchema, SchemaGenerator, schema::Schema};
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, Visitor},
+};
 use std::{
     fmt::{self, Display, Formatter},
     hash::{Hash, Hasher},
@@ -82,7 +86,7 @@ impl From<Rgba> for u32 {
 
 struct RgbaVisitor;
 
-impl<'de> Visitor<'de> for RgbaVisitor {
+impl Visitor<'_> for RgbaVisitor {
     type Value = Rgba;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -94,9 +98,45 @@ impl<'de> Visitor<'de> for RgbaVisitor {
     }
 }
 
+impl JsonSchema for Rgba {
+    fn schema_name() -> String {
+        "Rgba".to_string()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        use schemars::schema::{InstanceType, SchemaObject, StringValidation};
+
+        Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            string: Some(Box::new(StringValidation {
+                pattern: Some(
+                    r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$".to_string(),
+                ),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
+}
+
 impl<'de> Deserialize<'de> for Rgba {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         deserializer.deserialize_str(RgbaVisitor)
+    }
+}
+
+impl Serialize for Rgba {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let r = (self.r * 255.0).round() as u8;
+        let g = (self.g * 255.0).round() as u8;
+        let b = (self.b * 255.0).round() as u8;
+        let a = (self.a * 255.0).round() as u8;
+
+        let s = format!("#{r:02x}{g:02x}{b:02x}{a:02x}");
+        serializer.serialize_str(&s)
     }
 }
 
@@ -180,7 +220,7 @@ impl TryFrom<&'_ str> for Rgba {
                 /// Duplicates a given hex digit.
                 /// E.g., `0xf` -> `0xff`.
                 const fn duplicate(value: u8) -> u8 {
-                    value << 4 | value
+                    (value << 4) | value
                 }
 
                 (duplicate(r), duplicate(g), duplicate(b), duplicate(a))
@@ -486,13 +526,66 @@ impl Hsla {
         self.a *= 1.0 - factor.clamp(0., 1.);
     }
 
-    /// Returns a new HSLA color with the same hue, saturation, and lightness, but with a modified alpha value.
+    /// Multiplies the alpha value of the color by a given factor
+    /// and returns a new HSLA color.
+    ///
+    /// Useful for transforming colors with dynamic opacity,
+    /// like a color from an external source.
+    ///
+    /// Example:
+    /// ```
+    /// let color = gpui::red();
+    /// let faded_color = color.opacity(0.5);
+    /// assert_eq!(faded_color.a, 0.5);
+    /// ```
+    ///
+    /// This will return a red color with half the opacity.
+    ///
+    /// Example:
+    /// ```
+    /// let color = hlsa(0.7, 1.0, 0.5, 0.7); // A saturated blue
+    /// let faded_color = color.opacity(0.16);
+    /// assert_eq!(faded_color.a, 0.112);
+    /// ```
+    ///
+    /// This will return a blue color with around ~10% opacity,
+    /// suitable for an element's hover or selected state.
+    ///
     pub fn opacity(&self, factor: f32) -> Self {
         Hsla {
             h: self.h,
             s: self.s,
             l: self.l,
             a: self.a * factor.clamp(0., 1.),
+        }
+    }
+
+    /// Returns a new HSLA color with the same hue, saturation,
+    /// and lightness, but with a new alpha value.
+    ///
+    /// Example:
+    /// ```
+    /// let color = gpui::red();
+    /// let red_color = color.alpha(0.25);
+    /// assert_eq!(red_color.a, 0.25);
+    /// ```
+    ///
+    /// This will return a red color with half the opacity.
+    ///
+    /// Example:
+    /// ```
+    /// let color = hsla(0.7, 1.0, 0.5, 0.7); // A saturated blue
+    /// let faded_color = color.alpha(0.25);
+    /// assert_eq!(faded_color.a, 0.25);
+    /// ```
+    ///
+    /// This will return a blue color with 25% opacity.
+    pub fn alpha(&self, a: f32) -> Self {
+        Hsla {
+            h: self.h,
+            s: self.s,
+            l: self.l,
+            a: a.clamp(0., 1.),
         }
     }
 }
@@ -535,20 +628,35 @@ impl From<Rgba> for Hsla {
     }
 }
 
+impl JsonSchema for Hsla {
+    fn schema_name() -> String {
+        Rgba::schema_name()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        Rgba::json_schema(generator)
+    }
+}
+
+impl Serialize for Hsla {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        Rgba::from(*self).serialize(serializer)
+    }
+}
+
 impl<'de> Deserialize<'de> for Hsla {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        // First, deserialize it into Rgba
-        let rgba = Rgba::deserialize(deserializer)?;
-
-        // Then, use the From<Rgba> for Hsla implementation to convert it
-        Ok(Hsla::from(rgba))
+        Ok(Rgba::deserialize(deserializer)?.into())
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[repr(C)]
 pub(crate) enum BackgroundTag {
     Solid = 0,
@@ -561,7 +669,7 @@ pub(crate) enum BackgroundTag {
 /// References:
 /// - <https://developer.mozilla.org/en-US/docs/Web/CSS/color-interpolation-method>
 /// - <https://www.w3.org/TR/css-color-4/#typedef-color-space>
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[repr(C)]
 pub enum ColorSpace {
     #[default]
@@ -581,7 +689,7 @@ impl Display for ColorSpace {
 }
 
 /// A background color, which can be either a solid color or a linear gradient.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[repr(C)]
 pub struct Background {
     pub(crate) tag: BackgroundTag,
@@ -591,6 +699,28 @@ pub struct Background {
     pub(crate) colors: [LinearColorStop; 2],
     /// Padding for alignment for repr(C) layout.
     pad: u32,
+}
+
+impl std::fmt::Debug for Background {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self.tag {
+            BackgroundTag::Solid => write!(f, "Solid({:?})", self.solid),
+            BackgroundTag::LinearGradient => {
+                write!(
+                    f,
+                    "LinearGradient({}, {:?}, {:?})",
+                    self.gradient_angle_or_pattern_height, self.colors[0], self.colors[1]
+                )
+            }
+            BackgroundTag::PatternSlash => {
+                write!(
+                    f,
+                    "PatternSlash({:?}, {})",
+                    self.solid, self.gradient_angle_or_pattern_height
+                )
+            }
+        }
+    }
 }
 
 impl Eq for Background {}
@@ -607,38 +737,31 @@ impl Default for Background {
     }
 }
 
-impl Background {
-    /// Gets the color of the background if there is one.
-    pub fn color(&self) -> Option<Hsla> {
-        match self.tag {
-            BackgroundTag::Solid => Some(self.solid),
-            BackgroundTag::LinearGradient => None,
-            BackgroundTag::PatternSlash => Some(self.solid),
-        }
+/// Creates a hash pattern background
+pub fn pattern_slash(color: Hsla, width: f32, interval: f32) -> Background {
+    let width_scaled = (width * 255.0) as u32;
+    let interval_scaled = (interval * 255.0) as u32;
+    let height = ((width_scaled * 0xFFFF) + interval_scaled) as f32;
+
+    Background {
+        tag: BackgroundTag::PatternSlash,
+        solid: color,
+        gradient_angle_or_pattern_height: height,
+        ..Default::default()
     }
 }
 
-/// Creates a background with a solid color
-pub fn solid_color(color: impl Into<Hsla>) -> Background {
+/// Creates a solid background color.
+pub fn solid_background(color: impl Into<Hsla>) -> Background {
     Background {
         solid: color.into(),
         ..Default::default()
     }
 }
 
-/// Creates a hash pattern background
-pub fn pattern_slash(color: Hsla, thickness: f32) -> Background {
-    Background {
-        tag: BackgroundTag::PatternSlash,
-        solid: color,
-        gradient_angle_or_pattern_height: thickness,
-        ..Default::default()
-    }
-}
-
 /// Creates a LinearGradient background color.
 ///
-/// The gradient line's angle of direction. A value of `0.` is equivalent to to top; increasing values rotate clockwise from there.
+/// The gradient line's angle of direction. A value of `0.` is equivalent to top; increasing values rotate clockwise from there.
 ///
 /// The `angle` is in degrees value in the range 0.0 to 360.0.
 ///
@@ -659,7 +782,7 @@ pub fn linear_gradient(
 /// A color stop in a linear gradient.
 ///
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/gradient/linear-gradient#linear-color-stop>
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[repr(C)]
 pub struct LinearColorStop {
     /// The color of the color stop.

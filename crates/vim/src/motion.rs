@@ -1,12 +1,12 @@
 use editor::{
+    Anchor, Bias, DisplayPoint, Editor, RowExt, ToOffset, ToPoint,
     display_map::{DisplayRow, DisplaySnapshot, FoldPoint, ToDisplayPoint},
     movement::{
-        self, find_boundary, find_preceding_boundary_display_point, FindRange, TextLayoutDetails,
+        self, FindRange, TextLayoutDetails, find_boundary, find_preceding_boundary_display_point,
     },
     scroll::Autoscroll,
-    Anchor, Bias, DisplayPoint, Editor, RowExt, ToOffset, ToPoint,
 };
-use gpui::{actions, impl_actions, px, Context, Window};
+use gpui::{Context, Window, action_with_deprecated_aliases, actions, impl_actions, px};
 use language::{CharKind, Point, Selection, SelectionGoal};
 use multi_buffer::MultiBufferRow;
 use schemars::JsonSchema;
@@ -15,16 +15,36 @@ use std::ops::Range;
 use workspace::searchable::Direction;
 
 use crate::{
+    Vim,
     normal::mark,
     state::{Mode, Operator},
     surrounds::SurroundsType,
-    Vim,
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MotionKind {
+    Linewise,
+    Exclusive,
+    Inclusive,
+}
+
+impl MotionKind {
+    pub(crate) fn for_mode(mode: Mode) -> Self {
+        match mode {
+            Mode::VisualLine => MotionKind::Linewise,
+            _ => MotionKind::Exclusive,
+        }
+    }
+
+    pub(crate) fn linewise(&self) -> bool {
+        matches!(self, MotionKind::Linewise)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Motion {
     Left,
-    Backspace,
+    WrappingLeft,
     Down {
         display_lines: bool,
     },
@@ -32,7 +52,7 @@ pub enum Motion {
         display_lines: bool,
     },
     Right,
-    Space,
+    WrappingRight,
     NextWordStart {
         ignore_punctuation: bool,
     },
@@ -64,6 +84,9 @@ pub enum Motion {
     StartOfLine {
         display_lines: bool,
     },
+    MiddleOfLine {
+        display_lines: bool,
+    },
     EndOfLine {
         display_lines: bool,
     },
@@ -74,6 +97,7 @@ pub enum Motion {
     StartOfDocument,
     EndOfDocument,
     Matching,
+    GoToPercentage,
     UnmatchedForward {
         char: char,
     },
@@ -126,6 +150,12 @@ pub enum Motion {
     PreviousMethodEnd,
     NextComment,
     PreviousComment,
+    PreviousLesserIndent,
+    PreviousGreaterIndent,
+    PreviousSameIndent,
+    NextLesserIndent,
+    NextGreaterIndent,
+    NextSameIndent,
 
     // we don't have a good way to run a search synchronously, so
     // we handle search motions by running the search async and then
@@ -138,6 +168,13 @@ pub enum Motion {
         anchor: Anchor,
         line: bool,
     },
+}
+
+#[derive(Clone, Copy)]
+enum IndentType {
+    Lesser,
+    Greater,
+    Same,
 }
 
 #[derive(Clone, Deserialize, JsonSchema, PartialEq)]
@@ -233,6 +270,13 @@ pub struct StartOfLine {
 
 #[derive(Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
+struct MiddleOfLine {
+    #[serde(default)]
+    display_lines: bool,
+}
+
+#[derive(Clone, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 struct UnmatchedForward {
     #[serde(default)]
     char: char,
@@ -249,6 +293,7 @@ impl_actions!(
     vim,
     [
         StartOfLine,
+        MiddleOfLine,
         EndOfLine,
         FirstNonWhitespace,
         Down,
@@ -281,6 +326,7 @@ actions!(
         StartOfDocument,
         EndOfDocument,
         Matching,
+        GoToPercentage,
         NextLineStart,
         PreviousLineStart,
         StartOfLineDownward,
@@ -301,15 +347,28 @@ actions!(
         PreviousMethodEnd,
         NextComment,
         PreviousComment,
+        PreviousLesserIndent,
+        PreviousGreaterIndent,
+        PreviousSameIndent,
+        NextLesserIndent,
+        NextGreaterIndent,
+        NextSameIndent,
     ]
 );
+
+action_with_deprecated_aliases!(vim, WrappingLeft, ["vim::Backspace"]);
+action_with_deprecated_aliases!(vim, WrappingRight, ["vim::Space"]);
 
 pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
     Vim::action(editor, cx, |vim, _: &Left, window, cx| {
         vim.motion(Motion::Left, window, cx)
     });
+    Vim::action(editor, cx, |vim, _: &WrappingLeft, window, cx| {
+        vim.motion(Motion::WrappingLeft, window, cx)
+    });
+    // Deprecated.
     Vim::action(editor, cx, |vim, _: &Backspace, window, cx| {
-        vim.motion(Motion::Backspace, window, cx)
+        vim.motion(Motion::WrappingLeft, window, cx)
     });
     Vim::action(editor, cx, |vim, action: &Down, window, cx| {
         vim.motion(
@@ -332,8 +391,12 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
     Vim::action(editor, cx, |vim, _: &Right, window, cx| {
         vim.motion(Motion::Right, window, cx)
     });
+    Vim::action(editor, cx, |vim, _: &WrappingRight, window, cx| {
+        vim.motion(Motion::WrappingRight, window, cx)
+    });
+    // Deprecated.
     Vim::action(editor, cx, |vim, _: &Space, window, cx| {
-        vim.motion(Motion::Space, window, cx)
+        vim.motion(Motion::WrappingRight, window, cx)
     });
     Vim::action(
         editor,
@@ -351,6 +414,15 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
     Vim::action(editor, cx, |vim, action: &StartOfLine, window, cx| {
         vim.motion(
             Motion::StartOfLine {
+                display_lines: action.display_lines,
+            },
+            window,
+            cx,
+        )
+    });
+    Vim::action(editor, cx, |vim, action: &MiddleOfLine, window, cx| {
+        vim.motion(
+            Motion::MiddleOfLine {
                 display_lines: action.display_lines,
             },
             window,
@@ -390,6 +462,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
     });
     Vim::action(editor, cx, |vim, _: &Matching, window, cx| {
         vim.motion(Motion::Matching, window, cx)
+    });
+    Vim::action(editor, cx, |vim, _: &GoToPercentage, window, cx| {
+        vim.motion(Motion::GoToPercentage, window, cx)
     });
     Vim::action(
         editor,
@@ -536,6 +611,24 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
     Vim::action(editor, cx, |vim, &PreviousComment, window, cx| {
         vim.motion(Motion::PreviousComment, window, cx)
     });
+    Vim::action(editor, cx, |vim, &PreviousLesserIndent, window, cx| {
+        vim.motion(Motion::PreviousLesserIndent, window, cx)
+    });
+    Vim::action(editor, cx, |vim, &PreviousGreaterIndent, window, cx| {
+        vim.motion(Motion::PreviousGreaterIndent, window, cx)
+    });
+    Vim::action(editor, cx, |vim, &PreviousSameIndent, window, cx| {
+        vim.motion(Motion::PreviousSameIndent, window, cx)
+    });
+    Vim::action(editor, cx, |vim, &NextLesserIndent, window, cx| {
+        vim.motion(Motion::NextLesserIndent, window, cx)
+    });
+    Vim::action(editor, cx, |vim, &NextGreaterIndent, window, cx| {
+        vim.motion(Motion::NextGreaterIndent, window, cx)
+    });
+    Vim::action(editor, cx, |vim, &NextSameIndent, window, cx| {
+        vim.motion(Motion::NextSameIndent, window, cx)
+    });
 }
 
 impl Vim {
@@ -577,6 +670,7 @@ impl Vim {
         }
 
         let count = Vim::take_count(cx);
+        let forced_motion = Vim::take_forced_motion(cx);
         let active_operator = self.active_operator();
         let mut waiting_operator: Option<Operator> = None;
         match self.mode {
@@ -586,7 +680,14 @@ impl Vim {
                         target: Some(SurroundsType::Motion(motion)),
                     });
                 } else {
-                    self.normal_motion(motion.clone(), active_operator.clone(), count, window, cx)
+                    self.normal_motion(
+                        motion.clone(),
+                        active_operator.clone(),
+                        count,
+                        forced_motion,
+                        window,
+                        cx,
+                    )
                 }
             }
             Mode::Visual | Mode::VisualLine | Mode::VisualBlock => {
@@ -606,7 +707,7 @@ impl Vim {
 // Motion handling is specified here:
 // https://github.com/vim/vim/blob/master/runtime/doc/motion.txt
 impl Motion {
-    pub fn linewise(&self) -> bool {
+    fn default_kind(&self) -> MotionKind {
         use Motion::*;
         match self {
             Down { .. }
@@ -617,8 +718,6 @@ impl Motion {
             | NextLineStart
             | PreviousLineStart
             | StartOfLineDownward
-            | StartOfParagraph
-            | EndOfParagraph
             | WindowTop
             | WindowMiddle
             | WindowBottom
@@ -632,37 +731,55 @@ impl Motion {
             | PreviousMethodEnd
             | NextComment
             | PreviousComment
-            | Jump { line: true, .. } => true,
+            | PreviousLesserIndent
+            | PreviousGreaterIndent
+            | PreviousSameIndent
+            | NextLesserIndent
+            | NextGreaterIndent
+            | NextSameIndent
+            | GoToPercentage
+            | Jump { line: true, .. } => MotionKind::Linewise,
             EndOfLine { .. }
+            | EndOfLineDownward
             | Matching
-            | UnmatchedForward { .. }
-            | UnmatchedBackward { .. }
             | FindForward { .. }
-            | Left
-            | Backspace
+            | NextWordEnd { .. }
+            | PreviousWordEnd { .. }
+            | NextSubwordEnd { .. }
+            | PreviousSubwordEnd { .. } => MotionKind::Inclusive,
+            Left
+            | WrappingLeft
             | Right
+            | WrappingRight
+            | StartOfLine { .. }
+            | StartOfParagraph
+            | EndOfParagraph
             | SentenceBackward
             | SentenceForward
-            | Space
-            | StartOfLine { .. }
-            | EndOfLineDownward
             | GoToColumn
+            | MiddleOfLine { .. }
+            | UnmatchedForward { .. }
+            | UnmatchedBackward { .. }
             | NextWordStart { .. }
-            | NextWordEnd { .. }
             | PreviousWordStart { .. }
-            | PreviousWordEnd { .. }
             | NextSubwordStart { .. }
-            | NextSubwordEnd { .. }
             | PreviousSubwordStart { .. }
-            | PreviousSubwordEnd { .. }
             | FirstNonWhitespace { .. }
             | FindBackward { .. }
             | Sneak { .. }
             | SneakBackward { .. }
-            | RepeatFind { .. }
-            | RepeatFindReversed { .. }
-            | Jump { line: false, .. }
-            | ZedSearchResult { .. } => false,
+            | Jump { .. }
+            | ZedSearchResult { .. } => MotionKind::Exclusive,
+            RepeatFind { last_find: motion } | RepeatFindReversed { last_find: motion } => {
+                motion.default_kind()
+            }
+        }
+    }
+
+    fn skip_exclusive_special_case(&self) -> bool {
+        match self {
+            Motion::WrappingLeft | Motion::WrappingRight => true,
+            _ => false,
         }
     }
 
@@ -673,15 +790,16 @@ impl Motion {
             Down { .. }
             | Up { .. }
             | EndOfLine { .. }
+            | MiddleOfLine { .. }
             | Matching
             | UnmatchedForward { .. }
             | UnmatchedBackward { .. }
             | FindForward { .. }
             | RepeatFind { .. }
             | Left
-            | Backspace
+            | WrappingLeft
             | Right
-            | Space
+            | WrappingRight
             | StartOfLine { .. }
             | StartOfParagraph
             | EndOfParagraph
@@ -690,6 +808,7 @@ impl Motion {
             | StartOfLineDownward
             | EndOfLineDownward
             | GoToColumn
+            | GoToPercentage
             | NextWordStart { .. }
             | NextWordEnd { .. }
             | PreviousWordStart { .. }
@@ -719,67 +838,13 @@ impl Motion {
             | PreviousMethodEnd
             | NextComment
             | PreviousComment
+            | PreviousLesserIndent
+            | PreviousGreaterIndent
+            | PreviousSameIndent
+            | NextLesserIndent
+            | NextGreaterIndent
+            | NextSameIndent
             | Jump { .. } => false,
-        }
-    }
-
-    pub fn inclusive(&self) -> bool {
-        use Motion::*;
-        match self {
-            Down { .. }
-            | Up { .. }
-            | StartOfDocument
-            | EndOfDocument
-            | CurrentLine
-            | EndOfLine { .. }
-            | EndOfLineDownward
-            | Matching
-            | UnmatchedForward { .. }
-            | UnmatchedBackward { .. }
-            | FindForward { .. }
-            | WindowTop
-            | WindowMiddle
-            | WindowBottom
-            | NextWordEnd { .. }
-            | PreviousWordEnd { .. }
-            | NextSubwordEnd { .. }
-            | PreviousSubwordEnd { .. }
-            | NextLineStart
-            | PreviousLineStart => true,
-            Left
-            | Backspace
-            | Right
-            | Space
-            | StartOfLine { .. }
-            | StartOfLineDownward
-            | StartOfParagraph
-            | EndOfParagraph
-            | SentenceBackward
-            | SentenceForward
-            | GoToColumn
-            | NextWordStart { .. }
-            | PreviousWordStart { .. }
-            | NextSubwordStart { .. }
-            | PreviousSubwordStart { .. }
-            | FirstNonWhitespace { .. }
-            | FindBackward { .. }
-            | Sneak { .. }
-            | SneakBackward { .. }
-            | Jump { .. }
-            | NextSectionStart
-            | NextSectionEnd
-            | PreviousSectionStart
-            | PreviousSectionEnd
-            | NextMethodStart
-            | NextMethodEnd
-            | PreviousMethodStart
-            | PreviousMethodEnd
-            | NextComment
-            | PreviousComment
-            | ZedSearchResult { .. } => false,
-            RepeatFind { last_find: motion } | RepeatFindReversed { last_find: motion } => {
-                motion.inclusive()
-            }
         }
     }
 
@@ -796,7 +861,7 @@ impl Motion {
         let infallible = self.infallible();
         let (new_point, goal) = match self {
             Left => (left(map, point, times), SelectionGoal::None),
-            Backspace => (backspace(map, point, times), SelectionGoal::None),
+            WrappingLeft => (wrapping_left(map, point, times), SelectionGoal::None),
             Down {
                 display_lines: false,
             } => up_down_buffer_rows(map, point, goal, times as isize, text_layout_details),
@@ -810,7 +875,7 @@ impl Motion {
                 display_lines: true,
             } => up_display(map, point, goal, times, text_layout_details),
             Right => (right(map, point, times), SelectionGoal::None),
-            Space => (space(map, point, times), SelectionGoal::None),
+            WrappingRight => (wrapping_right(map, point, times), SelectionGoal::None),
             NextWordStart { ignore_punctuation } => (
                 next_word_start(map, point, *ignore_punctuation, times),
                 SelectionGoal::None,
@@ -851,6 +916,10 @@ impl Motion {
                 start_of_line(map, *display_lines, point),
                 SelectionGoal::None,
             ),
+            MiddleOfLine { display_lines } => (
+                middle_of_line(map, *display_lines, point, maybe_times),
+                SelectionGoal::None,
+            ),
             EndOfLine { display_lines } => (
                 end_of_line(map, *display_lines, point, times),
                 SelectionGoal::None,
@@ -875,6 +944,7 @@ impl Motion {
                 SelectionGoal::None,
             ),
             Matching => (matching(map, point), SelectionGoal::None),
+            GoToPercentage => (go_to_percentage(map, point, times), SelectionGoal::None),
             UnmatchedForward { char } => (
                 unmatched_forward(map, point, *char, times),
                 SelectionGoal::None,
@@ -891,7 +961,7 @@ impl Motion {
                 smartcase,
             } => {
                 return find_forward(map, point, *before, *char, times, *mode, *smartcase)
-                    .map(|new_point| (new_point, SelectionGoal::None))
+                    .map(|new_point| (new_point, SelectionGoal::None));
             }
             // T F
             FindBackward {
@@ -1122,8 +1192,31 @@ impl Motion {
                 comment_motion(map, point, times, Direction::Prev),
                 SelectionGoal::None,
             ),
+            PreviousLesserIndent => (
+                indent_motion(map, point, times, Direction::Prev, IndentType::Lesser),
+                SelectionGoal::None,
+            ),
+            PreviousGreaterIndent => (
+                indent_motion(map, point, times, Direction::Prev, IndentType::Greater),
+                SelectionGoal::None,
+            ),
+            PreviousSameIndent => (
+                indent_motion(map, point, times, Direction::Prev, IndentType::Same),
+                SelectionGoal::None,
+            ),
+            NextLesserIndent => (
+                indent_motion(map, point, times, Direction::Next, IndentType::Lesser),
+                SelectionGoal::None,
+            ),
+            NextGreaterIndent => (
+                indent_motion(map, point, times, Direction::Next, IndentType::Greater),
+                SelectionGoal::None,
+            ),
+            NextSameIndent => (
+                indent_motion(map, point, times, Direction::Next, IndentType::Same),
+                SelectionGoal::None,
+            ),
         };
-
         (new_point != point || infallible).then_some((new_point, goal))
     }
 
@@ -1133,9 +1226,9 @@ impl Motion {
         map: &DisplaySnapshot,
         selection: Selection<DisplayPoint>,
         times: Option<usize>,
-        expand_to_surrounding_newline: bool,
         text_layout_details: &TextLayoutDetails,
-    ) -> Option<Range<DisplayPoint>> {
+        forced_motion: bool,
+    ) -> Option<(Range<DisplayPoint>, MotionKind)> {
         if let Motion::ZedSearchResult {
             prior_selections,
             new_selections,
@@ -1154,89 +1247,115 @@ impl Motion {
                     .max(prior_selection.end.to_display_point(map));
 
                 if start < end {
-                    return Some(start..end);
+                    return Some((start..end, MotionKind::Exclusive));
                 } else {
-                    return Some(end..start);
+                    return Some((end..start, MotionKind::Exclusive));
                 }
             } else {
                 return None;
             }
         }
-
-        if let Some((new_head, goal)) = self.move_point(
+        let maybe_new_point = self.move_point(
             map,
             selection.head(),
             selection.goal,
             times,
             text_layout_details,
-        ) {
-            let mut selection = selection.clone();
-            selection.set_head(new_head, goal);
+        );
 
-            if self.linewise() {
-                selection.start = map.prev_line_boundary(selection.start.to_point(map)).1;
+        let (new_head, goal) = match (maybe_new_point, forced_motion) {
+            (Some((p, g)), _) => Some((p, g)),
+            (None, false) => None,
+            (None, true) => Some((selection.head(), selection.goal)),
+        }?;
 
-                if expand_to_surrounding_newline {
-                    if selection.end.row() < map.max_point().row() {
-                        *selection.end.row_mut() += 1;
-                        *selection.end.column_mut() = 0;
-                        selection.end = map.clip_point(selection.end, Bias::Right);
-                        // Don't reset the end here
-                        return Some(selection.start..selection.end);
-                    } else if selection.start.row().0 > 0 {
-                        *selection.start.row_mut() -= 1;
-                        *selection.start.column_mut() = map.line_len(selection.start.row());
-                        selection.start = map.clip_point(selection.start, Bias::Left);
-                    }
+        let mut selection = selection.clone();
+        selection.set_head(new_head, goal);
+
+        let mut kind = match (self.default_kind(), forced_motion) {
+            (MotionKind::Linewise, true) => MotionKind::Exclusive,
+            (MotionKind::Exclusive, true) => MotionKind::Inclusive,
+            (MotionKind::Inclusive, true) => MotionKind::Exclusive,
+            (kind, false) => kind,
+        };
+
+        if let Motion::NextWordStart {
+            ignore_punctuation: _,
+        } = self
+        {
+            // Another special case: When using the "w" motion in combination with an
+            // operator and the last word moved over is at the end of a line, the end of
+            // that word becomes the end of the operated text, not the first word in the
+            // next line.
+            let start = selection.start.to_point(map);
+            let end = selection.end.to_point(map);
+            let start_row = MultiBufferRow(selection.start.to_point(map).row);
+            if end.row > start.row {
+                selection.end = Point::new(start_row.0, map.buffer_snapshot.line_len(start_row))
+                    .to_display_point(map);
+
+                // a bit of a hack, we need `cw` on a blank line to not delete the newline,
+                // but dw on a blank line should. The `Linewise` returned from this method
+                // causes the `d` operator to include the trailing newline.
+                if selection.start == selection.end {
+                    return Some((selection.start..selection.end, MotionKind::Linewise));
                 }
+            }
+        } else if kind == MotionKind::Exclusive && !self.skip_exclusive_special_case() {
+            let start_point = selection.start.to_point(map);
+            let mut end_point = selection.end.to_point(map);
+            let mut next_point = selection.end;
+            *next_point.column_mut() += 1;
+            next_point = map.clip_point(next_point, Bias::Right);
+            if next_point.to_point(map) == end_point && forced_motion {
+                selection.end = movement::saturating_left(map, selection.end);
+            }
 
-                selection.end = map.next_line_boundary(selection.end.to_point(map)).1;
-            } else {
-                // Another special case: When using the "w" motion in combination with an
-                // operator and the last word moved over is at the end of a line, the end of
-                // that word becomes the end of the operated text, not the first word in the
-                // next line.
-                if let Motion::NextWordStart {
-                    ignore_punctuation: _,
-                } = self
-                {
-                    let start_row = MultiBufferRow(selection.start.to_point(map).row);
-                    if selection.end.to_point(map).row > start_row.0 {
-                        selection.end =
-                            Point::new(start_row.0, map.buffer_snapshot.line_len(start_row))
-                                .to_display_point(map)
+            if end_point.row > start_point.row {
+                let first_non_blank_of_start_row = map
+                    .line_indent_for_buffer_row(MultiBufferRow(start_point.row))
+                    .raw_len();
+                // https://github.com/neovim/neovim/blob/ee143aaf65a0e662c42c636aa4a959682858b3e7/src/nvim/ops.c#L6178-L6203
+                if end_point.column == 0 {
+                    // If the motion is exclusive and the end of the motion is in column 1, the
+                    // end of the motion is moved to the end of the previous line and the motion
+                    // becomes inclusive. Example: "}" moves to the first line after a paragraph,
+                    // but "d}" will not include that line.
+                    //
+                    // If the motion is exclusive, the end of the motion is in column 1 and the
+                    // start of the motion was at or before the first non-blank in the line, the
+                    // motion becomes linewise.  Example: If a paragraph begins with some blanks
+                    // and you do "d}" while standing on the first non-blank, all the lines of
+                    // the paragraph are deleted, including the blanks.
+                    if start_point.column <= first_non_blank_of_start_row {
+                        kind = MotionKind::Linewise;
+                    } else {
+                        kind = MotionKind::Inclusive;
                     }
-                }
-
-                // If the motion is exclusive and the end of the motion is in column 1, the
-                // end of the motion is moved to the end of the previous line and the motion
-                // becomes inclusive. Example: "}" moves to the first line after a paragraph,
-                // but "d}" will not include that line.
-                let mut inclusive = self.inclusive();
-                let start_point = selection.start.to_point(map);
-                let mut end_point = selection.end.to_point(map);
-
-                // DisplayPoint
-
-                if !inclusive
-                    && self != &Motion::Backspace
-                    && end_point.row > start_point.row
-                    && end_point.column == 0
-                {
-                    inclusive = true;
                     end_point.row -= 1;
                     end_point.column = 0;
                     selection.end = map.clip_point(map.next_line_boundary(end_point).1, Bias::Left);
-                }
-
-                if inclusive && selection.end.column() < map.line_len(selection.end.row()) {
+                } else if let Motion::EndOfParagraph = self {
+                    // Special case: When using the "}" motion, it's possible
+                    // that there's no blank lines after the paragraph the
+                    // cursor is currently on.
+                    // In this situation the `end_point.column` value will be
+                    // greater than 0, so the selection doesn't actually end on
+                    // the first character of a blank line. In that case, we'll
+                    // want to move one column to the right, to actually include
+                    // all characters of the last non-blank line.
                     selection.end = movement::saturating_right(map, selection.end)
                 }
             }
-            Some(selection.start..selection.end)
-        } else {
-            None
+        } else if kind == MotionKind::Inclusive {
+            selection.end = movement::saturating_right(map, selection.end)
         }
+
+        if kind == MotionKind::Linewise {
+            selection.start = map.prev_line_boundary(selection.start.to_point(map)).1;
+            selection.end = map.next_line_boundary(selection.end.to_point(map)).1;
+        }
+        Some((selection.start..selection.end, kind))
     }
 
     // Expands a selection using self for an operator
@@ -1245,22 +1364,19 @@ impl Motion {
         map: &DisplaySnapshot,
         selection: &mut Selection<DisplayPoint>,
         times: Option<usize>,
-        expand_to_surrounding_newline: bool,
         text_layout_details: &TextLayoutDetails,
-    ) -> bool {
-        if let Some(range) = self.range(
+        forced_motion: bool,
+    ) -> Option<MotionKind> {
+        let (range, kind) = self.range(
             map,
             selection.clone(),
             times,
-            expand_to_surrounding_newline,
             text_layout_details,
-        ) {
-            selection.start = range.start;
-            selection.end = range.end;
-            true
-        } else {
-            false
-        }
+            forced_motion,
+        )?;
+        selection.start = range.start;
+        selection.end = range.end;
+        Some(kind)
     }
 }
 
@@ -1274,7 +1390,7 @@ fn left(map: &DisplaySnapshot, mut point: DisplayPoint, times: usize) -> Display
     point
 }
 
-pub(crate) fn backspace(
+pub(crate) fn wrapping_left(
     map: &DisplaySnapshot,
     mut point: DisplayPoint,
     times: usize,
@@ -1288,9 +1404,9 @@ pub(crate) fn backspace(
     point
 }
 
-fn space(map: &DisplaySnapshot, mut point: DisplayPoint, times: usize) -> DisplayPoint {
+fn wrapping_right(map: &DisplaySnapshot, mut point: DisplayPoint, times: usize) -> DisplayPoint {
     for _ in 0..times {
-        point = wrapping_right(map, point);
+        point = wrapping_right_single(map, point);
         if point == map.max_point() {
             break;
         }
@@ -1298,15 +1414,19 @@ fn space(map: &DisplaySnapshot, mut point: DisplayPoint, times: usize) -> Displa
     point
 }
 
-fn wrapping_right(map: &DisplaySnapshot, mut point: DisplayPoint) -> DisplayPoint {
-    let max_column = map.line_len(point.row()).saturating_sub(1);
-    if point.column() < max_column {
-        *point.column_mut() += 1;
-    } else if point.row() < map.max_point().row() {
-        *point.row_mut() += 1;
-        *point.column_mut() = 0;
+fn wrapping_right_single(map: &DisplaySnapshot, point: DisplayPoint) -> DisplayPoint {
+    let mut next_point = point;
+    *next_point.column_mut() += 1;
+    next_point = map.clip_point(next_point, Bias::Right);
+    if next_point == point {
+        if next_point.row() == map.max_point().row() {
+            next_point
+        } else {
+            DisplayPoint::new(next_point.row().next_row(), 0)
+        }
+    } else {
+        next_point
     }
-    point
 }
 
 pub(crate) fn start_of_relative_buffer_row(
@@ -1329,12 +1449,25 @@ pub(crate) fn start_of_relative_buffer_row(
 
 fn up_down_buffer_rows(
     map: &DisplaySnapshot,
-    point: DisplayPoint,
+    mut point: DisplayPoint,
     mut goal: SelectionGoal,
-    times: isize,
+    mut times: isize,
     text_layout_details: &TextLayoutDetails,
 ) -> (DisplayPoint, SelectionGoal) {
     let bias = if times < 0 { Bias::Left } else { Bias::Right };
+
+    while map.is_folded_buffer_header(point.row()) {
+        if times < 0 {
+            (point, _) = movement::up(map, point, goal, true, text_layout_details);
+            times += 1;
+        } else if times > 0 {
+            (point, _) = movement::down(map, point, goal, true, text_layout_details);
+            times -= 1;
+        } else {
+            break;
+        }
+    }
+
     let start = map.display_point_to_fold_point(point, Bias::Left);
     let begin_folded_line = map.fold_point_to_display_point(
         map.fold_snapshot
@@ -1568,7 +1701,9 @@ fn previous_word_end(
     let mut point = point.to_point(map);
 
     if point.column < map.buffer_snapshot.line_len(MultiBufferRow(point.row)) {
-        point.column += 1;
+        if let Some(ch) = map.buffer_snapshot.chars_at(point).next() {
+            point.column += ch.len_utf8() as u32;
+        }
     }
     for _ in 0..times {
         let new_point = movement::find_preceding_boundary_point(
@@ -1741,7 +1876,9 @@ fn previous_subword_end(
     let mut point = point.to_point(map);
 
     if point.column < map.buffer_snapshot.line_len(MultiBufferRow(point.row)) {
-        point.column += 1;
+        if let Some(ch) = map.buffer_snapshot.chars_at(point).next() {
+            point.column += ch.len_utf8() as u32;
+        }
     }
     for _ in 0..times {
         let new_point = movement::find_preceding_boundary_point(
@@ -1837,6 +1974,36 @@ pub(crate) fn start_of_line(
     }
 }
 
+pub(crate) fn middle_of_line(
+    map: &DisplaySnapshot,
+    display_lines: bool,
+    point: DisplayPoint,
+    times: Option<usize>,
+) -> DisplayPoint {
+    let percent = if let Some(times) = times.filter(|&t| t <= 100) {
+        times as f64 / 100.
+    } else {
+        0.5
+    };
+    if display_lines {
+        map.clip_point(
+            DisplayPoint::new(
+                point.row(),
+                (map.line_len(point.row()) as f64 * percent) as u32,
+            ),
+            Bias::Left,
+        )
+    } else {
+        let mut buffer_point = point.to_point(map);
+        buffer_point.column = (map
+            .buffer_snapshot
+            .line_len(MultiBufferRow(buffer_point.row)) as f64
+            * percent) as u32;
+
+        map.clip_point(buffer_point.to_display_point(map), Bias::Left)
+    }
+}
+
 pub(crate) fn end_of_line(
     map: &DisplaySnapshot,
     display_lines: bool,
@@ -1856,7 +2023,7 @@ pub(crate) fn end_of_line(
     }
 }
 
-fn sentence_backwards(
+pub(crate) fn sentence_backwards(
     map: &DisplaySnapshot,
     point: DisplayPoint,
     mut times: usize,
@@ -1902,7 +2069,11 @@ fn sentence_backwards(
     DisplayPoint::zero()
 }
 
-fn sentence_forwards(map: &DisplaySnapshot, point: DisplayPoint, mut times: usize) -> DisplayPoint {
+pub(crate) fn sentence_forwards(
+    map: &DisplaySnapshot,
+    point: DisplayPoint,
+    mut times: usize,
+) -> DisplayPoint {
     let start = point.to_point(map).to_offset(&map.buffer_snapshot);
     let mut chars = map.buffer_chars_at(start).peekable();
 
@@ -2108,6 +2279,17 @@ fn matching(map: &DisplaySnapshot, display_point: DisplayPoint) -> DisplayPoint 
         line_end = map.max_point().to_point(map);
     }
 
+    if let Some((opening_range, closing_range)) = map
+        .buffer_snapshot
+        .innermost_enclosing_bracket_ranges(offset..offset, None)
+    {
+        if opening_range.contains(&offset) {
+            return closing_range.start.to_display_point(map);
+        } else if closing_range.contains(&offset) {
+            return opening_range.start.to_display_point(map);
+        }
+    }
+
     let line_range = map.prev_line_boundary(point).0..line_end;
     let visible_line_range =
         line_range.start..Point::new(line_range.end.row, line_range.end.column.saturating_sub(1));
@@ -2168,6 +2350,22 @@ fn matching(map: &DisplaySnapshot, display_point: DisplayPoint) -> DisplayPoint 
     } else {
         display_point
     }
+}
+
+// Go to {count} percentage in the file, on the first
+// non-blank in the line linewise.  To compute the new
+// line number this formula is used:
+// ({count} * number-of-lines + 99) / 100
+//
+// https://neovim.io/doc/user/motion.html#N%25
+fn go_to_percentage(map: &DisplaySnapshot, point: DisplayPoint, count: usize) -> DisplayPoint {
+    let total_lines = map.buffer_snapshot.max_point().row + 1;
+    let target_line = (count * total_lines as usize).div_ceil(100);
+    let target_point = DisplayPoint::new(
+        DisplayRow(target_line.saturating_sub(1) as u32),
+        point.column(),
+    );
+    map.clip_point(target_point, Bias::Left)
 }
 
 fn unmatched_forward(
@@ -2283,6 +2481,10 @@ fn find_forward(
     if found {
         if before && to.column() > 0 {
             *to.column_mut() -= 1;
+            Some(map.clip_point(to, Bias::Left))
+        } else if before && to.row().0 > 0 {
+            *to.row_mut() -= 1;
+            *to.column_mut() = map.line(to.row()).len() as u32;
             Some(map.clip_point(to, Bias::Left))
         } else {
             Some(to)
@@ -2699,49 +2901,10 @@ fn section_motion(
     };
 
     for _ in 0..times {
-        let point = map.display_point_to_point(display_point, Bias::Left);
-        let Some(excerpt) = map.buffer_snapshot.excerpt_containing(point..point) else {
-            return display_point;
-        };
-        let next_point = match (direction, is_start) {
-            (Direction::Prev, true) => {
-                let mut start = excerpt.start_anchor().to_display_point(&map);
-                if start >= display_point && start.row() > DisplayRow(0) {
-                    let Some(excerpt) = map.buffer_snapshot.excerpt_before(excerpt.id()) else {
-                        return display_point;
-                    };
-                    start = excerpt.start_anchor().to_display_point(&map);
-                }
-                start
-            }
-            (Direction::Prev, false) => {
-                let mut start = excerpt.start_anchor().to_display_point(&map);
-                if start.row() > DisplayRow(0) {
-                    *start.row_mut() -= 1;
-                }
-                map.clip_point(start, Bias::Left)
-            }
-            (Direction::Next, true) => {
-                let mut end = excerpt.end_anchor().to_display_point(&map);
-                *end.row_mut() += 1;
-                map.clip_point(end, Bias::Right)
-            }
-            (Direction::Next, false) => {
-                let mut end = excerpt.end_anchor().to_display_point(&map);
-                *end.column_mut() = 0;
-                if end <= display_point {
-                    *end.row_mut() += 1;
-                    let point_end = map.display_point_to_point(end, Bias::Right);
-                    let Some(excerpt) =
-                        map.buffer_snapshot.excerpt_containing(point_end..point_end)
-                    else {
-                        return display_point;
-                    };
-                    end = excerpt.end_anchor().to_display_point(&map);
-                    *end.column_mut() = 0;
-                }
-                end
-            }
+        let next_point = if is_start {
+            movement::start_of_excerpt(map, display_point, direction)
+        } else {
+            movement::end_of_excerpt(map, display_point, direction)
         };
         if next_point == display_point {
             break;
@@ -2749,6 +2912,67 @@ fn section_motion(
         display_point = next_point;
     }
 
+    display_point
+}
+
+fn matches_indent_type(
+    target_indent: &text::LineIndent,
+    current_indent: &text::LineIndent,
+    indent_type: IndentType,
+) -> bool {
+    match indent_type {
+        IndentType::Lesser => {
+            target_indent.spaces < current_indent.spaces || target_indent.tabs < current_indent.tabs
+        }
+        IndentType::Greater => {
+            target_indent.spaces > current_indent.spaces || target_indent.tabs > current_indent.tabs
+        }
+        IndentType::Same => {
+            target_indent.spaces == current_indent.spaces
+                && target_indent.tabs == current_indent.tabs
+        }
+    }
+}
+
+fn indent_motion(
+    map: &DisplaySnapshot,
+    mut display_point: DisplayPoint,
+    times: usize,
+    direction: Direction,
+    indent_type: IndentType,
+) -> DisplayPoint {
+    let buffer_point = map.display_point_to_point(display_point, Bias::Left);
+    let current_row = MultiBufferRow(buffer_point.row);
+    let current_indent = map.line_indent_for_buffer_row(current_row);
+    if current_indent.is_line_empty() {
+        return display_point;
+    }
+    let max_row = map.max_point().to_point(map).row;
+
+    for _ in 0..times {
+        let current_buffer_row = map.display_point_to_point(display_point, Bias::Left).row;
+
+        let target_row = match direction {
+            Direction::Next => (current_buffer_row + 1..=max_row).find(|&row| {
+                let indent = map.line_indent_for_buffer_row(MultiBufferRow(row));
+                !indent.is_line_empty()
+                    && matches_indent_type(&indent, &current_indent, indent_type)
+            }),
+            Direction::Prev => (0..current_buffer_row).rev().find(|&row| {
+                let indent = map.line_indent_for_buffer_row(MultiBufferRow(row));
+                !indent.is_line_empty()
+                    && matches_indent_type(&indent, &current_indent, indent_type)
+            }),
+        }
+        .unwrap_or(current_buffer_row);
+
+        let new_point = map.point_to_display_point(Point::new(target_row, 0), Bias::Right);
+        let new_point = first_non_whitespace(map, false, new_point);
+        if new_point == display_point {
+            break;
+        }
+        display_point = new_point;
+    }
     display_point
 }
 
@@ -3027,6 +3251,29 @@ mod test {
                 test = "test"
             />
         </a>"#});
+    }
+
+    #[gpui::test]
+    async fn test_matching_braces_in_tag(cx: &mut gpui::TestAppContext) {
+        let mut cx = NeovimBackedTestContext::new_typescript(cx).await;
+
+        // test brackets within tags
+        cx.set_shared_state(indoc! {r"function f() {
+            return (
+                <div rules={ˇ[{ a: 1 }]}>
+                    <h1>test</h1>
+                </div>
+            );
+        }"})
+            .await;
+        cx.simulate_shared_keystrokes("%").await;
+        cx.shared_state().await.assert_eq(indoc! {r"function f() {
+            return (
+                <div rules={[{ a: 1 }ˇ]}>
+                    <h1>test</h1>
+                </div>
+            );
+        }"});
     }
 
     #[gpui::test]
@@ -3404,6 +3651,16 @@ mod test {
           4;5.6 567 678
           789 890 901
         "});
+
+        // With multi byte char
+        cx.set_shared_state(indoc! {r"
+        bar ˇó
+        "})
+            .await;
+        cx.simulate_shared_keystrokes("g e").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+        baˇr ó
+        "});
     }
 
     #[gpui::test]
@@ -3484,5 +3741,435 @@ mod test {
         "},
             Mode::Normal,
         );
+    }
+
+    #[gpui::test]
+    async fn test_go_to_percentage(cx: &mut gpui::TestAppContext) {
+        let mut cx = NeovimBackedTestContext::new(cx).await;
+        // Normal mode
+        cx.set_shared_state(indoc! {"
+            The ˇquick brown
+            fox jumps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("2 0 %").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            The quick brown
+            fox ˇjumps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog"});
+
+        cx.simulate_shared_keystrokes("2 5 %").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            The quick brown
+            fox jumps over
+            the ˇlazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog"});
+
+        cx.simulate_shared_keystrokes("7 5 %").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            The quick brown
+            fox jumps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog
+            The ˇquick brown
+            fox jumps over
+            the lazy dog"});
+
+        // Visual mode
+        cx.set_shared_state(indoc! {"
+            The ˇquick brown
+            fox jumps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("v 5 0 %").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            The «quick brown
+            fox jumps over
+            the lazy dog
+            The quick brown
+            fox jˇ»umps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog"});
+
+        cx.set_shared_state(indoc! {"
+            The ˇquick brown
+            fox jumps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("v 1 0 0 %").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            The «quick brown
+            fox jumps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lazy dog
+            The quick brown
+            fox jumps over
+            the lˇ»azy dog"});
+    }
+
+    #[gpui::test]
+    async fn test_space_non_ascii(cx: &mut gpui::TestAppContext) {
+        let mut cx = NeovimBackedTestContext::new(cx).await;
+
+        cx.set_shared_state("ˇπππππ").await;
+        cx.simulate_shared_keystrokes("3 space").await;
+        cx.shared_state().await.assert_eq("πππˇππ");
+    }
+
+    #[gpui::test]
+    async fn test_space_non_ascii_eol(cx: &mut gpui::TestAppContext) {
+        let mut cx = NeovimBackedTestContext::new(cx).await;
+
+        cx.set_shared_state(indoc! {"
+            ππππˇπ
+            πanotherline"})
+            .await;
+        cx.simulate_shared_keystrokes("4 space").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            πππππ
+            πanˇotherline"});
+    }
+
+    #[gpui::test]
+    async fn test_backspace_non_ascii_bol(cx: &mut gpui::TestAppContext) {
+        let mut cx = NeovimBackedTestContext::new(cx).await;
+
+        cx.set_shared_state(indoc! {"
+                        ππππ
+                        πanˇotherline"})
+            .await;
+        cx.simulate_shared_keystrokes("4 backspace").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+                        πππˇπ
+                        πanotherline"});
+    }
+
+    #[gpui::test]
+    async fn test_go_to_indent(cx: &mut gpui::TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+        cx.set_state(
+            indoc! {
+                "func empty(a string) bool {
+                     ˇif a == \"\" {
+                         return true
+                     }
+                     return false
+                }"
+            },
+            Mode::Normal,
+        );
+        cx.simulate_keystrokes("[ -");
+        cx.assert_state(
+            indoc! {
+                "ˇfunc empty(a string) bool {
+                     if a == \"\" {
+                         return true
+                     }
+                     return false
+                }"
+            },
+            Mode::Normal,
+        );
+        cx.simulate_keystrokes("] =");
+        cx.assert_state(
+            indoc! {
+                "func empty(a string) bool {
+                     if a == \"\" {
+                         return true
+                     }
+                     return false
+                ˇ}"
+            },
+            Mode::Normal,
+        );
+        cx.simulate_keystrokes("[ +");
+        cx.assert_state(
+            indoc! {
+                "func empty(a string) bool {
+                     if a == \"\" {
+                         return true
+                     }
+                     ˇreturn false
+                }"
+            },
+            Mode::Normal,
+        );
+        cx.simulate_keystrokes("2 [ =");
+        cx.assert_state(
+            indoc! {
+                "func empty(a string) bool {
+                     ˇif a == \"\" {
+                         return true
+                     }
+                     return false
+                }"
+            },
+            Mode::Normal,
+        );
+        cx.simulate_keystrokes("] +");
+        cx.assert_state(
+            indoc! {
+                "func empty(a string) bool {
+                     if a == \"\" {
+                         ˇreturn true
+                     }
+                     return false
+                }"
+            },
+            Mode::Normal,
+        );
+        cx.simulate_keystrokes("] -");
+        cx.assert_state(
+            indoc! {
+                "func empty(a string) bool {
+                     if a == \"\" {
+                         return true
+                     ˇ}
+                     return false
+                }"
+            },
+            Mode::Normal,
+        );
+    }
+
+    #[gpui::test]
+    async fn test_delete_key_can_remove_last_character(cx: &mut gpui::TestAppContext) {
+        let mut cx = NeovimBackedTestContext::new(cx).await;
+        cx.set_shared_state("abˇc").await;
+        cx.simulate_shared_keystrokes("delete").await;
+        cx.shared_state().await.assert_eq("aˇb");
+    }
+
+    #[gpui::test]
+    async fn test_forced_motion_delete_to_start_of_line(cx: &mut gpui::TestAppContext) {
+        let mut cx = NeovimBackedTestContext::new(cx).await;
+
+        cx.set_shared_state(indoc! {"
+             ˇthe quick brown fox
+             jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v 0").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+             ˇhe quick brown fox
+             jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+
+        cx.set_shared_state(indoc! {"
+            the quick bˇrown fox
+            jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v 0").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            ˇown fox
+            jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+
+        cx.set_shared_state(indoc! {"
+            the quick brown foˇx
+            jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v 0").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            ˇ
+            jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+    }
+
+    #[gpui::test]
+    async fn test_forced_motion_delete_to_middle_of_line(cx: &mut gpui::TestAppContext) {
+        let mut cx = NeovimBackedTestContext::new(cx).await;
+
+        cx.set_shared_state(indoc! {"
+             ˇthe quick brown fox
+             jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v g shift-m").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+             ˇbrown fox
+             jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+
+        cx.set_shared_state(indoc! {"
+            the quick bˇrown fox
+            jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v g shift-m").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            the quickˇown fox
+            jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+
+        cx.set_shared_state(indoc! {"
+            the quick brown foˇx
+            jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v g shift-m").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            the quicˇk
+            jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+
+        cx.set_shared_state(indoc! {"
+            ˇthe quick brown fox
+            jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v 7 5 g shift-m").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            ˇ fox
+            jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+
+        cx.set_shared_state(indoc! {"
+            ˇthe quick brown fox
+            jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v 2 3 g shift-m").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            ˇuick brown fox
+            jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+    }
+
+    #[gpui::test]
+    async fn test_forced_motion_delete_to_end_of_line(cx: &mut gpui::TestAppContext) {
+        let mut cx = NeovimBackedTestContext::new(cx).await;
+
+        cx.set_shared_state(indoc! {"
+             the quick brown foˇx
+             jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v $").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+             the quick brown foˇx
+             jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+
+        cx.set_shared_state(indoc! {"
+             ˇthe quick brown fox
+             jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v $").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+             ˇx
+             jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+    }
+
+    #[gpui::test]
+    async fn test_forced_motion_yank(cx: &mut gpui::TestAppContext) {
+        let mut cx = NeovimBackedTestContext::new(cx).await;
+
+        cx.set_shared_state(indoc! {"
+               ˇthe quick brown fox
+               jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("y v j p").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+               the quick brown fox
+               ˇthe quick brown fox
+               jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+
+        cx.set_shared_state(indoc! {"
+              the quick bˇrown fox
+              jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("y v j p").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+              the quick brˇrown fox
+              jumped overown fox
+              jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+
+        cx.set_shared_state(indoc! {"
+             the quick brown foˇx
+             jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("y v j p").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+             the quick brown foxˇx
+             jumped over the la
+             jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+
+        cx.set_shared_state(indoc! {"
+             the quick brown fox
+             jˇumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("y v k p").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            thˇhe quick brown fox
+            je quick brown fox
+            jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+    }
+
+    #[gpui::test]
+    async fn test_inclusive_to_exclusive_delete(cx: &mut gpui::TestAppContext) {
+        let mut cx = NeovimBackedTestContext::new(cx).await;
+
+        cx.set_shared_state(indoc! {"
+              ˇthe quick brown fox
+              jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v e").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+              ˇe quick brown fox
+              jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+
+        cx.set_shared_state(indoc! {"
+              the quick bˇrown fox
+              jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v e").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+              the quick bˇn fox
+              jumped over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
+
+        cx.set_shared_state(indoc! {"
+             the quick brown foˇx
+             jumped over the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("d v e").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+        the quick brown foˇd over the lazy dog"});
+        assert_eq!(cx.cx.forced_motion(), false);
     }
 }

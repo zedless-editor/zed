@@ -1,9 +1,7 @@
-#![allow(missing_docs)]
-
 use crate::prelude::*;
 use crate::v_flex;
 use gpui::{
-    div, AnyElement, App, Element, IntoElement, ParentElement, Pixels, RenderOnce, Styled, Window,
+    AnyElement, App, Element, IntoElement, ParentElement, Pixels, RenderOnce, Styled, Window, div,
 };
 use smallvec::SmallVec;
 

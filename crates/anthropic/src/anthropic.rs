@@ -1,18 +1,14 @@
-mod supported_countries;
+use std::str::FromStr;
+use std::time::Duration;
 
-use std::{pin::Pin, str::FromStr};
-
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use chrono::{DateTime, Utc};
-use futures::{io::BufReader, stream::BoxStream, AsyncBufReadExt, AsyncReadExt, Stream, StreamExt};
+use futures::{AsyncBufReadExt, AsyncReadExt, StreamExt, io::BufReader, stream::BoxStream};
 use http_client::http::{HeaderMap, HeaderValue};
 use http_client::{AsyncBody, HttpClient, Method, Request as HttpRequest};
 use serde::{Deserialize, Serialize};
 use strum::{EnumIter, EnumString};
 use thiserror::Error;
-use util::ResultExt as _;
-
-pub use supported_countries::*;
 
 pub const ANTHROPIC_API_URL: &str = "https://api.anthropic.com";
 
@@ -25,9 +21,40 @@ pub struct AnthropicModelCacheConfiguration {
 }
 
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub enum AnthropicModelMode {
+    #[default]
+    Default,
+    Thinking {
+        budget_tokens: Option<u32>,
+    },
+}
+
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, EnumIter)]
 pub enum Model {
+    #[serde(rename = "claude-opus-4", alias = "claude-opus-4-latest")]
+    ClaudeOpus4,
+    #[serde(
+        rename = "claude-opus-4-thinking",
+        alias = "claude-opus-4-thinking-latest"
+    )]
+    ClaudeOpus4Thinking,
     #[default]
+    #[serde(rename = "claude-sonnet-4", alias = "claude-sonnet-4-latest")]
+    ClaudeSonnet4,
+    #[serde(
+        rename = "claude-sonnet-4-thinking",
+        alias = "claude-sonnet-4-thinking-latest"
+    )]
+    ClaudeSonnet4Thinking,
+    #[serde(rename = "claude-3-7-sonnet", alias = "claude-3-7-sonnet-latest")]
+    Claude3_7Sonnet,
+    #[serde(
+        rename = "claude-3-7-sonnet-thinking",
+        alias = "claude-3-7-sonnet-thinking-latest"
+    )]
+    Claude3_7SonnetThinking,
     #[serde(rename = "claude-3-5-sonnet", alias = "claude-3-5-sonnet-latest")]
     Claude3_5Sonnet,
     #[serde(rename = "claude-3-5-haiku", alias = "claude-3-5-haiku-latest")]
@@ -52,40 +79,105 @@ pub enum Model {
         default_temperature: Option<f32>,
         #[serde(default)]
         extra_beta_headers: Vec<String>,
+        #[serde(default)]
+        mode: AnthropicModelMode,
     },
 }
 
 impl Model {
+    pub fn default_fast() -> Self {
+        Self::Claude3_5Haiku
+    }
+
     pub fn from_id(id: &str) -> Result<Self> {
-        if id.starts_with("claude-3-5-sonnet") {
-            Ok(Self::Claude3_5Sonnet)
-        } else if id.starts_with("claude-3-5-haiku") {
-            Ok(Self::Claude3_5Haiku)
-        } else if id.starts_with("claude-3-opus") {
-            Ok(Self::Claude3Opus)
-        } else if id.starts_with("claude-3-sonnet") {
-            Ok(Self::Claude3Sonnet)
-        } else if id.starts_with("claude-3-haiku") {
-            Ok(Self::Claude3Haiku)
-        } else {
-            Err(anyhow!("invalid model id"))
+        if id.starts_with("claude-opus-4-thinking") {
+            return Ok(Self::ClaudeOpus4Thinking);
         }
+
+        if id.starts_with("claude-opus-4") {
+            return Ok(Self::ClaudeOpus4);
+        }
+
+        if id.starts_with("claude-sonnet-4-thinking") {
+            return Ok(Self::ClaudeSonnet4Thinking);
+        }
+
+        if id.starts_with("claude-sonnet-4") {
+            return Ok(Self::ClaudeSonnet4);
+        }
+
+        if id.starts_with("claude-3-7-sonnet-thinking") {
+            return Ok(Self::Claude3_7SonnetThinking);
+        }
+
+        if id.starts_with("claude-3-7-sonnet") {
+            return Ok(Self::Claude3_7Sonnet);
+        }
+
+        if id.starts_with("claude-3-5-sonnet") {
+            return Ok(Self::Claude3_5Sonnet);
+        }
+
+        if id.starts_with("claude-3-5-haiku") {
+            return Ok(Self::Claude3_5Haiku);
+        }
+
+        if id.starts_with("claude-3-opus") {
+            return Ok(Self::Claude3Opus);
+        }
+
+        if id.starts_with("claude-3-sonnet") {
+            return Ok(Self::Claude3Sonnet);
+        }
+
+        if id.starts_with("claude-3-haiku") {
+            return Ok(Self::Claude3Haiku);
+        }
+
+        Err(anyhow!("invalid model ID: {id}"))
     }
 
     pub fn id(&self) -> &str {
         match self {
-            Model::Claude3_5Sonnet => "claude-3-5-sonnet-latest",
-            Model::Claude3_5Haiku => "claude-3-5-haiku-latest",
-            Model::Claude3Opus => "claude-3-opus-latest",
-            Model::Claude3Sonnet => "claude-3-sonnet-20240229",
-            Model::Claude3Haiku => "claude-3-haiku-20240307",
+            Self::ClaudeOpus4 => "claude-opus-4-latest",
+            Self::ClaudeOpus4Thinking => "claude-opus-4-thinking-latest",
+            Self::ClaudeSonnet4 => "claude-sonnet-4-latest",
+            Self::ClaudeSonnet4Thinking => "claude-sonnet-4-thinking-latest",
+            Self::Claude3_5Sonnet => "claude-3-5-sonnet-latest",
+            Self::Claude3_7Sonnet => "claude-3-7-sonnet-latest",
+            Self::Claude3_7SonnetThinking => "claude-3-7-sonnet-thinking-latest",
+            Self::Claude3_5Haiku => "claude-3-5-haiku-latest",
+            Self::Claude3Opus => "claude-3-opus-latest",
+            Self::Claude3Sonnet => "claude-3-sonnet-20240229",
+            Self::Claude3Haiku => "claude-3-haiku-20240307",
+            Self::Custom { name, .. } => name,
+        }
+    }
+
+    /// The id of the model that should be used for making API requests
+    pub fn request_id(&self) -> &str {
+        match self {
+            Self::ClaudeOpus4 | Self::ClaudeOpus4Thinking => "claude-opus-4-20250514",
+            Self::ClaudeSonnet4 | Self::ClaudeSonnet4Thinking => "claude-sonnet-4-20250514",
+            Self::Claude3_5Sonnet => "claude-3-5-sonnet-latest",
+            Self::Claude3_7Sonnet | Self::Claude3_7SonnetThinking => "claude-3-7-sonnet-latest",
+            Self::Claude3_5Haiku => "claude-3-5-haiku-latest",
+            Self::Claude3Opus => "claude-3-opus-latest",
+            Self::Claude3Sonnet => "claude-3-sonnet-20240229",
+            Self::Claude3Haiku => "claude-3-haiku-20240307",
             Self::Custom { name, .. } => name,
         }
     }
 
     pub fn display_name(&self) -> &str {
         match self {
+            Self::ClaudeOpus4 => "Claude Opus 4",
+            Self::ClaudeOpus4Thinking => "Claude Opus 4 Thinking",
+            Self::ClaudeSonnet4 => "Claude Sonnet 4",
+            Self::ClaudeSonnet4Thinking => "Claude Sonnet 4 Thinking",
+            Self::Claude3_7Sonnet => "Claude 3.7 Sonnet",
             Self::Claude3_5Sonnet => "Claude 3.5 Sonnet",
+            Self::Claude3_7SonnetThinking => "Claude 3.7 Sonnet Thinking",
             Self::Claude3_5Haiku => "Claude 3.5 Haiku",
             Self::Claude3Opus => "Claude 3 Opus",
             Self::Claude3Sonnet => "Claude 3 Sonnet",
@@ -98,13 +190,19 @@ impl Model {
 
     pub fn cache_configuration(&self) -> Option<AnthropicModelCacheConfiguration> {
         match self {
-            Self::Claude3_5Sonnet | Self::Claude3_5Haiku | Self::Claude3Haiku => {
-                Some(AnthropicModelCacheConfiguration {
-                    min_total_token: 2_048,
-                    should_speculate: true,
-                    max_cache_anchors: 4,
-                })
-            }
+            Self::ClaudeOpus4
+            | Self::ClaudeOpus4Thinking
+            | Self::ClaudeSonnet4
+            | Self::ClaudeSonnet4Thinking
+            | Self::Claude3_5Sonnet
+            | Self::Claude3_5Haiku
+            | Self::Claude3_7Sonnet
+            | Self::Claude3_7SonnetThinking
+            | Self::Claude3Haiku => Some(AnthropicModelCacheConfiguration {
+                min_total_token: 2_048,
+                should_speculate: true,
+                max_cache_anchors: 4,
+            }),
             Self::Custom {
                 cache_configuration,
                 ..
@@ -115,8 +213,14 @@ impl Model {
 
     pub fn max_token_count(&self) -> usize {
         match self {
-            Self::Claude3_5Sonnet
+            Self::ClaudeOpus4
+            | Self::ClaudeOpus4Thinking
+            | Self::ClaudeSonnet4
+            | Self::ClaudeSonnet4Thinking
+            | Self::Claude3_5Sonnet
             | Self::Claude3_5Haiku
+            | Self::Claude3_7Sonnet
+            | Self::Claude3_7SonnetThinking
             | Self::Claude3Opus
             | Self::Claude3Sonnet
             | Self::Claude3Haiku => 200_000,
@@ -126,8 +230,15 @@ impl Model {
 
     pub fn max_output_tokens(&self) -> u32 {
         match self {
+            Self::ClaudeOpus4
+            | Self::ClaudeOpus4Thinking
+            | Self::ClaudeSonnet4
+            | Self::ClaudeSonnet4Thinking
+            | Self::Claude3_5Sonnet
+            | Self::Claude3_7Sonnet
+            | Self::Claude3_7SonnetThinking
+            | Self::Claude3_5Haiku => 8_192,
             Self::Claude3Opus | Self::Claude3Sonnet | Self::Claude3Haiku => 4_096,
-            Self::Claude3_5Sonnet | Self::Claude3_5Haiku => 8_192,
             Self::Custom {
                 max_output_tokens, ..
             } => max_output_tokens.unwrap_or(4_096),
@@ -136,7 +247,13 @@ impl Model {
 
     pub fn default_temperature(&self) -> f32 {
         match self {
-            Self::Claude3_5Sonnet
+            Self::ClaudeOpus4
+            | Self::ClaudeOpus4Thinking
+            | Self::ClaudeSonnet4
+            | Self::ClaudeSonnet4Thinking
+            | Self::Claude3_5Sonnet
+            | Self::Claude3_7Sonnet
+            | Self::Claude3_7SonnetThinking
             | Self::Claude3_5Haiku
             | Self::Claude3Opus
             | Self::Claude3Sonnet
@@ -148,24 +265,50 @@ impl Model {
         }
     }
 
+    pub fn mode(&self) -> AnthropicModelMode {
+        match self {
+            Self::ClaudeOpus4
+            | Self::ClaudeSonnet4
+            | Self::Claude3_5Sonnet
+            | Self::Claude3_7Sonnet
+            | Self::Claude3_5Haiku
+            | Self::Claude3Opus
+            | Self::Claude3Sonnet
+            | Self::Claude3Haiku => AnthropicModelMode::Default,
+            Self::ClaudeOpus4Thinking
+            | Self::ClaudeSonnet4Thinking
+            | Self::Claude3_7SonnetThinking => AnthropicModelMode::Thinking {
+                budget_tokens: Some(4_096),
+            },
+            Self::Custom { mode, .. } => mode.clone(),
+        }
+    }
+
     pub const DEFAULT_BETA_HEADERS: &[&str] = &["prompt-caching-2024-07-31"];
 
     pub fn beta_headers(&self) -> String {
         let mut headers = Self::DEFAULT_BETA_HEADERS
-            .into_iter()
+            .iter()
             .map(|header| header.to_string())
             .collect::<Vec<_>>();
 
-        if let Self::Custom {
-            extra_beta_headers, ..
-        } = self
-        {
-            headers.extend(
-                extra_beta_headers
-                    .iter()
-                    .filter(|header| !header.trim().is_empty())
-                    .cloned(),
-            );
+        match self {
+            Self::Claude3_7Sonnet | Self::Claude3_7SonnetThinking => {
+                // Try beta token-efficient tool use (supported in Claude 3.7 Sonnet only)
+                // https://docs.anthropic.com/en/docs/build-with-claude/tool-use/token-efficient-tool-use
+                headers.push("token-efficient-tools-2025-02-19".to_string());
+            }
+            Self::Custom {
+                extra_beta_headers, ..
+            } => {
+                headers.extend(
+                    extra_beta_headers
+                        .iter()
+                        .filter(|header| !header.trim().is_empty())
+                        .cloned(),
+                );
+            }
+            _ => {}
         }
 
         headers.join(",")
@@ -179,7 +322,7 @@ impl Model {
         {
             tool_override
         } else {
-            self.id()
+            self.request_id()
         }
     }
 }
@@ -250,45 +393,82 @@ pub async fn stream_completion(
         .map(|output| output.0)
 }
 
-/// <https://docs.anthropic.com/en/api/rate-limits#response-headers>
+/// An individual rate limit.
 #[derive(Debug)]
-pub struct RateLimitInfo {
-    pub requests_limit: usize,
-    pub requests_remaining: usize,
-    pub requests_reset: DateTime<Utc>,
-    pub tokens_limit: usize,
-    pub tokens_remaining: usize,
-    pub tokens_reset: DateTime<Utc>,
+pub struct RateLimit {
+    pub limit: usize,
+    pub remaining: usize,
+    pub reset: DateTime<Utc>,
 }
 
-impl RateLimitInfo {
-    fn from_headers(headers: &HeaderMap<HeaderValue>) -> Result<Self> {
-        let tokens_limit = get_header("anthropic-ratelimit-tokens-limit", headers)?.parse()?;
-        let requests_limit = get_header("anthropic-ratelimit-requests-limit", headers)?.parse()?;
-        let tokens_remaining =
-            get_header("anthropic-ratelimit-tokens-remaining", headers)?.parse()?;
-        let requests_remaining =
-            get_header("anthropic-ratelimit-requests-remaining", headers)?.parse()?;
-        let requests_reset = get_header("anthropic-ratelimit-requests-reset", headers)?;
-        let tokens_reset = get_header("anthropic-ratelimit-tokens-reset", headers)?;
-        let requests_reset = DateTime::parse_from_rfc3339(requests_reset)?.to_utc();
-        let tokens_reset = DateTime::parse_from_rfc3339(tokens_reset)?.to_utc();
+impl RateLimit {
+    fn from_headers(resource: &str, headers: &HeaderMap<HeaderValue>) -> Result<Self> {
+        let limit =
+            get_header(&format!("anthropic-ratelimit-{resource}-limit"), headers)?.parse()?;
+        let remaining = get_header(
+            &format!("anthropic-ratelimit-{resource}-remaining"),
+            headers,
+        )?
+        .parse()?;
+        let reset = DateTime::parse_from_rfc3339(get_header(
+            &format!("anthropic-ratelimit-{resource}-reset"),
+            headers,
+        )?)?
+        .to_utc();
 
         Ok(Self {
-            requests_limit,
-            tokens_limit,
-            requests_remaining,
-            tokens_remaining,
-            requests_reset,
-            tokens_reset,
+            limit,
+            remaining,
+            reset,
         })
     }
 }
 
-fn get_header<'a>(key: &str, headers: &'a HeaderMap) -> Result<&'a str, anyhow::Error> {
+/// <https://docs.anthropic.com/en/api/rate-limits#response-headers>
+#[derive(Debug)]
+pub struct RateLimitInfo {
+    pub retry_after: Option<Duration>,
+    pub requests: Option<RateLimit>,
+    pub tokens: Option<RateLimit>,
+    pub input_tokens: Option<RateLimit>,
+    pub output_tokens: Option<RateLimit>,
+}
+
+impl RateLimitInfo {
+    fn from_headers(headers: &HeaderMap<HeaderValue>) -> Self {
+        // Check if any rate limit headers exist
+        let has_rate_limit_headers = headers
+            .keys()
+            .any(|k| k == "retry-after" || k.as_str().starts_with("anthropic-ratelimit-"));
+
+        if !has_rate_limit_headers {
+            return Self {
+                retry_after: None,
+                requests: None,
+                tokens: None,
+                input_tokens: None,
+                output_tokens: None,
+            };
+        }
+
+        Self {
+            retry_after: headers
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(Duration::from_secs),
+            requests: RateLimit::from_headers("requests", headers).ok(),
+            tokens: RateLimit::from_headers("tokens", headers).ok(),
+            input_tokens: RateLimit::from_headers("input-tokens", headers).ok(),
+            output_tokens: RateLimit::from_headers("output-tokens", headers).ok(),
+        }
+    }
+}
+
+fn get_header<'a>(key: &str, headers: &'a HeaderMap) -> anyhow::Result<&'a str> {
     Ok(headers
         .get(key)
-        .ok_or_else(|| anyhow!("missing header `{key}`"))?
+        .with_context(|| format!("missing header `{key}`"))?
         .to_str()?)
 }
 
@@ -329,8 +509,8 @@ pub async fn stream_completion_with_rate_limit_info(
         .send(request)
         .await
         .context("failed to send request to Anthropic")?;
+    let rate_limits = RateLimitInfo::from_headers(response.headers());
     if response.status().is_success() {
-        let rate_limits = RateLimitInfo::from_headers(response.headers());
         let reader = BufReader::new(response.into_body());
         let stream = reader
             .lines()
@@ -347,7 +527,9 @@ pub async fn stream_completion_with_rate_limit_info(
                 }
             })
             .boxed();
-        Ok((stream, rate_limits.log_err()))
+        Ok((stream, Some(rate_limits)))
+    } else if let Some(retry_after) = rate_limits.retry_after {
+        Err(AnthropicError::RateLimit(retry_after))
     } else {
         let mut body = Vec::new();
         response
@@ -371,48 +553,6 @@ pub async fn stream_completion_with_rate_limit_info(
             ))),
         }
     }
-}
-
-pub async fn extract_tool_args_from_events(
-    tool_name: String,
-    mut events: Pin<Box<dyn Send + Stream<Item = Result<Event>>>>,
-) -> Result<impl Send + Stream<Item = Result<String>>> {
-    let mut tool_use_index = None;
-    while let Some(event) = events.next().await {
-        if let Event::ContentBlockStart {
-            index,
-            content_block: ResponseContent::ToolUse { name, .. },
-        } = event?
-        {
-            if name == tool_name {
-                tool_use_index = Some(index);
-                break;
-            }
-        }
-    }
-
-    let Some(tool_use_index) = tool_use_index else {
-        return Err(anyhow!("tool not used"));
-    };
-
-    Ok(events.filter_map(move |event| {
-        let result = match event {
-            Err(error) => Some(Err(error)),
-            Ok(Event::ContentBlockDelta { index, delta }) => match delta {
-                ContentDelta::TextDelta { .. } => None,
-                ContentDelta::InputJsonDelta { partial_json } => {
-                    if index == tool_use_index {
-                        Some(Ok(partial_json))
-                    } else {
-                        None
-                    }
-                }
-            },
-            _ => None,
-        };
-
-        async move { result }
-    }))
 }
 
 #[derive(Debug, Serialize, Deserialize, Copy, Clone)]
@@ -449,6 +589,15 @@ pub enum RequestContent {
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
     },
+    #[serde(rename = "thinking")]
+    Thinking {
+        thinking: String,
+        signature: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
     #[serde(rename = "image")]
     Image {
         source: ImageSource,
@@ -467,10 +616,24 @@ pub enum RequestContent {
     ToolResult {
         tool_use_id: String,
         is_error: bool,
-        content: String,
+        content: ToolResultContent,
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
     },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolResultContent {
+    Plain(String),
+    Multipart(Vec<ToolResultPart>),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ToolResultPart {
+    Text { text: String },
+    Image { source: ImageSource },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -478,6 +641,10 @@ pub enum RequestContent {
 pub enum ResponseContent {
     #[serde(rename = "text")]
     Text { text: String },
+    #[serde(rename = "thinking")]
+    Thinking { thinking: String },
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -507,6 +674,20 @@ pub enum ToolChoice {
     Auto,
     Any,
     Tool { name: String },
+    None,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum Thinking {
+    Enabled { budget_tokens: Option<u32> },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StringOrContents {
+    String(String),
+    Content(Vec<RequestContent>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -517,9 +698,11 @@ pub struct Request {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<Tool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Thinking>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<ToolChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
+    pub system: Option<StringOrContents>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Metadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -544,7 +727,7 @@ pub struct Metadata {
     pub user_id: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Usage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u32>,
@@ -600,6 +783,10 @@ pub enum Event {
 pub enum ContentDelta {
     #[serde(rename = "text_delta")]
     TextDelta { text: String },
+    #[serde(rename = "thinking_delta")]
+    ThinkingDelta { thinking: String },
+    #[serde(rename = "signature_delta")]
+    SignatureDelta { signature: String },
     #[serde(rename = "input_json_delta")]
     InputJsonDelta { partial_json: String },
 }
@@ -612,6 +799,8 @@ pub struct MessageDelta {
 
 #[derive(Error, Debug)]
 pub enum AnthropicError {
+    #[error("rate limit exceeded, retry after {0:?}")]
+    RateLimit(Duration),
     #[error("an error occurred while interacting with the Anthropic API: {error_type}: {message}", error_type = .0.error_type, message = .0.message)]
     ApiError(ApiError),
     #[error("{0}")]
@@ -656,4 +845,54 @@ impl ApiError {
     pub fn is_rate_limit_error(&self) -> bool {
         matches!(self.error_type.as_str(), "rate_limit_error")
     }
+
+    pub fn match_window_exceeded(&self) -> Option<usize> {
+        let Some(ApiErrorCode::InvalidRequestError) = self.code() else {
+            return None;
+        };
+
+        parse_prompt_too_long(&self.message)
+    }
+}
+
+pub fn parse_prompt_too_long(message: &str) -> Option<usize> {
+    message
+        .strip_prefix("prompt is too long: ")?
+        .split_once(" tokens")?
+        .0
+        .parse::<usize>()
+        .ok()
+}
+
+#[test]
+fn test_match_window_exceeded() {
+    let error = ApiError {
+        error_type: "invalid_request_error".to_string(),
+        message: "prompt is too long: 220000 tokens > 200000".to_string(),
+    };
+    assert_eq!(error.match_window_exceeded(), Some(220_000));
+
+    let error = ApiError {
+        error_type: "invalid_request_error".to_string(),
+        message: "prompt is too long: 1234953 tokens".to_string(),
+    };
+    assert_eq!(error.match_window_exceeded(), Some(1234953));
+
+    let error = ApiError {
+        error_type: "invalid_request_error".to_string(),
+        message: "not a prompt length error".to_string(),
+    };
+    assert_eq!(error.match_window_exceeded(), None);
+
+    let error = ApiError {
+        error_type: "rate_limit_error".to_string(),
+        message: "prompt is too long: 12345 tokens".to_string(),
+    };
+    assert_eq!(error.match_window_exceeded(), None);
+
+    let error = ApiError {
+        error_type: "invalid_request_error".to_string(),
+        message: "prompt is too long: invalid tokens".to_string(),
+    };
+    assert_eq!(error.match_window_exceeded(), None);
 }

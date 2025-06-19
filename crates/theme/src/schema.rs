@@ -4,9 +4,9 @@ use anyhow::Result;
 use gpui::{FontStyle, FontWeight, HighlightStyle, Hsla, WindowBackgroundAppearance};
 use indexmap::IndexMap;
 use palette::FromColor;
-use schemars::gen::SchemaGenerator;
-use schemars::schema::{Schema, SchemaObject};
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::{Schema, SchemaObject};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -26,6 +26,18 @@ pub(crate) fn try_parse_color(color: &str) -> Result<Hsla> {
     );
 
     Ok(hsla)
+}
+
+fn ensure_non_opaque(color: Hsla) -> Hsla {
+    const MAXIMUM_OPACITY: f32 = 0.7;
+    if color.a <= MAXIMUM_OPACITY {
+        color
+    } else {
+        Hsla {
+            a: MAXIMUM_OPACITY,
+            ..color
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize, JsonSchema)]
@@ -98,7 +110,8 @@ impl ThemeStyleContent {
     /// Returns a [`ThemeColorsRefinement`] based on the colors in the [`ThemeContent`].
     #[inline(always)]
     pub fn theme_colors_refinement(&self) -> ThemeColorsRefinement {
-        self.colors.theme_colors_refinement()
+        self.colors
+            .theme_colors_refinement(&self.status_colors_refinement())
     }
 
     /// Returns a [`StatusColorsRefinement`] based on the colors in the [`ThemeContent`].
@@ -188,7 +201,7 @@ pub struct ThemeColorsContent {
 
     /// Background Color. Used for the active state of an element that should have a different background than the surface it's on.
     ///
-    /// Active states are triggered by the mouse button being pressed down on an element, or the Return button or other activator being pressd.
+    /// Active states are triggered by the mouse button being pressed down on an element, or the Return button or other activator being pressed.
     #[serde(rename = "element.active")]
     pub element_active: Option<String>,
 
@@ -226,7 +239,7 @@ pub struct ThemeColorsContent {
 
     /// Background Color. Used for the active state of a ghost element that should have the same background as the surface it's on.
     ///
-    /// Active states are triggered by the mouse button being pressed down on an element, or the Return button or other activator being pressd.
+    /// Active states are triggered by the mouse button being pressed down on an element, or the Return button or other activator being pressed.
     #[serde(rename = "ghost_element.active")]
     pub ghost_element_active: Option<String>,
 
@@ -292,6 +305,11 @@ pub struct ThemeColorsContent {
     #[serde(rename = "icon.accent")]
     pub icon_accent: Option<String>,
 
+    /// Color used to accent some of the debuggers elements
+    /// Only accent breakpoint & breakpoint related symbols right now
+    #[serde(rename = "debugger.accent")]
+    pub debugger_accent: Option<String>,
+
     #[serde(rename = "status_bar.background")]
     pub status_bar_background: Option<String>,
 
@@ -352,6 +370,10 @@ pub struct ThemeColorsContent {
     #[serde(rename = "scrollbar.thumb.hover_background")]
     pub scrollbar_thumb_hover_background: Option<String>,
 
+    /// The color of the scrollbar thumb whilst being actively dragged.
+    #[serde(rename = "scrollbar.thumb.active_background")]
+    pub scrollbar_thumb_active_background: Option<String>,
+
     /// The border color of the scrollbar thumb.
     #[serde(rename = "scrollbar.thumb.border")]
     pub scrollbar_thumb_border: Option<String>,
@@ -363,6 +385,22 @@ pub struct ThemeColorsContent {
     /// The border color of the scrollbar track.
     #[serde(rename = "scrollbar.track.border")]
     pub scrollbar_track_border: Option<String>,
+
+    /// The color of the minimap thumb.
+    #[serde(rename = "minimap.thumb.background")]
+    pub minimap_thumb_background: Option<String>,
+
+    /// The color of the minimap thumb when hovered over.
+    #[serde(rename = "minimap.thumb.hover_background")]
+    pub minimap_thumb_hover_background: Option<String>,
+
+    /// The color of the minimap thumb whilst being actively dragged.
+    #[serde(rename = "minimap.thumb.active_background")]
+    pub minimap_thumb_active_background: Option<String>,
+
+    /// The border color of the minimap thumb.
+    #[serde(rename = "minimap.thumb.border")]
+    pub minimap_thumb_border: Option<String>,
 
     #[serde(rename = "editor.foreground")]
     pub editor_foreground: Option<String>,
@@ -381,6 +419,10 @@ pub struct ThemeColorsContent {
 
     #[serde(rename = "editor.highlighted_line.background")]
     pub editor_highlighted_line_background: Option<String>,
+
+    /// Background of active line of debugger
+    #[serde(rename = "editor.debugger_active_line.background")]
+    pub editor_debugger_active_line_background: Option<String>,
 
     /// Text Color. Used for the text of the line number in the editor gutter.
     #[serde(rename = "editor.line_number")]
@@ -557,25 +599,13 @@ pub struct ThemeColorsContent {
     #[serde(rename = "version_control.added")]
     pub version_control_added: Option<String>,
 
-    /// Added version control background color.
-    #[serde(rename = "version_control.added_background")]
-    pub version_control_added_background: Option<String>,
-
     /// Deleted version control color.
     #[serde(rename = "version_control.deleted")]
     pub version_control_deleted: Option<String>,
 
-    /// Deleted version control background color.
-    #[serde(rename = "version_control.deleted_background")]
-    pub version_control_deleted_background: Option<String>,
-
     /// Modified version control color.
     #[serde(rename = "version_control.modified")]
     pub version_control_modified: Option<String>,
-
-    /// Modified version control background color.
-    #[serde(rename = "version_control.modified_background")]
-    pub version_control_modified_background: Option<String>,
 
     /// Renamed version control color.
     #[serde(rename = "version_control.renamed")]
@@ -585,24 +615,61 @@ pub struct ThemeColorsContent {
     #[serde(rename = "version_control.conflict")]
     pub version_control_conflict: Option<String>,
 
-    /// Conflict version control background color.
-    #[serde(rename = "version_control.conflict_background")]
-    pub version_control_conflict_background: Option<String>,
-
     /// Ignored version control color.
     #[serde(rename = "version_control.ignored")]
     pub version_control_ignored: Option<String>,
+
+    /// Background color for row highlights of "ours" regions in merge conflicts.
+    #[serde(rename = "version_control.conflict_marker.ours")]
+    pub version_control_conflict_marker_ours: Option<String>,
+
+    /// Background color for row highlights of "theirs" regions in merge conflicts.
+    #[serde(rename = "version_control.conflict_marker.theirs")]
+    pub version_control_conflict_marker_theirs: Option<String>,
+
+    /// Deprecated in favor of `version_control_conflict_marker_ours`.
+    #[deprecated]
+    pub version_control_conflict_ours_background: Option<String>,
+
+    /// Deprecated in favor of `version_control_conflict_marker_theirs`.
+    #[deprecated]
+    pub version_control_conflict_theirs_background: Option<String>,
 }
 
 impl ThemeColorsContent {
     /// Returns a [`ThemeColorsRefinement`] based on the colors in the [`ThemeColorsContent`].
-    pub fn theme_colors_refinement(&self) -> ThemeColorsRefinement {
+    pub fn theme_colors_refinement(
+        &self,
+        status_colors: &StatusColorsRefinement,
+    ) -> ThemeColorsRefinement {
         let border = self
             .border
             .as_ref()
             .and_then(|color| try_parse_color(color).ok());
         let editor_document_highlight_read_background = self
             .editor_document_highlight_read_background
+            .as_ref()
+            .and_then(|color| try_parse_color(color).ok());
+        let scrollbar_thumb_background = self
+            .scrollbar_thumb_background
+            .as_ref()
+            .and_then(|color| try_parse_color(color).ok())
+            .or_else(|| {
+                self.deprecated_scrollbar_thumb_background
+                    .as_ref()
+                    .and_then(|color| try_parse_color(color).ok())
+            });
+        let scrollbar_thumb_hover_background = self
+            .scrollbar_thumb_hover_background
+            .as_ref()
+            .and_then(|color| try_parse_color(color).ok());
+        let scrollbar_thumb_active_background = self
+            .scrollbar_thumb_active_background
+            .as_ref()
+            .and_then(|color| try_parse_color(color).ok())
+            .or(scrollbar_thumb_background);
+        let scrollbar_thumb_border = self
+            .scrollbar_thumb_border
             .as_ref()
             .and_then(|color| try_parse_color(color).ok());
         ThemeColorsRefinement {
@@ -723,6 +790,10 @@ impl ThemeColorsContent {
                 .icon_accent
                 .as_ref()
                 .and_then(|color| try_parse_color(color).ok()),
+            debugger_accent: self
+                .debugger_accent
+                .as_ref()
+                .and_then(|color| try_parse_color(color).ok()),
             status_bar_background: self
                 .status_bar_background
                 .as_ref()
@@ -784,23 +855,10 @@ impl ThemeColorsContent {
                 .as_ref()
                 .and_then(|color| try_parse_color(color).ok())
                 .or(border),
-            scrollbar_thumb_background: self
-                .scrollbar_thumb_background
-                .as_ref()
-                .and_then(|color| try_parse_color(color).ok())
-                .or_else(|| {
-                    self.deprecated_scrollbar_thumb_background
-                        .as_ref()
-                        .and_then(|color| try_parse_color(color).ok())
-                }),
-            scrollbar_thumb_hover_background: self
-                .scrollbar_thumb_hover_background
-                .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
-            scrollbar_thumb_border: self
-                .scrollbar_thumb_border
-                .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
+            scrollbar_thumb_background,
+            scrollbar_thumb_hover_background,
+            scrollbar_thumb_active_background,
+            scrollbar_thumb_border,
             scrollbar_track_background: self
                 .scrollbar_track_background
                 .as_ref()
@@ -809,6 +867,26 @@ impl ThemeColorsContent {
                 .scrollbar_track_border
                 .as_ref()
                 .and_then(|color| try_parse_color(color).ok()),
+            minimap_thumb_background: self
+                .minimap_thumb_background
+                .as_ref()
+                .and_then(|color| try_parse_color(color).ok())
+                .or(scrollbar_thumb_background.map(ensure_non_opaque)),
+            minimap_thumb_hover_background: self
+                .minimap_thumb_hover_background
+                .as_ref()
+                .and_then(|color| try_parse_color(color).ok())
+                .or(scrollbar_thumb_hover_background.map(ensure_non_opaque)),
+            minimap_thumb_active_background: self
+                .minimap_thumb_active_background
+                .as_ref()
+                .and_then(|color| try_parse_color(color).ok())
+                .or(scrollbar_thumb_active_background.map(ensure_non_opaque)),
+            minimap_thumb_border: self
+                .minimap_thumb_border
+                .as_ref()
+                .and_then(|color| try_parse_color(color).ok())
+                .or(scrollbar_thumb_border),
             editor_foreground: self
                 .editor_foreground
                 .as_ref()
@@ -831,6 +909,10 @@ impl ThemeColorsContent {
                 .and_then(|color| try_parse_color(color).ok()),
             editor_highlighted_line_background: self
                 .editor_highlighted_line_background
+                .as_ref()
+                .and_then(|color| try_parse_color(color).ok()),
+            editor_debugger_active_line_background: self
+                .editor_debugger_active_line_background
                 .as_ref()
                 .and_then(|color| try_parse_color(color).ok()),
             editor_line_number: self
@@ -999,42 +1081,50 @@ impl ThemeColorsContent {
             version_control_added: self
                 .version_control_added
                 .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
-            version_control_added_background: self
-                .version_control_added_background
-                .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
+                .and_then(|color| try_parse_color(color).ok())
+                // Fall back to `created`, for backwards compatibility.
+                .or(status_colors.created),
             version_control_deleted: self
                 .version_control_deleted
                 .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
-            version_control_deleted_background: self
-                .version_control_deleted_background
-                .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
+                .and_then(|color| try_parse_color(color).ok())
+                // Fall back to `deleted`, for backwards compatibility.
+                .or(status_colors.deleted),
             version_control_modified: self
                 .version_control_modified
                 .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
-            version_control_modified_background: self
-                .version_control_modified_background
-                .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
+                .and_then(|color| try_parse_color(color).ok())
+                // Fall back to `modified`, for backwards compatibility.
+                .or(status_colors.modified),
             version_control_renamed: self
                 .version_control_renamed
                 .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
+                .and_then(|color| try_parse_color(color).ok())
+                // Fall back to `modified`, for backwards compatibility.
+                .or(status_colors.modified),
             version_control_conflict: self
                 .version_control_conflict
                 .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
-            version_control_conflict_background: self
-                .version_control_conflict_background
-                .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
+                .and_then(|color| try_parse_color(color).ok())
+                // Fall back to `ignored`, for backwards compatibility.
+                .or(status_colors.ignored),
             version_control_ignored: self
                 .version_control_ignored
                 .as_ref()
+                .and_then(|color| try_parse_color(color).ok())
+                // Fall back to `conflict`, for backwards compatibility.
+                .or(status_colors.ignored),
+            #[allow(deprecated)]
+            version_control_conflict_marker_ours: self
+                .version_control_conflict_marker_ours
+                .as_ref()
+                .or(self.version_control_conflict_ours_background.as_ref())
+                .and_then(|color| try_parse_color(color).ok()),
+            #[allow(deprecated)]
+            version_control_conflict_marker_theirs: self
+                .version_control_conflict_marker_theirs
+                .as_ref()
+                .or(self.version_control_conflict_theirs_background.as_ref())
                 .and_then(|color| try_parse_color(color).ok()),
         }
     }

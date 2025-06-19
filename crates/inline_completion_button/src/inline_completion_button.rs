@@ -1,41 +1,40 @@
 use anyhow::Result;
-use client::UserStore;
+use client::{UserStore, zed_urls};
 use copilot::{Copilot, Status};
 use editor::{
+    Editor,
     actions::{ShowEditPrediction, ToggleEditPrediction},
     scroll::Autoscroll,
-    Editor,
 };
-use feature_flags::{
-    FeatureFlagAppExt, PredictEditsFeatureFlag, PredictEditsRateCompletionsFeatureFlag,
-};
+use feature_flags::{FeatureFlagAppExt, PredictEditsRateCompletionsFeatureFlag};
 use fs::Fs;
 use gpui::{
-    actions, div, pulsating_between, Action, Animation, AnimationExt, App, AsyncWindowContext,
-    Corner, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Subscription,
-    WeakEntity,
+    Action, Animation, AnimationExt, App, AsyncWindowContext, Corner, Entity, FocusHandle,
+    Focusable, IntoElement, ParentElement, Render, Subscription, WeakEntity, actions, div,
+    pulsating_between,
 };
 use indoc::indoc;
 use language::{
-    language_settings::{self, all_language_settings, AllLanguageSettings, EditPredictionProvider},
-    File, Language,
+    EditPredictionsMode, File, Language,
+    language_settings::{self, AllLanguageSettings, EditPredictionProvider, all_language_settings},
 };
 use regex::Regex;
-use settings::{update_settings_file, Settings, SettingsStore};
+use settings::{Settings, SettingsStore, update_settings_file};
 use std::{
     sync::{Arc, LazyLock},
     time::Duration,
 };
 use supermaven::{AccountStatus, Supermaven};
 use ui::{
-    prelude::*, Clickable, ContextMenu, ContextMenuEntry, IconButton, IconButtonShape, Indicator,
-    PopoverMenu, PopoverMenuHandle, Tooltip,
+    Clickable, ContextMenu, ContextMenuEntry, DocumentationSide, IconButton, IconButtonShape,
+    Indicator, PopoverMenu, PopoverMenuHandle, ProgressBar, Tooltip, prelude::*,
 };
 use workspace::{
-    create_and_open_local_file, item::ItemHandle, notifications::NotificationId, StatusItemView,
-    Toast, Workspace,
+    StatusItemView, Toast, Workspace, create_and_open_local_file, item::ItemHandle,
+    notifications::NotificationId,
 };
 use zed_actions::OpenBrowser;
+use zed_llm_client::UsageLimit;
 use zeta::RateCompletions;
 
 actions!(edit_prediction, [ToggleMenu]);
@@ -105,14 +104,8 @@ impl Render for InlineCompletionButton {
                                             )
                                             .on_click(
                                                 "Reinstall Copilot",
-                                                |_, cx| {
-                                                    if let Some(copilot) = Copilot::global(cx) {
-                                                        copilot
-                                                            .update(cx, |copilot, cx| {
-                                                                copilot.reinstall(cx)
-                                                            })
-                                                            .detach();
-                                                    }
+                                                |window, cx| {
+                                                    copilot::reinstall_and_sign_in(window, cx)
                                                 },
                                             ),
                                             cx,
@@ -232,10 +225,6 @@ impl Render for InlineCompletionButton {
             }
 
             EditPredictionProvider::Zed => {
-                if !cx.has_flag::<PredictEditsFeatureFlag>() {
-                    return div();
-                }
-
                 let enabled = self.editor_enabled.unwrap_or(true);
 
                 let zeta_icon = if enabled {
@@ -246,11 +235,17 @@ impl Render for InlineCompletionButton {
 
                 let current_user_terms_accepted =
                     self.user_store.read(cx).current_user_has_accepted_terms();
+                let has_subscription = self.user_store.read(cx).current_plan().is_some()
+                    && self.user_store.read(cx).subscription_period().is_some();
 
-                if !current_user_terms_accepted.unwrap_or(false) {
+                if !has_subscription || !current_user_terms_accepted.unwrap_or(false) {
                     let signed_in = current_user_terms_accepted.is_some();
                     let tooltip_meta = if signed_in {
-                        "Read Terms of Service"
+                        if has_subscription {
+                            "Read Terms of Service"
+                        } else {
+                            "Choose a Plan"
+                        }
                     } else {
                         "Sign in to use"
                     };
@@ -258,7 +253,7 @@ impl Render for InlineCompletionButton {
                     return div().child(
                         IconButton::new("zed-predict-pending-button", zeta_icon)
                             .shape(IconButtonShape::Square)
-                            .indicator(Indicator::dot().color(Color::Error))
+                            .indicator(Indicator::dot().color(Color::Muted))
                             .indicator_border_color(Some(cx.theme().colors().status_bar_background))
                             .tooltip(move |window, cx| {
                                 Tooltip::with_meta(
@@ -282,14 +277,31 @@ impl Render for InlineCompletionButton {
                     );
                 }
 
+                let mut over_limit = false;
+
+                if let Some(usage) = self
+                    .edit_prediction_provider
+                    .as_ref()
+                    .and_then(|provider| provider.usage(cx))
+                {
+                    over_limit = usage.over_limit()
+                }
+
                 let show_editor_predictions = self.editor_show_predictions;
 
                 let icon_button = IconButton::new("zed-predict-pending-button", zeta_icon)
                     .shape(IconButtonShape::Square)
-                    .when(enabled && !show_editor_predictions, |this| {
-                        this.indicator(Indicator::dot().color(Color::Muted))
+                    .when(
+                        enabled && (!show_editor_predictions || over_limit),
+                        |this| {
+                            this.indicator(Indicator::dot().when_else(
+                                over_limit,
+                                |dot| dot.color(Color::Error),
+                                |dot| dot.color(Color::Muted),
+                            ))
                             .indicator_border_color(Some(cx.theme().colors().status_bar_background))
-                    })
+                        },
+                    )
                     .when(!self.popover_menu_handle.is_deployed(), |element| {
                         element.tooltip(move |window, cx| {
                             if enabled {
@@ -399,31 +411,50 @@ impl InlineCompletionButton {
         })
     }
 
-    pub fn build_language_settings_menu(&self, mut menu: ContextMenu, cx: &mut App) -> ContextMenu {
+    pub fn build_language_settings_menu(
+        &self,
+        mut menu: ContextMenu,
+        window: &Window,
+        cx: &mut App,
+    ) -> ContextMenu {
         let fs = self.fs.clone();
+        let line_height = window.line_height();
 
         menu = menu.header("Show Edit Predictions For");
 
+        let language_state = self.language.as_ref().map(|language| {
+            (
+                language.clone(),
+                language_settings::language_settings(Some(language.name()), None, cx)
+                    .show_edit_predictions,
+            )
+        });
+
         if let Some(editor_focus_handle) = self.editor_focus_handle.clone() {
-            menu = menu.toggleable_entry(
-                "This Buffer",
-                self.editor_show_predictions,
-                IconPosition::Start,
-                Some(Box::new(ToggleEditPrediction)),
-                {
-                    let editor_focus_handle = editor_focus_handle.clone();
-                    move |window, cx| {
-                        editor_focus_handle.dispatch_action(&ToggleEditPrediction, window, cx);
-                    }
-                },
-            );
+            let entry = ContextMenuEntry::new("This Buffer")
+                .toggleable(IconPosition::Start, self.editor_show_predictions)
+                .action(Box::new(ToggleEditPrediction))
+                .handler(move |window, cx| {
+                    editor_focus_handle.dispatch_action(&ToggleEditPrediction, window, cx);
+                });
+
+            match language_state.clone() {
+                Some((language, false)) => {
+                    menu = menu.item(
+                        entry
+                            .disabled(true)
+                            .documentation_aside(DocumentationSide::Left, move |_cx| {
+                                Label::new(format!("Edit predictions cannot be toggled for this buffer because they are disabled for {}", language.name()))
+                                    .into_any_element()
+                            })
+                    );
+                }
+                Some(_) | None => menu = menu.item(entry),
+            }
         }
 
-        if let Some(language) = self.language.clone() {
+        if let Some((language, language_enabled)) = language_state {
             let fs = fs.clone();
-            let language_enabled =
-                language_settings::language_settings(Some(language.name()), None, cx)
-                    .show_edit_predictions;
 
             menu = menu.toggleable_entry(
                 language.name(),
@@ -437,13 +468,51 @@ impl InlineCompletionButton {
         }
 
         let settings = AllLanguageSettings::get_global(cx);
-        let globally_enabled = settings.show_inline_completions(None, cx);
+
+        let globally_enabled = settings.show_edit_predictions(None, cx);
         menu = menu.toggleable_entry("All Files", globally_enabled, IconPosition::Start, None, {
             let fs = fs.clone();
             move |_, cx| toggle_inline_completions_globally(fs.clone(), cx)
         });
-        menu = menu.separator().header("Privacy Settings");
 
+        let provider = settings.edit_predictions.provider;
+        let current_mode = settings.edit_predictions_mode();
+        let subtle_mode = matches!(current_mode, EditPredictionsMode::Subtle);
+        let eager_mode = matches!(current_mode, EditPredictionsMode::Eager);
+
+        if matches!(provider, EditPredictionProvider::Zed) {
+            menu = menu
+                .separator()
+                .header("Display Modes")
+                .item(
+                    ContextMenuEntry::new("Eager")
+                        .toggleable(IconPosition::Start, eager_mode)
+                        .documentation_aside(DocumentationSide::Left, move |_| {
+                            Label::new("Display predictions inline when there are no language server completions available.").into_any_element()
+                        })
+                        .handler({
+                            let fs = fs.clone();
+                            move |_, cx| {
+                                toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Eager, cx)
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Subtle")
+                        .toggleable(IconPosition::Start, subtle_mode)
+                        .documentation_aside(DocumentationSide::Left, move |_| {
+                            Label::new("Display predictions inline only when holding a modifier key (alt by default).").into_any_element()
+                        })
+                        .handler({
+                            let fs = fs.clone();
+                            move |_, cx| {
+                                toggle_edit_prediction_mode(fs.clone(), EditPredictionsMode::Subtle, cx)
+                            }
+                        }),
+                );
+        }
+
+        menu = menu.separator().header("Privacy Settings");
         if let Some(provider) = &self.edit_prediction_provider {
             let data_collection = provider.data_collection_state(cx);
             if data_collection.is_supported() {
@@ -462,7 +531,7 @@ impl InlineCompletionButton {
                         .toggleable(IconPosition::Start, data_collection.is_enabled())
                         .icon(icon_name)
                         .icon_color(icon_color)
-                        .documentation_aside(move |cx| {
+                        .documentation_aside(DocumentationSide::Left, move |cx| {
                             let (msg, label_color, icon_name, icon_color) = match (is_open_source, is_collecting) {
                                 (true, true) => (
                                     "Project identified as open source, and you're sharing data.",
@@ -499,12 +568,14 @@ impl InlineCompletionButton {
                                 )
                                 .child(
                                     h_flex()
+                                        .items_start()
                                         .pt_2()
+                                        .flex_1()
                                         .gap_1p5()
                                         .border_t_1()
                                         .border_color(cx.theme().colors().border_variant)
-                                        .child(Icon::new(icon_name).size(IconSize::XSmall).color(icon_color))
-                                        .child(div().child(Label::new(msg).size(LabelSize::Small).color(label_color)))
+                                        .child(h_flex().flex_shrink_0().h(line_height).child(Icon::new(icon_name).size(IconSize::XSmall).color(icon_color)))
+                                        .child(div().child(msg).w_full().text_sm().text_color(label_color.color(cx)))
                                 )
                                 .into_any_element()
                         })
@@ -541,7 +612,7 @@ impl InlineCompletionButton {
             ContextMenuEntry::new("Configure Excluded Files")
                 .icon(IconName::LockOutlined)
                 .icon_color(Color::Muted)
-                .documentation_aside(|_| {
+                .documentation_aside(DocumentationSide::Left, |_| {
                     Label::new(indoc!{"
                         Open your settings to add sensitive paths for which Zed will never predict edits."}).into_any_element()
                 })
@@ -549,11 +620,11 @@ impl InlineCompletionButton {
                     if let Some(workspace) = window.root().flatten() {
                         let workspace = workspace.downgrade();
                         window
-                            .spawn(cx, |cx| {
+                            .spawn(cx, async |cx| {
                                 open_disabled_globs_setting_in_editor(
                                     workspace,
                                     cx,
-                                )
+                                ).await
                             })
                             .detach_and_log_err(cx);
                     }
@@ -566,44 +637,6 @@ impl InlineCompletionButton {
                     .disabled(true)
                     .icon(IconName::ZedPredictDisabled)
                     .icon_size(IconSize::Small),
-            );
-        }
-
-        if cx.has_flag::<feature_flags::PredictEditsNonEagerModeFeatureFlag>() {
-            let is_eager_preview_enabled = match settings.edit_predictions_mode() {
-                language::EditPredictionsMode::Auto => false,
-                language::EditPredictionsMode::EagerPreview => true,
-            };
-            menu = menu.separator().toggleable_entry(
-                "Eager Preview Mode",
-                is_eager_preview_enabled,
-                IconPosition::Start,
-                None,
-                {
-                    let fs = fs.clone();
-                    move |_window, cx| {
-                        update_settings_file::<AllLanguageSettings>(
-                            fs.clone(),
-                            cx,
-                            move |settings, _cx| {
-                                let new_mode = match is_eager_preview_enabled {
-                                    true => language::EditPredictionsMode::Auto,
-                                    false => language::EditPredictionsMode::EagerPreview,
-                                };
-
-                                if let Some(edit_predictions) = settings.edit_predictions.as_mut() {
-                                    edit_predictions.mode = new_mode;
-                                } else {
-                                    settings.edit_predictions =
-                                        Some(language_settings::EditPredictionSettingsContent {
-                                            mode: new_mode,
-                                            ..Default::default()
-                                        });
-                                }
-                            },
-                        );
-                    }
-                },
             );
         }
 
@@ -631,8 +664,8 @@ impl InlineCompletionButton {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<ContextMenu> {
-        ContextMenu::build(window, cx, |menu, _, cx| {
-            self.build_language_settings_menu(menu, cx)
+        ContextMenu::build(window, cx, |menu, window, cx| {
+            self.build_language_settings_menu(menu, window, cx)
                 .separator()
                 .link(
                     "Go to Copilot Settings",
@@ -650,8 +683,8 @@ impl InlineCompletionButton {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<ContextMenu> {
-        ContextMenu::build(window, cx, |menu, _, cx| {
-            self.build_language_settings_menu(menu, cx)
+        ContextMenu::build(window, cx, |menu, window, cx| {
+            self.build_language_settings_menu(menu, window, cx)
                 .separator()
                 .action("Sign Out", supermaven::SignOut.boxed_clone())
         })
@@ -662,8 +695,110 @@ impl InlineCompletionButton {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<ContextMenu> {
-        ContextMenu::build(window, cx, |menu, _window, cx| {
-            self.build_language_settings_menu(menu, cx).when(
+        ContextMenu::build(window, cx, |mut menu, window, cx| {
+            if let Some(usage) = self
+                .edit_prediction_provider
+                .as_ref()
+                .and_then(|provider| provider.usage(cx))
+            {
+                menu = menu.header("Usage");
+                menu = menu
+                    .custom_entry(
+                        move |_window, cx| {
+                            let used_percentage = match usage.limit {
+                                UsageLimit::Limited(limit) => {
+                                    Some((usage.amount as f32 / limit as f32) * 100.)
+                                }
+                                UsageLimit::Unlimited => None,
+                            };
+
+                            h_flex()
+                                .flex_1()
+                                .gap_1p5()
+                                .children(
+                                    used_percentage.map(|percent| {
+                                        ProgressBar::new("usage", percent, 100., cx)
+                                    }),
+                                )
+                                .child(
+                                    Label::new(match usage.limit {
+                                        UsageLimit::Limited(limit) => {
+                                            format!("{} / {limit}", usage.amount)
+                                        }
+                                        UsageLimit::Unlimited => format!("{} / ∞", usage.amount),
+                                    })
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                                )
+                                .into_any_element()
+                        },
+                        move |_, cx| cx.open_url(&zed_urls::account_url(cx)),
+                    )
+                    .when(usage.over_limit(), |menu| -> ContextMenu {
+                        menu.entry("Subscribe to increase your limit", None, |_window, cx| {
+                            cx.open_url(&zed_urls::account_url(cx))
+                        })
+                    })
+                    .separator();
+            } else if self.user_store.read(cx).account_too_young() {
+                menu = menu
+                    .custom_entry(
+                        |_window, _cx| {
+                            h_flex()
+                                .gap_1()
+                                .child(
+                                    Icon::new(IconName::Warning)
+                                        .size(IconSize::Small)
+                                        .color(Color::Warning),
+                                )
+                                .child(
+                                    Label::new("Your GitHub account is less than 30 days old")
+                                        .size(LabelSize::Small)
+                                        .color(Color::Warning),
+                                )
+                                .into_any_element()
+                        },
+                        |_window, cx| cx.open_url(&zed_urls::account_url(cx)),
+                    )
+                    .entry(
+                        "You need to upgrade to Zed Pro or contact us.",
+                        None,
+                        |_window, cx| cx.open_url(&zed_urls::account_url(cx)),
+                    )
+                    .separator();
+            } else if self.user_store.read(cx).has_overdue_invoices() {
+                menu = menu
+                    .custom_entry(
+                        |_window, _cx| {
+                            h_flex()
+                                .gap_1()
+                                .child(
+                                    Icon::new(IconName::Warning)
+                                        .size(IconSize::Small)
+                                        .color(Color::Warning),
+                                )
+                                .child(
+                                    Label::new("You have an outstanding invoice")
+                                        .size(LabelSize::Small)
+                                        .color(Color::Warning),
+                                )
+                                .into_any_element()
+                        },
+                        |_window, cx| {
+                            cx.open_url(&zed_urls::account_url(cx))
+                        },
+                    )
+                    .entry(
+                        "Check your payment status or contact us at billing-support@zed.dev to continue using this feature.",
+                        None,
+                        |_window, cx| {
+                            cx.open_url(&zed_urls::account_url(cx))
+                        },
+                    )
+                    .separator();
+            }
+
+            self.build_language_settings_menu(menu, window, cx).when(
                 cx.has_flag::<PredictEditsRateCompletionsFeatureFlag>(),
                 |this| this.action("Rate Completions", RateCompletions.boxed_clone()),
             )
@@ -681,7 +816,7 @@ impl InlineCompletionButton {
             Some(
                 file.map(|file| {
                     all_language_settings(Some(file), cx)
-                        .inline_completions_enabled_for_path(file.path())
+                        .edit_predictions_enabled_for_file(file, cx)
                 })
                 .unwrap_or(true),
             )
@@ -751,10 +886,10 @@ impl SupermavenButtonStatus {
 
 async fn open_disabled_globs_setting_in_editor(
     workspace: WeakEntity<Workspace>,
-    mut cx: AsyncWindowContext,
+    cx: &mut AsyncWindowContext,
 ) -> Result<()> {
     let settings_editor = workspace
-        .update_in(&mut cx, |_, window, cx| {
+        .update_in(cx, |_, window, cx| {
             create_and_open_local_file(paths::settings_file(), window, cx, || {
                 settings::initial_user_settings_content().as_ref().into()
             })
@@ -765,7 +900,7 @@ async fn open_disabled_globs_setting_in_editor(
 
     settings_editor
         .downgrade()
-        .update_in(&mut cx, |item, window, cx| {
+        .update_in(cx, |item, window, cx| {
             let text = item.buffer().read(cx).snapshot(cx).text();
 
             let settings = cx.global::<SettingsStore>();
@@ -779,7 +914,7 @@ async fn open_disabled_globs_setting_in_editor(
             });
 
             if !edits.is_empty() {
-                item.edit(edits.iter().cloned(), cx);
+                item.edit(edits, cx);
             }
 
             let text = item.buffer().read(cx).snapshot(cx).text();
@@ -804,7 +939,7 @@ async fn open_disabled_globs_setting_in_editor(
 }
 
 fn toggle_inline_completions_globally(fs: Arc<dyn Fs>, cx: &mut App) {
-    let show_edit_predictions = all_language_settings(None, cx).show_inline_completions(None, cx);
+    let show_edit_predictions = all_language_settings(None, cx).show_edit_predictions(None, cx);
     update_settings_file::<AllLanguageSettings>(fs, cx, move |file, _| {
         file.defaults.show_edit_predictions = Some(!show_edit_predictions)
     });
@@ -824,7 +959,7 @@ fn toggle_show_inline_completions_for_language(
     cx: &mut App,
 ) {
     let show_edit_predictions =
-        all_language_settings(None, cx).show_inline_completions(Some(&language), cx);
+        all_language_settings(None, cx).show_edit_predictions(Some(&language), cx);
     update_settings_file::<AllLanguageSettings>(fs, cx, move |file, _| {
         file.languages
             .entry(language.name())
@@ -839,4 +974,23 @@ fn hide_copilot(fs: Arc<dyn Fs>, cx: &mut App) {
             .get_or_insert(Default::default())
             .edit_prediction_provider = Some(EditPredictionProvider::None);
     });
+}
+
+fn toggle_edit_prediction_mode(fs: Arc<dyn Fs>, mode: EditPredictionsMode, cx: &mut App) {
+    let settings = AllLanguageSettings::get_global(cx);
+    let current_mode = settings.edit_predictions_mode();
+
+    if current_mode != mode {
+        update_settings_file::<AllLanguageSettings>(fs, cx, move |settings, _cx| {
+            if let Some(edit_predictions) = settings.edit_predictions.as_mut() {
+                edit_predictions.mode = mode;
+            } else {
+                settings.edit_predictions =
+                    Some(language_settings::EditPredictionSettingsContent {
+                        mode,
+                        ..Default::default()
+                    });
+            }
+        });
+    }
 }

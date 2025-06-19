@@ -226,7 +226,6 @@ impl Render for TitleBar {
                             })
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
                     )
-                    .child(self.zed_predict_banner.clone())
                     .child(self.render_user_menu_button(cx)),
             )
             .when(!window.is_fullscreen(), |title_bar| {

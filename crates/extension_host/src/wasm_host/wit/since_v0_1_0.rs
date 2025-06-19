@@ -18,6 +18,7 @@ use std::{
 use util::archive::extract_zip;
 use util::maybe;
 use wasmtime::component::{Linker, Resource};
+use anyhow::anyhow;
 
 use super::latest;
 

@@ -71,16 +71,17 @@ impl ProjectCache {
 }
 
 #[cfg(debug_assertions)]
-const MAX_QUEUE_LEN: usize = 5;
 const MAX_QUEUE_LEN: usize = 50;
 
 #[cfg(not(debug_assertions))]
+const MAX_QUEUE_LEN: usize = 5;
 
 #[cfg(debug_assertions)]
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
-const FLUSH_INTERVAL: Duration = Duration::from_secs(60 * 5);
 
 #[cfg(not(debug_assertions))]
+const FLUSH_INTERVAL: Duration = Duration::from_secs(60 * 5);
+
 static ZED_CLIENT_CHECKSUM_SEED: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
     option_env!("ZED_CLIENT_CHECKSUM_SEED")
         .map(|s| s.as_bytes().into())
@@ -249,9 +250,6 @@ impl Telemetry {
 
     #[cfg(any(test, feature = "test-support"))]
     fn shutdown_telemetry(self: &Arc<Self>) -> impl Future<Output = ()> + use<> {
-        Task::ready(())
-    }
-    fn shutdown_telemetry(self: &Arc<Self>) -> impl Future<Output = ()> + use<> {
         telemetry::event!("App Closed");
         // TODO: close final edit period and make sure it's sent
         Task::ready(())
@@ -260,6 +258,9 @@ impl Telemetry {
     // Skip calling this function in tests.
     // TestAppContext ends up calling this function on shutdown and it panics when trying to find the TelemetrySettings
     #[cfg(not(any(test, feature = "test-support")))]
+    fn shutdown_telemetry(self: &Arc<Self>) -> impl Future<Output = ()> + use<> {
+            Task::ready(())
+        }
 
     pub fn log_file_path() -> PathBuf {
         paths::logs_dir().join("telemetry.log")

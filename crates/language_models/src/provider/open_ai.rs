@@ -779,10 +779,10 @@ impl Render for ConfigurationView {
                         ))
                         .child(InstructionListItem::text_only(
                             "Paste your API key below and hit enter to start using the assistant",
-                        )),
+                        ))
                         .child(InstructionListItem::text_only(
                             "If your provider has no authentication, just insert a dummy key",
-                        ))
+                        )),
                 )
                 .child(
                     h_flex()

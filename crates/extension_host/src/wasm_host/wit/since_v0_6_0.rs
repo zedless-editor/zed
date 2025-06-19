@@ -29,6 +29,7 @@ use std::{
 };
 use util::{archive::extract_zip, maybe};
 use wasmtime::component::{Linker, Resource};
+use anyhow::anyhow;
 
 pub const MIN_VERSION: SemanticVersion = SemanticVersion::new(0, 6, 0);
 pub const MAX_VERSION: SemanticVersion = SemanticVersion::new(0, 6, 0);

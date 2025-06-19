@@ -10,7 +10,7 @@
   cargo-machete,
   nixfmt-rfc-style,
   protobuf,
-  nodejs_22,
+  vulkan-loader,
 }:
 (mkShell.override { inherit (zed-editor) stdenv; }) {
   inputsFrom = [ zed-editor ];
@@ -20,12 +20,7 @@
     cargo-hakari
     cargo-machete
     nixfmt-rfc-style
-    # TODO: package protobuf-language-server for editing zed.proto
-    # TODO: add other tools used in our scripts
-
-    # `build.nix` adds this to the `zed-editor` wrapper (see `postFixup`)
-    # we'll just put it on `$PATH`:
-    nodejs_22
+    vulkan-loader # not exposed in buildInputs of zed-editor
   ];
 
   env =

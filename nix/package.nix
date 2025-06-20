@@ -141,6 +141,9 @@ in
     buildFeatures = lib.optionals stdenv.hostPlatform.isDarwin ["gpui/runtime_shaders"];
 
     env = {
+      RUSTFLAGS = lib.concatStringsSep " " ([
+        "-C link-arg=-Wl,-rpath,${lib.makeLibraryPath [ wayland gpu-lib ]}"
+      ] ++ lib.optional withGLES "--cfg gles");
       ALLOW_MISSING_LICENSES = true;
       ZSTD_SYS_USE_PKG_CONFIG = true;
       FONTCONFIG_FILE = makeFontsConf {
@@ -156,11 +159,6 @@ in
       RELEASE_VERSION = version;
       LK_CUSTOM_WEBRTC = livekit-libwebrtc;
     };
-
-    RUSTFLAGS =
-      if withGLES
-      then "--cfg gles"
-      else "";
 
     preBuild = ''
       bash script/generate-licenses

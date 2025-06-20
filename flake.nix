@@ -28,7 +28,9 @@
     });
 
     devShells = forAllSystems (pkgs: {
-      default = pkgs.callPackage ./nix/shell.nix {};
+      default = pkgs.callPackage ./nix/shell.nix {
+        inherit (self.packages.${pkgs.stdenv.system}) zed-editor;
+      };
     });
 
     formatter = forAllSystems (pkgs: pkgs.nixfmt-rfc-style);

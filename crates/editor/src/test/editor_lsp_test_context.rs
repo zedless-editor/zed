@@ -14,7 +14,7 @@ use futures::Future;
 use gpui::{Context, Entity, Focusable as _, VisualTestContext, Window};
 use indoc::indoc;
 use language::{
-    point_to_lsp, FakeLspAdapter, Language, LanguageConfig, LanguageMatcher, LanguageQueries,
+    FakeLspAdapter, Language, LanguageConfig, LanguageMatcher, LanguageQueries, point_to_lsp,
 };
 use lsp::{notification, request};
 use multi_buffer::ToPointUtf16;
@@ -79,6 +79,19 @@ pub(crate) fn rust_lang() -> Arc<Language> {
     .expect("Could not parse queries");
     Arc::new(language)
 }
+
+#[cfg(test)]
+pub(crate) fn git_commit_lang() -> Arc<Language> {
+    Arc::new(Language::new(
+        LanguageConfig {
+            name: "Git Commit".into(),
+            line_comments: vec!["#".into()],
+            ..Default::default()
+        },
+        None,
+    ))
+}
+
 impl EditorLspTestContext {
     pub async fn new(
         language: Language,
@@ -156,6 +169,12 @@ impl EditorLspTestContext {
                 .expect("Opened test file wasn't an editor")
         });
         editor.update_in(&mut cx, |editor, window, cx| {
+            let nav_history = workspace
+                .read(cx)
+                .active_pane()
+                .read(cx)
+                .nav_history_for_item(&cx.entity());
+            editor.set_nav_history(Some(nav_history));
             window.focus(&editor.focus_handle(cx))
         });
 
@@ -215,6 +234,8 @@ impl EditorLspTestContext {
                 ("[" @open "]" @close)
                 ("{" @open "}" @close)
                 ("<" @open ">" @close)
+                ("'" @open "'" @close)
+                ("`" @open "`" @close)
                 ("\"" @open "\"" @close)"#})),
             indents: Some(Cow::from(indoc! {r#"
                 [
@@ -249,10 +270,10 @@ impl EditorLspTestContext {
                     ..Default::default()
                 },
                 block_comment: Some(("<!-- ".into(), " -->".into())),
-                word_characters: ['-'].into_iter().collect(),
+                completion_query_characters: ['-'].into_iter().collect(),
                 ..Default::default()
             },
-            Some(tree_sitter_html::language()),
+            Some(tree_sitter_html::LANGUAGE.into()),
         )
         .with_queries(LanguageQueries {
             brackets: Some(Cow::from(indoc! {r#"
@@ -322,7 +343,7 @@ impl EditorLspTestContext {
         self.workspace.update_in(&mut self.cx.cx, update)
     }
 
-    pub fn handle_request<T, F, Fut>(
+    pub fn set_request_handler<T, F, Fut>(
         &self,
         mut handler: F,
     ) -> futures::channel::mpsc::UnboundedReceiver<()>
@@ -333,7 +354,7 @@ impl EditorLspTestContext {
         Fut: 'static + Send + Future<Output = Result<T::Result>>,
     {
         let url = self.buffer_lsp_url.clone();
-        self.lsp.handle_request::<T, _, _>(move |params, cx| {
+        self.lsp.set_request_handler::<T, _, _>(move |params, cx| {
             let url = url.clone();
             handler(url, params, cx)
         })

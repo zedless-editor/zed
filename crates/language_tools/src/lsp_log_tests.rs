@@ -5,7 +5,7 @@ use crate::lsp_log::LogMenuItem;
 use super::*;
 use futures::StreamExt;
 use gpui::{AppContext as _, SemanticVersion, TestAppContext, VisualTestContext};
-use language::{tree_sitter_rust, FakeLspAdapter, Language, LanguageConfig, LanguageMatcher};
+use language::{FakeLspAdapter, Language, LanguageConfig, LanguageMatcher, tree_sitter_rust};
 use lsp::LanguageServerName;
 use lsp_log::LogKind;
 use project::{FakeFs, Project};
@@ -15,9 +15,7 @@ use util::path;
 
 #[gpui::test]
 async fn test_lsp_logs(cx: &mut TestAppContext) {
-    if std::env::var("RUST_LOG").is_ok() {
-        env_logger::init();
-    }
+    zlog::init_test();
 
     init_test(cx);
 
@@ -109,6 +107,7 @@ fn init_test(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         let settings_store = SettingsStore::test(cx);
         cx.set_global(settings_store);
+        workspace::init_settings(cx);
         theme::init(theme::LoadThemes::JustBase, cx);
         release_channel::init(SemanticVersion::default(), cx);
         language::init(cx);

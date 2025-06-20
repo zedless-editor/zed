@@ -5,23 +5,26 @@ mod remote;
 pub mod repository;
 pub mod status;
 
-use anyhow::{anyhow, Context as _, Result};
+pub use crate::hosting_provider::*;
+pub use crate::remote::*;
+use anyhow::{Context as _, Result};
+pub use git2 as libgit;
+use gpui::action_with_deprecated_aliases;
 use gpui::actions;
+use gpui::impl_action_with_deprecated_aliases;
+pub use repository::WORK_DIRECTORY_REPO_PATH;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-pub use crate::hosting_provider::*;
-pub use crate::remote::*;
-pub use git2 as libgit;
-pub use repository::WORK_DIRECTORY_REPO_PATH;
-
 pub static DOT_GIT: LazyLock<&'static OsStr> = LazyLock::new(|| OsStr::new(".git"));
 pub static GITIGNORE: LazyLock<&'static OsStr> = LazyLock::new(|| OsStr::new(".gitignore"));
 pub static FSMONITOR_DAEMON: LazyLock<&'static OsStr> =
     LazyLock::new(|| OsStr::new("fsmonitor--daemon"));
+pub static LFS_DIR: LazyLock<&'static OsStr> = LazyLock::new(|| OsStr::new("lfs"));
 pub static COMMIT_MESSAGE: LazyLock<&'static OsStr> =
     LazyLock::new(|| OsStr::new("COMMIT_EDITMSG"));
 pub static INDEX_LOCK: LazyLock<&'static OsStr> = LazyLock::new(|| OsStr::new("index.lock"));
@@ -29,20 +32,44 @@ pub static INDEX_LOCK: LazyLock<&'static OsStr> = LazyLock::new(|| OsStr::new("i
 actions!(
     git,
     [
+        // per-hunk
+        ToggleStaged,
+        StageAndNext,
+        UnstageAndNext,
+        // per-file
         StageFile,
         UnstageFile,
-        ToggleStaged,
-        // Revert actions are currently in the editor crate:
-        // editor::RevertFile,
-        // editor::RevertSelectedHunks
+        // repo-wide
         StageAll,
         UnstageAll,
-        RevertAll,
+        RestoreTrackedFiles,
+        TrashUntrackedFiles,
         Uncommit,
+        Push,
+        PushTo,
+        ForcePush,
+        Pull,
+        Fetch,
+        FetchFrom,
         Commit,
-        ClearCommitMessage
+        Amend,
+        Cancel,
+        ExpandCommitEditor,
+        GenerateCommitMessage,
+        Init,
+        OpenModifiedFiles,
     ]
 );
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, JsonSchema)]
+pub struct RestoreFile {
+    #[serde(default)]
+    pub skip_prompt: bool,
+}
+
+impl_action_with_deprecated_aliases!(git, RestoreFile, ["editor::RevertFile"]);
+action_with_deprecated_aliases!(git, Restore, ["editor::RevertSelectedHunks"]);
+action_with_deprecated_aliases!(git, Blame, ["editor::ToggleGitBlame"]);
 
 /// The length of a Git short SHA.
 pub const SHORT_SHA_LENGTH: usize = 7;
@@ -75,7 +102,7 @@ impl FromStr for Oid {
 
     fn from_str(s: &str) -> std::prelude::v1::Result<Self, Self::Err> {
         libgit::Oid::from_str(s)
-            .map_err(|error| anyhow!("failed to parse git oid: {}", error))
+            .context("parsing git oid")
             .map(Self)
     }
 }

@@ -2,7 +2,7 @@
 
 YAML support is available natively in Zed.
 
-- Tree Sitter: [zed-industries/tree-sitter-yaml](https://github.com/zed-industries/tree-sitter-yaml)
+- Tree-sitter: [zed-industries/tree-sitter-yaml](https://github.com/zed-industries/tree-sitter-yaml)
 - Language Server: [redhat-developer/yaml-language-server](https://github.com/redhat-developer/yaml-language-server)
 
 ## Configuration
@@ -32,17 +32,17 @@ Note, settings keys must be nested, so `yaml.keyOrdering` becomes `{"yaml": { "k
 
 ## Formatting
 
-By default Zed will use prettier for formatting YAML files.
+By default, Zed uses Prettier for formatting YAML files.
 
 ### Prettier Formatting
 
-You can customize the formatting behavior of Prettier. For example to use single-quotes in yaml files add the following to a `.prettierrc`:
+You can customize the formatting behavior of Prettier. For example to use single-quotes in yaml files add the following to your `.prettierrc` configuration file:
 
 ```json
 {
   "overrides": [
     {
-      "files": ["*.yaml", "*.yml"]
+      "files": ["*.yaml", "*.yml"],
       "options": {
         "singleQuote": false
       }
@@ -53,7 +53,7 @@ You can customize the formatting behavior of Prettier. For example to use single
 
 ### yaml-language-server Formatting
 
-To use `yaml-language-server` instead of Prettier for YAML formatting, add the following to your Zed settings.json:
+To use `yaml-language-server` instead of Prettier for YAML formatting, add the following to your Zed `settings.json`:
 
 ```json
   "languages": {

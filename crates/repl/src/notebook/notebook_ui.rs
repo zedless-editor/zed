@@ -6,18 +6,18 @@ use anyhow::{Context as _, Result};
 use client::proto::ViewId;
 use collections::HashMap;
 use feature_flags::{FeatureFlagAppExt as _, NotebookFeatureFlag};
-use futures::future::Shared;
 use futures::FutureExt;
+use futures::future::Shared;
 use gpui::{
-    actions, list, prelude::*, AnyElement, App, Entity, EventEmitter, FocusHandle, Focusable,
-    ListScrollEvent, ListState, Point, Task,
+    AnyElement, App, Entity, EventEmitter, FocusHandle, Focusable, ListScrollEvent, ListState,
+    Point, Task, actions, list, prelude::*,
 };
 use language::{Language, LanguageRegistry};
 use project::{Project, ProjectEntryId, ProjectPath};
-use ui::{prelude::*, Tooltip};
-use workspace::item::{ItemEvent, TabContentParams};
+use ui::{Tooltip, prelude::*};
+use workspace::item::{ItemEvent, SaveOptions, TabContentParams};
 use workspace::searchable::SearchableItemHandle;
-use workspace::{Item, ItemHandle, ProjectItem, ToolbarItemLocation};
+use workspace::{Item, ItemHandle, Pane, ProjectItem, ToolbarItemLocation};
 use workspace::{ToolbarItemEvent, ToolbarItemView};
 
 use super::{Cell, CellPosition, RenderableCell};
@@ -92,7 +92,9 @@ impl NotebookEditor {
         let language_name = notebook_item.read(cx).language_name();
 
         let notebook_language = notebook_item.read(cx).notebook_language();
-        let notebook_language = cx.spawn_in(window, |_, _| notebook_language).shared();
+        let notebook_language = cx
+            .spawn_in(window, async move |_, _| notebook_language.await)
+            .shared();
 
         let mut cell_order = vec![]; // Vec<CellId>
         let mut cell_map = HashMap::default(); // HashMap<CellId, Cell>
@@ -245,7 +247,7 @@ impl NotebookEditor {
 
     pub fn select_previous(
         &mut self,
-        _: &menu::SelectPrev,
+        _: &menu::SelectPrevious,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -563,17 +565,17 @@ impl project::ProjectItem for NotebookItem {
         project: &Entity<Project>,
         path: &ProjectPath,
         cx: &mut App,
-    ) -> Option<Task<gpui::Result<Entity<Self>>>> {
+    ) -> Option<Task<anyhow::Result<Entity<Self>>>> {
         let path = path.clone();
         let project = project.clone();
         let fs = project.read(cx).fs().clone();
         let languages = project.read(cx).languages().clone();
 
         if path.path.extension().unwrap_or_default() == "ipynb" {
-            Some(cx.spawn(|mut cx| async move {
+            Some(cx.spawn(async move |cx| {
                 let abs_path = project
-                    .read_with(&cx, |project, cx| project.absolute_path(&path, cx))?
-                    .ok_or_else(|| anyhow::anyhow!("Failed to find the absolute path"))?;
+                    .read_with(cx, |project, cx| project.absolute_path(&path, cx))?
+                    .with_context(|| format!("finding the absolute path of {path:?}"))?;
 
                 // todo: watch for changes to the file
                 let file_content = fs.load(&abs_path.as_path()).await?;
@@ -595,7 +597,7 @@ impl project::ProjectItem for NotebookItem {
                 };
 
                 let id = project
-                    .update(&mut cx, |project, cx| project.entry_for_path(&path, cx))?
+                    .update(cx, |project, cx| project.entry_for_path(&path, cx))?
                     .context("Entry not found")?
                     .id;
 
@@ -640,7 +642,7 @@ impl NotebookItem {
                 .and_then(|spec| spec.language.clone()))
     }
 
-    pub fn notebook_language(&self) -> impl Future<Output = Option<Arc<Language>>> {
+    pub fn notebook_language(&self) -> impl Future<Output = Option<Arc<Language>>> + use<> {
         let language_name = self.language_name();
         let languages = self.languages.clone();
 
@@ -729,17 +731,21 @@ impl Item for NotebookEditor {
     }
 
     fn tab_content(&self, params: TabContentParams, window: &Window, cx: &App) -> AnyElement {
+        Label::new(self.tab_content_text(params.detail.unwrap_or(0), cx))
+            .single_line()
+            .color(params.text_color())
+            .when(params.preview, |this| this.italic())
+            .into_any_element()
+    }
+
+    fn tab_content_text(&self, _detail: usize, cx: &App) -> SharedString {
         let path = &self.notebook_item.read(cx).path;
         let title = path
             .file_name()
             .unwrap_or_else(|| path.as_os_str())
             .to_string_lossy()
             .to_string();
-        Label::new(title)
-            .single_line()
-            .color(params.text_color())
-            .when(params.preview, |this| this.italic())
-            .into_any_element()
+        title.into()
     }
 
     fn tab_icon(&self, _window: &Window, _cx: &App) -> Option<Icon> {
@@ -776,7 +782,7 @@ impl Item for NotebookEditor {
     // TODO
     fn save(
         &mut self,
-        _format: bool,
+        _options: SaveOptions,
         _project: Entity<Project>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
@@ -823,6 +829,7 @@ impl ProjectItem for NotebookEditor {
 
     fn for_project_item(
         project: Entity<Project>,
+        _: Option<&Pane>,
         item: Entity<Self::Item>,
         window: &mut Window,
         cx: &mut Context<Self>,

@@ -1,4 +1,4 @@
-use crate::{point, px, FontId, GlyphId, Pixels, PlatformTextSystem, Point, SharedString, Size};
+use crate::{FontId, GlyphId, Pixels, PlatformTextSystem, Point, SharedString, Size, point, px};
 use collections::FxHashMap;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use smallvec::SmallVec;
@@ -34,7 +34,7 @@ pub struct ShapedRun {
     /// The font id for this run
     pub font_id: FontId,
     /// The glyphs that make up this run
-    pub glyphs: SmallVec<[ShapedGlyph; 8]>,
+    pub glyphs: Vec<ShapedGlyph>,
 }
 
 /// A single glyph, ready to paint.
@@ -601,22 +601,22 @@ struct CacheKeyRef<'a> {
     wrap_width: Option<Pixels>,
 }
 
-impl<'a> PartialEq for (dyn AsCacheKeyRef + 'a) {
+impl PartialEq for (dyn AsCacheKeyRef + '_) {
     fn eq(&self, other: &dyn AsCacheKeyRef) -> bool {
         self.as_cache_key_ref() == other.as_cache_key_ref()
     }
 }
 
-impl<'a> Eq for (dyn AsCacheKeyRef + 'a) {}
+impl Eq for (dyn AsCacheKeyRef + '_) {}
 
-impl<'a> Hash for (dyn AsCacheKeyRef + 'a) {
+impl Hash for (dyn AsCacheKeyRef + '_) {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.as_cache_key_ref().hash(state)
     }
 }
 
 impl AsCacheKeyRef for CacheKey {
-    fn as_cache_key_ref(&self) -> CacheKeyRef {
+    fn as_cache_key_ref(&self) -> CacheKeyRef<'_> {
         CacheKeyRef {
             text: &self.text,
             font_size: self.font_size,
@@ -644,8 +644,8 @@ impl<'a> Borrow<dyn AsCacheKeyRef + 'a> for Arc<CacheKey> {
     }
 }
 
-impl<'a> AsCacheKeyRef for CacheKeyRef<'a> {
-    fn as_cache_key_ref(&self) -> CacheKeyRef {
+impl AsCacheKeyRef for CacheKeyRef<'_> {
+    fn as_cache_key_ref(&self) -> CacheKeyRef<'_> {
         *self
     }
 }

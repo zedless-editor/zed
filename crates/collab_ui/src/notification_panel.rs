@@ -1,4 +1,4 @@
-use crate::{chat_panel::ChatPanel, NotificationPanelSettings};
+use crate::{NotificationPanelSettings, chat_panel::ChatPanel};
 use anyhow::Result;
 use channel::ChannelStore;
 use client::{ChannelId, Client, Notification, User, UserStore};
@@ -6,10 +6,10 @@ use collections::HashMap;
 use db::kvp::KEY_VALUE_STORE;
 use futures::StreamExt;
 use gpui::{
-    actions, div, img, list, px, AnyElement, App, AsyncWindowContext, Context, CursorStyle,
-    DismissEvent, Element, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ListAlignment, ListScrollEvent, ListState, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Task, WeakEntity, Window,
+    AnyElement, App, AsyncWindowContext, ClickEvent, Context, CursorStyle, DismissEvent, Element,
+    Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, ListAlignment,
+    ListScrollEvent, ListState, ParentElement, Render, StatefulInteractiveElement, Styled, Task,
+    WeakEntity, Window, actions, div, img, list, px,
 };
 use notifications::{NotificationEntry, NotificationEvent, NotificationStore};
 use project::Fs;
@@ -19,13 +19,15 @@ use settings::{Settings, SettingsStore};
 use std::{sync::Arc, time::Duration};
 use time::{OffsetDateTime, UtcOffset};
 use ui::{
-    h_flex, prelude::*, v_flex, Avatar, Button, Icon, IconButton, IconName, Label, Tab, Tooltip,
+    Avatar, Button, Icon, IconButton, IconName, Label, Tab, Tooltip, h_flex, prelude::*, v_flex,
 };
 use util::{ResultExt, TryFutureExt};
-use workspace::notifications::NotificationId;
+use workspace::notifications::{
+    Notification as WorkspaceNotification, NotificationId, SuppressEvent,
+};
 use workspace::{
-    dock::{DockPosition, Panel, PanelEvent},
     Workspace,
+    dock::{DockPosition, Panel, PanelEvent},
 };
 
 const LOADING_THRESHOLD: usize = 30;
@@ -96,10 +98,10 @@ impl NotificationPanel {
 
         cx.new(|cx| {
             let mut status = client.status();
-            cx.spawn_in(window, |this, mut cx| async move {
+            cx.spawn_in(window, async move |this, cx| {
                 while (status.next().await).is_some() {
                     if this
-                        .update(&mut cx, |_: &mut Self, cx| {
+                        .update(cx, |_: &mut Self, cx| {
                             cx.notify();
                         })
                         .is_err()
@@ -181,10 +183,9 @@ impl NotificationPanel {
         workspace: WeakEntity<Workspace>,
         cx: AsyncWindowContext,
     ) -> Task<Result<Entity<Self>>> {
-        cx.spawn(|mut cx| async move {
+        cx.spawn(async move |cx| {
             let serialized_panel = if let Some(panel) = cx
-                .background_executor()
-                .spawn(async move { KEY_VALUE_STORE.read_kvp(NOTIFICATION_PANEL_KEY) })
+                .background_spawn(async move { KEY_VALUE_STORE.read_kvp(NOTIFICATION_PANEL_KEY) })
                 .await
                 .log_err()
                 .flatten()
@@ -194,7 +195,7 @@ impl NotificationPanel {
                 None
             };
 
-            workspace.update_in(&mut cx, |workspace, window, cx| {
+            workspace.update_in(cx, |workspace, window, cx| {
                 let panel = Self::new(workspace, window, cx);
                 if let Some(serialized_panel) = serialized_panel {
                     panel.update(cx, |panel, cx| {
@@ -209,7 +210,7 @@ impl NotificationPanel {
 
     fn serialize(&mut self, cx: &mut Context<Self>) {
         let width = self.width;
-        self.pending_serialization = cx.background_executor().spawn(
+        self.pending_serialization = cx.background_spawn(
             async move {
                 KEY_VALUE_STORE
                     .write_kvp(
@@ -301,7 +302,7 @@ impl NotificationPanel {
                                         .hover(|style| {
                                             style
                                                 .bg(cx.theme().colors().element_selected)
-                                                .rounded_md()
+                                                .rounded_sm()
                                         })
                                         .child(Label::new(relative_timestamp).color(Color::Muted))
                                         .tooltip(move |_, cx| {
@@ -446,12 +447,12 @@ impl NotificationPanel {
                 .entry(notification_id)
                 .or_insert_with(|| {
                     let client = self.client.clone();
-                    cx.spawn_in(window, |this, mut cx| async move {
+                    cx.spawn_in(window, async move |this, cx| {
                         cx.background_executor().timer(MARK_AS_READ_DELAY).await;
                         client
                             .request(proto::MarkNotificationRead { notification_id })
                             .await?;
-                        this.update(&mut cx, |this, _| {
+                        this.update(cx, |this, _| {
                             this.mark_as_read_tasks.remove(&notification_id);
                         })?;
                         Ok(())
@@ -557,9 +558,9 @@ impl NotificationPanel {
         let notification_id = entry.id;
         self.current_notification_toast = Some((
             notification_id,
-            cx.spawn_in(window, |this, mut cx| async move {
+            cx.spawn_in(window, async move |this, cx| {
                 cx.background_executor().timer(TOAST_DURATION).await;
-                this.update(&mut cx, |this, cx| this.remove_toast(notification_id, cx))
+                this.update(cx, |this, cx| this.remove_toast(notification_id, cx))
                     .ok();
             }),
         ));
@@ -571,11 +572,12 @@ impl NotificationPanel {
                 workspace.dismiss_notification(&id, cx);
                 workspace.show_notification(id, cx, |cx| {
                     let workspace = cx.entity().downgrade();
-                    cx.new(|_| NotificationToast {
+                    cx.new(|cx| NotificationToast {
                         notification_id,
                         actor,
                         text,
                         workspace,
+                        focus_handle: cx.focus_handle(),
                     })
                 })
             })
@@ -643,11 +645,21 @@ impl Render for NotificationPanel {
                                         move |_, window, cx| {
                                             let client = client.clone();
                                             window
-                                                .spawn(cx, move |cx| async move {
-                                                    client
+                                                .spawn(cx, async move |cx| {
+                                                    match client
                                                         .authenticate_and_connect(true, &cx)
-                                                        .log_err()
-                                                        .await;
+                                                        .await
+                                                    {
+                                                        util::ConnectionResult::Timeout => {
+                                                            log::error!("Connection timeout");
+                                                        }
+                                                        util::ConnectionResult::ConnectionReset => {
+                                                            log::error!("Connection reset");
+                                                        }
+                                                        util::ConnectionResult::Result(r) => {
+                                                            r.log_err();
+                                                        }
+                                                    }
                                                 })
                                                 .detach()
                                         }
@@ -772,7 +784,16 @@ pub struct NotificationToast {
     actor: Option<Arc<User>>,
     text: String,
     workspace: WeakEntity<Workspace>,
+    focus_handle: FocusHandle,
 }
+
+impl Focusable for NotificationToast {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl WorkspaceNotification for NotificationToast {}
 
 impl NotificationToast {
     fn focus_notification_panel(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -800,19 +821,50 @@ impl NotificationToast {
 }
 
 impl Render for NotificationToast {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let user = self.actor.clone();
+
+        let suppress = window.modifiers().shift;
+        let (close_id, close_icon) = if suppress {
+            ("suppress", IconName::Minimize)
+        } else {
+            ("close", IconName::Close)
+        };
 
         h_flex()
             .id("notification_panel_toast")
             .elevation_3(cx)
             .p_2()
-            .gap_2()
+            .justify_between()
             .children(user.map(|user| Avatar::new(user.avatar_uri.clone())))
             .child(Label::new(self.text.clone()))
+            .on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))
             .child(
-                IconButton::new("close", IconName::Close)
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent))),
+                IconButton::new(close_id, close_icon)
+                    .tooltip(move |window, cx| {
+                        if suppress {
+                            Tooltip::for_action(
+                                "Suppress.\nClose with click.",
+                                &workspace::SuppressNotification,
+                                window,
+                                cx,
+                            )
+                        } else {
+                            Tooltip::for_action(
+                                "Close.\nSuppress with shift-click",
+                                &menu::Cancel,
+                                window,
+                                cx,
+                            )
+                        }
+                    })
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        if suppress {
+                            cx.emit(SuppressEvent);
+                        } else {
+                            cx.emit(DismissEvent);
+                        }
+                    })),
             )
             .on_click(cx.listener(|this, _, window, cx| {
                 this.focus_notification_panel(window, cx);
@@ -822,3 +874,4 @@ impl Render for NotificationToast {
 }
 
 impl EventEmitter<DismissEvent> for NotificationToast {}
+impl EventEmitter<SuppressEvent> for NotificationToast {}

@@ -1,6 +1,3 @@
-// todo(windows): Actually run the tests
-#![cfg(not(target_os = "windows"))]
-
 use std::sync::Arc;
 
 use call::Room;
@@ -11,19 +8,22 @@ mod channel_buffer_tests;
 mod channel_guest_tests;
 mod channel_message_tests;
 mod channel_tests;
+// mod debug_panel_tests;
 mod editor_tests;
 mod following_tests;
+mod git_tests;
 mod integration_tests;
 mod notification_tests;
 mod random_channel_buffer_tests;
 mod random_project_collaboration_tests;
 mod randomized_test_helpers;
 mod remote_editing_collaboration_tests;
+mod stripe_billing_tests;
 mod test_server;
 
-use language::{tree_sitter_rust, Language, LanguageConfig, LanguageMatcher};
+use language::{Language, LanguageConfig, LanguageMatcher, tree_sitter_rust};
 pub use randomized_test_helpers::{
-    run_randomized_test, save_randomized_test_plan, RandomizedTest, TestError, UserTestPlan,
+    RandomizedTest, TestError, UserTestPlan, run_randomized_test, save_randomized_test_plan,
 };
 pub use test_server::{TestClient, TestServer};
 
@@ -37,8 +37,8 @@ fn room_participants(room: &Entity<Room>, cx: &mut TestAppContext) -> RoomPartic
     room.read_with(cx, |room, _| {
         let mut remote = room
             .remote_participants()
-            .iter()
-            .map(|(_, participant)| participant.user.github_login.clone())
+            .values()
+            .map(|participant| participant.user.github_login.clone())
             .collect::<Vec<_>>();
         let mut pending = room
             .pending_participants()

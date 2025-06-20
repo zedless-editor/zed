@@ -1,8 +1,8 @@
 use gpui::{AnyElement, Modifiers, WeakEntity};
 use markdown_preview::{
-    markdown_preview_view::MarkdownPreviewView, OpenPreview, OpenPreviewToTheSide,
+    OpenPreview, OpenPreviewToTheSide, markdown_preview_view::MarkdownPreviewView,
 };
-use ui::{prelude::*, text_for_keystroke, IconButtonShape, Tooltip};
+use ui::{IconButtonShape, Tooltip, prelude::*, text_for_keystroke};
 use workspace::Workspace;
 
 use super::QuickActionBar;
@@ -41,10 +41,7 @@ impl QuickActionBar {
                 Tooltip::with_meta(
                     "Preview Markdown",
                     Some(&markdown_preview::OpenPreview),
-                    format!(
-                        "{} to open in a split",
-                        text_for_keystroke(&alt_click, PlatformStyle::platform())
-                    ),
+                    format!("{} to open in a split", text_for_keystroke(&alt_click, cx)),
                     window,
                     cx,
                 )

@@ -1,15 +1,15 @@
-use editor::{display_map::ToDisplayPoint, movement, scroll::Autoscroll, DisplayPoint, RowExt};
-use gpui::{impl_actions, Context, Window};
+use editor::{DisplayPoint, RowExt, display_map::ToDisplayPoint, movement, scroll::Autoscroll};
+use gpui::{Context, Window, impl_actions};
 use language::{Bias, SelectionGoal};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::cmp;
 
 use crate::{
-    motion::Motion,
+    Vim,
+    motion::{Motion, MotionKind},
     object::Object,
     state::{Mode, Register},
-    Vim,
 };
 
 #[derive(Clone, Deserialize, JsonSchema, PartialEq)]
@@ -28,6 +28,7 @@ impl Vim {
         self.record_current_action(cx);
         self.store_visual_marks(window, cx);
         let count = Vim::take_count(cx).unwrap_or(1);
+        Vim::take_forced_motion(cx);
 
         self.update_editor(window, cx, |vim, editor, window, cx| {
             let text_layout_details = editor.text_layout_details(window);
@@ -50,7 +51,7 @@ impl Vim {
                     .filter(|sel| sel.len() > 1 && vim.mode != Mode::VisualLine);
 
                 if !action.preserve_clipboard && vim.mode.is_visual() {
-                    vim.copy_selections_content(editor, vim.mode == Mode::VisualLine, cx);
+                    vim.copy_selections_content(editor, MotionKind::for_mode(vim.mode), window, cx);
                 }
 
                 let (display_map, current_selections) = editor.selections.all_adjusted_display(cx);
@@ -118,12 +119,25 @@ impl Vim {
                         } else {
                             to_insert = "\n".to_owned() + &to_insert;
                         }
-                    } else if !line_mode && vim.mode == Mode::VisualLine {
-                        to_insert += "\n";
+                    } else if line_mode && vim.mode == Mode::VisualLine {
+                        to_insert.pop();
                     }
 
                     let display_range = if !selection.is_empty() {
-                        selection.start..selection.end
+                        // If vim is in VISUAL LINE mode and the column for the
+                        // selection's end point is 0, that means that the
+                        // cursor is at the newline character (\n) at the end of
+                        // the line. In this situation we'll want to move one
+                        // position to the left, ensuring we don't join the last
+                        // line of the selection with the line directly below.
+                        let end_point =
+                            if vim.mode == Mode::VisualLine && selection.end.column() == 0 {
+                                movement::left(&display_map, selection.end)
+                            } else {
+                                selection.end
+                            };
+
+                        selection.start..end_point
                     } else if line_mode {
                         let point = if before {
                             movement::line_beginning(&display_map, selection.start, false)
@@ -152,10 +166,21 @@ impl Vim {
                         new_selections.push((anchor, line_mode, is_multiline));
                     }
                     edits.push((point_range, to_insert.repeat(count)));
-                    original_indent_columns.extend(original_indent_column);
+                    original_indent_columns.push(original_indent_column);
                 }
 
-                editor.edit_with_block_indent(edits, original_indent_columns, cx);
+                let cursor_offset = editor.selections.last::<usize>(cx).head();
+                if editor
+                    .buffer()
+                    .read(cx)
+                    .snapshot(cx)
+                    .language_settings_at(cursor_offset, cx)
+                    .auto_indent_on_paste
+                {
+                    editor.edit_with_block_indent(edits, original_indent_columns, cx);
+                } else {
+                    editor.edit(edits, cx);
+                }
 
                 // in line_mode vim will insert the new text on the next (or previous if before) line
                 // and put the cursor on the first non-blank character of the first inserted line (or at the end if the first line is blank).
@@ -177,7 +202,7 @@ impl Vim {
                                     )
                                     .0;
                                 }
-                                cursor = movement::indented_line_beginning(map, cursor, true);
+                                cursor = movement::indented_line_beginning(map, cursor, true, true);
                             } else if !is_multiline && !vim.temp_mode {
                                 cursor = movement::saturating_left(map, cursor)
                             }
@@ -192,7 +217,8 @@ impl Vim {
                 })
             });
         });
-        self.switch_mode(Mode::Normal, true, window, cx);
+
+        self.switch_mode(self.default_mode(cx), true, window, cx);
     }
 
     pub fn replace_with_register_object(
@@ -235,6 +261,7 @@ impl Vim {
         &mut self,
         motion: Motion,
         times: Option<usize>,
+        forced_motion: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -246,7 +273,13 @@ impl Vim {
                 editor.set_clip_at_line_ends(false, cx);
                 editor.change_selections(None, window, cx, |s| {
                     s.move_with(|map, selection| {
-                        motion.expand_selection(map, selection, times, false, &text_layout_details);
+                        motion.expand_selection(
+                            map,
+                            selection,
+                            times,
+                            &text_layout_details,
+                            forced_motion,
+                        );
                     });
                 });
 
@@ -272,12 +305,16 @@ impl Vim {
 #[cfg(test)]
 mod test {
     use crate::{
+        UseSystemClipboard, VimSettings,
         state::{Mode, Register},
         test::{NeovimBackedTestContext, VimTestContext},
-        UseSystemClipboard, VimSettings,
     };
     use gpui::ClipboardItem;
     use indoc::indoc;
+    use language::{
+        LanguageName,
+        language_settings::{AllLanguageSettings, LanguageSettingsContent},
+    };
     use settings::SettingsStore;
 
     #[gpui::test]
@@ -522,12 +559,24 @@ mod test {
         cx.shared_state().await.assert_eq(indoc! {"
             The quick brown
             the laˇzy dog"});
+        cx.shared_clipboard().await.assert_eq("fox jumps over\n");
         // paste in visual line mode
         cx.simulate_shared_keystrokes("k shift-v p").await;
         cx.shared_state().await.assert_eq(indoc! {"
             ˇfox jumps over
             the lazy dog"});
         cx.shared_clipboard().await.assert_eq("The quick brown\n");
+
+        // Copy line and paste in visual mode, with cursor on newline character.
+        cx.set_shared_state(indoc! {"
+            ˇThe quick brown
+            fox jumps over
+            the lazy dog"})
+            .await;
+        cx.simulate_shared_keystrokes("y y shift-v j $ p").await;
+        cx.shared_state().await.assert_eq(indoc! {"
+            ˇThe quick brown
+            the lazy dog"});
     }
 
     #[gpui::test]
@@ -613,6 +662,67 @@ mod test {
                     a(){}
                 class A {
                     a(){}
+                }
+            "},
+            Mode::Normal,
+        );
+    }
+
+    #[gpui::test]
+    async fn test_paste_auto_indent(cx: &mut gpui::TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+
+        cx.set_state(
+            indoc! {"
+            mod some_module {
+                ˇfn main() {
+                }
+            }
+            "},
+            Mode::Normal,
+        );
+        // default auto indentation
+        cx.simulate_keystrokes("y y p");
+        cx.assert_state(
+            indoc! {"
+                mod some_module {
+                    fn main() {
+                        ˇfn main() {
+                    }
+                }
+                "},
+            Mode::Normal,
+        );
+        // back to previous state
+        cx.simulate_keystrokes("u u");
+        cx.assert_state(
+            indoc! {"
+                mod some_module {
+                    ˇfn main() {
+                    }
+                }
+                "},
+            Mode::Normal,
+        );
+        cx.update_global(|store: &mut SettingsStore, cx| {
+            store.update_user_settings::<AllLanguageSettings>(cx, |settings| {
+                settings.languages.insert(
+                    LanguageName::new("Rust"),
+                    LanguageSettingsContent {
+                        auto_indent_on_paste: Some(false),
+                        ..Default::default()
+                    },
+                );
+            });
+        });
+        // auto indentation turned off
+        cx.simulate_keystrokes("y y p");
+        cx.assert_state(
+            indoc! {"
+                mod some_module {
+                    fn main() {
+                    ˇfn main() {
+                    }
                 }
                 "},
             Mode::Normal,
@@ -831,7 +941,7 @@ mod test {
         );
         cx.simulate_keystrokes("y i w");
         cx.simulate_keystrokes("w");
-        cx.simulate_keystrokes("g r i w");
+        cx.simulate_keystrokes("g shift-r i w");
         cx.assert_state(
             indoc! {"
                 fish fisˇh
@@ -839,7 +949,7 @@ mod test {
                 "},
             Mode::Normal,
         );
-        cx.simulate_keystrokes("j b g r e");
+        cx.simulate_keystrokes("j b g shift-r e");
         cx.assert_state(
             indoc! {"
             fish fish
@@ -849,5 +959,72 @@ mod test {
         );
         let clipboard: Register = cx.read_from_clipboard().unwrap().into();
         assert_eq!(clipboard.text, "fish");
+
+        cx.set_state(
+            indoc! {"
+                   ˇfish one
+                   two three
+                   "},
+            Mode::Normal,
+        );
+        cx.simulate_keystrokes("y i w");
+        cx.simulate_keystrokes("w");
+        cx.simulate_keystrokes("v i w g shift-r");
+        cx.assert_state(
+            indoc! {"
+                fish fisˇh
+                two three
+                "},
+            Mode::Normal,
+        );
+        cx.simulate_keystrokes("g shift-r r");
+        cx.assert_state(
+            indoc! {"
+                fisˇh
+                two three
+                "},
+            Mode::Normal,
+        );
+        cx.simulate_keystrokes("j w g shift-r $");
+        cx.assert_state(
+            indoc! {"
+                fish
+                two fisˇh
+            "},
+            Mode::Normal,
+        );
+        let clipboard: Register = cx.read_from_clipboard().unwrap().into();
+        assert_eq!(clipboard.text, "fish");
+    }
+
+    #[gpui::test]
+    async fn test_replace_with_register_dot_repeat(cx: &mut gpui::TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+
+        cx.set_state(
+            indoc! {"
+                   ˇfish one
+                   two three
+                   "},
+            Mode::Normal,
+        );
+        cx.simulate_keystrokes("y i w");
+        cx.simulate_keystrokes("w");
+        cx.simulate_keystrokes("g shift-r i w");
+        cx.assert_state(
+            indoc! {"
+                fish fisˇh
+                two three
+                "},
+            Mode::Normal,
+        );
+        cx.simulate_keystrokes("j .");
+        cx.assert_state(
+            indoc! {"
+                fish fish
+                two fisˇh
+                "},
+            Mode::Normal,
+        );
     }
 }

@@ -4,14 +4,17 @@
 //! which is a set of tools used to interact with the projects written in said language.
 //! For example, a Python project can have an associated virtual environment; a Rust project can have a toolchain override.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use collections::HashMap;
 use gpui::{AsyncApp, SharedString};
 use settings::WorktreeId;
 
-use crate::LanguageName;
+use crate::{LanguageName, ManifestName};
 
 /// Represents a single toolchain.
 #[derive(Clone, Debug)]
@@ -41,17 +44,21 @@ pub trait ToolchainLister: Send + Sync {
     async fn list(
         &self,
         worktree_root: PathBuf,
+        subroot_relative_path: Option<Arc<Path>>,
         project_env: Option<HashMap<String, String>>,
     ) -> ToolchainList;
     // Returns a term which we should use in UI to refer to a toolchain.
     fn term(&self) -> SharedString;
+    /// Returns the name of the manifest file for this toolchain.
+    fn manifest_name(&self) -> ManifestName;
 }
 
 #[async_trait(?Send)]
-pub trait LanguageToolchainStore {
+pub trait LanguageToolchainStore: Send + Sync + 'static {
     async fn active_toolchain(
         self: Arc<Self>,
         worktree_id: WorktreeId,
+        relative_path: Arc<Path>,
         language_name: LanguageName,
         cx: &mut AsyncApp,
     ) -> Option<Toolchain>;

@@ -1,4 +1,4 @@
-use crate::Project;
+use crate::{Project, ProjectPath};
 use anyhow::{Context as _, Result};
 use collections::HashMap;
 use gpui::{AnyWindowHandle, App, AppContext as _, Context, Entity, Task, WeakEntity};
@@ -9,26 +9,22 @@ use smol::channel::bounded;
 use std::{
     borrow::Cow,
     env::{self},
-    iter,
     path::{Path, PathBuf},
     sync::Arc,
 };
-use task::{Shell, ShellBuilder, SpawnInTerminal};
+use task::{DEFAULT_REMOTE_SHELL, Shell, ShellBuilder, SpawnInTerminal};
 use terminal::{
-    terminal_settings::{self, TerminalSettings, VenvSettings},
     TaskState, TaskStatus, Terminal, TerminalBuilder,
+    terminal_settings::{self, TerminalSettings, VenvSettings},
 };
 use util::ResultExt;
-
-// #[cfg(target_os = "macos")]
-// use std::os::unix::ffi::OsStrExt;
 
 pub struct Terminals {
     pub(crate) local_handles: Vec<WeakEntity<terminal::Terminal>>,
 }
 
 /// Terminals are opened either for the users shell, or to run a task.
-#[allow(clippy::large_enum_variant)]
+
 #[derive(Debug)]
 pub enum TerminalKind {
     /// Run a shell at the given path (or $HOME if None)
@@ -40,7 +36,15 @@ pub enum TerminalKind {
 /// SshCommand describes how to connect to a remote server
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshCommand {
-    arguments: Vec<String>,
+    pub arguments: Vec<String>,
+}
+
+impl SshCommand {
+    pub fn add_port_forwarding(&mut self, local_port: u16, host: String, remote_port: u16) {
+        self.arguments.push("-L".to_string());
+        self.arguments
+            .push(format!("{}:{}:{}", local_port, host, remote_port));
+    }
 }
 
 impl Project {
@@ -104,19 +108,19 @@ impl Project {
                 });
             }
         }
-        let settings = TerminalSettings::get(settings_location, cx).clone();
+        let venv = TerminalSettings::get(settings_location, cx)
+            .detect_venv
+            .clone();
 
-        cx.spawn(move |project, mut cx| async move {
-            let python_venv_directory = if let Some(path) = path.clone() {
+        cx.spawn(async move |project, cx| {
+            let python_venv_directory = if let Some(path) = path {
                 project
-                    .update(&mut cx, |this, cx| {
-                        this.python_venv_directory(path, settings.detect_venv.clone(), cx)
-                    })?
+                    .update(cx, |this, cx| this.python_venv_directory(path, venv, cx))?
                     .await
             } else {
                 None
             };
-            project.update(&mut cx, |project, cx| {
+            project.update(cx, |project, cx| {
                 project.create_terminal_with_venv(kind, python_venv_directory, window, cx)
             })?
         })
@@ -260,7 +264,7 @@ impl Project {
                             },
                         )
                     }
-                    None => (None, settings.shell.clone()),
+                    None => (None, settings.shell),
                 }
             }
             TerminalKind::Task(spawn_task) => {
@@ -273,6 +277,7 @@ impl Project {
                     status: TaskStatus::Running,
                     show_summary: spawn_task.show_summary,
                     show_command: spawn_task.show_command,
+                    show_rerun: spawn_task.show_rerun,
                     completion_rx,
                 });
 
@@ -372,15 +377,18 @@ impl Project {
         venv_settings: VenvSettings,
         cx: &Context<Project>,
     ) -> Task<Option<PathBuf>> {
-        cx.spawn(move |this, mut cx| async move {
-            if let Some((worktree, _)) = this
-                .update(&mut cx, |this, cx| this.find_worktree(&abs_path, cx))
+        cx.spawn(async move |this, cx| {
+            if let Some((worktree, relative_path)) = this
+                .update(cx, |this, cx| this.find_worktree(&abs_path, cx))
                 .ok()?
             {
                 let toolchain = this
-                    .update(&mut cx, |this, cx| {
+                    .update(cx, |this, cx| {
                         this.active_toolchain(
-                            worktree.read(cx).id(),
+                            ProjectPath {
+                                worktree_id: worktree.read(cx).id(),
+                                path: relative_path.into(),
+                            },
                             LanguageName::new("Python"),
                             cx,
                         )
@@ -394,7 +402,7 @@ impl Project {
                 }
             }
             let venv_settings = venv_settings.as_option()?;
-            this.update(&mut cx, move |this, cx| {
+            this.update(cx, move |this, cx| {
                 if let Some(path) = this.find_venv_in_worktree(&abs_path, &venv_settings, cx) {
                     return Some(path);
                 }
@@ -506,7 +514,7 @@ impl Project {
         terminal_handle: &Entity<Terminal>,
         cx: &mut App,
     ) {
-        terminal_handle.update(cx, |terminal, _| terminal.input_bytes(command.into_bytes()));
+        terminal_handle.update(cx, |terminal, _| terminal.input(command.into_bytes()));
     }
 
     pub fn local_terminal_handles(&self) -> &Vec<WeakEntity<terminal::Terminal>> {
@@ -514,7 +522,7 @@ impl Project {
     }
 }
 
-fn wrap_for_ssh(
+pub fn wrap_for_ssh(
     ssh_command: &SshCommand,
     command: Option<(&String, &Vec<String>)>,
     path: Option<&Path>,
@@ -522,9 +530,14 @@ fn wrap_for_ssh(
     venv_directory: Option<&Path>,
 ) -> (String, Vec<String>) {
     let to_run = if let Some((command, args)) = command {
-        let command = Cow::Borrowed(command.as_str());
+        // DEFAULT_REMOTE_SHELL is '"${SHELL:-sh}"' so must not be escaped
+        let command: Option<Cow<str>> = if command == DEFAULT_REMOTE_SHELL {
+            Some(command.into())
+        } else {
+            shlex::try_quote(command).ok()
+        };
         let args = args.iter().filter_map(|arg| shlex::try_quote(arg).ok());
-        iter::once(command).chain(args).join(" ")
+        command.into_iter().chain(args).join(" ")
     } else {
         "exec ${SHELL:-sh} -l".to_string()
     };

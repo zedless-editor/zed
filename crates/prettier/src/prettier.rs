@@ -1,8 +1,8 @@
-use anyhow::{anyhow, Context as _};
+use anyhow::Context as _;
 use collections::{HashMap, HashSet};
 use fs::Fs;
 use gpui::{AsyncApp, Entity};
-use language::{language_settings::language_settings, Buffer, Diff};
+use language::{Buffer, Diff, language_settings::language_settings};
 use lsp::{LanguageServer, LanguageServerId};
 use node_runtime::NodeRuntime;
 use paths::default_prettier_dir;
@@ -119,9 +119,13 @@ impl Prettier {
                                     } else {
                                         log::warn!("Skipping path {path_to_check:?} workspace root with workspaces {workspaces:?} that have no prettier installed");
                                     }
-                                },
-                                Some(unknown) => log::error!("Failed to parse workspaces for {path_to_check:?} from package.json, got {unknown:?}. Skipping."),
-                                None => log::warn!("Skipping path {path_to_check:?} that has no prettier dependency and no workspaces section in its package.json"),
+                                }
+                                Some(unknown) => log::error!(
+                                    "Failed to parse workspaces for {path_to_check:?} from package.json, got {unknown:?}. Skipping."
+                                ),
+                                None => log::warn!(
+                                    "Skipping path {path_to_check:?} that has no prettier dependency and no workspaces section in its package.json"
+                                ),
                             }
                         }
                     }
@@ -213,7 +217,9 @@ impl Prettier {
                                 let workspace_ignore = path_to_check.join(".prettierignore");
                                 if let Some(metadata) = fs.metadata(&workspace_ignore).await? {
                                     if !metadata.is_dir {
-                                        log::info!("Found prettier ignore at workspace root {workspace_ignore:?}");
+                                        log::info!(
+                                            "Found prettier ignore at workspace root {workspace_ignore:?}"
+                                        );
                                         return Ok(ControlFlow::Continue(Some(path_to_check)));
                                     }
                                 }
@@ -248,7 +254,7 @@ impl Prettier {
         server_id: LanguageServerId,
         prettier_dir: PathBuf,
         node: NodeRuntime,
-        cx: AsyncApp,
+        mut cx: AsyncApp,
     ) -> anyhow::Result<Self> {
         use lsp::{LanguageServerBinary, LanguageServerName};
 
@@ -279,17 +285,18 @@ impl Prettier {
             server_binary,
             &prettier_dir,
             None,
-            cx.clone(),
+            Default::default(),
+            &mut cx,
         )
         .context("prettier server creation")?;
 
-        let initialize_params = None;
-        let configuration = lsp::DidChangeConfigurationParams {
-            settings: Default::default(),
-        };
         let server = cx
             .update(|cx| {
-                executor.spawn(server.initialize(initialize_params, configuration.into(), cx))
+                let params = server.default_initialize_params(false, cx);
+                let configuration = lsp::DidChangeConfigurationParams {
+                    settings: Default::default(),
+                };
+                executor.spawn(server.initialize(params, configuration.into(), cx))
             })?
             .await
             .context("prettier server initialization")?;
@@ -336,6 +343,8 @@ impl Prettier {
                                 prettier_plugin_dir.join("plugin.js"),
                                 // this one is for @prettier/plugin-php
                                 prettier_plugin_dir.join("standalone.js"),
+                                // this one is for prettier-plugin-latex
+                                prettier_plugin_dir.join("dist").join("prettier-plugin-latex.js"),
                                 prettier_plugin_dir,
                             ]
                             .into_iter()
@@ -414,7 +423,7 @@ impl Prettier {
                             prettier_parser = prettier_parser.or_else(|| buffer_language.and_then(|language| language.prettier_parser_name()));
                             if prettier_parser.is_none() {
                                 log::error!("Formatting unsaved file with prettier failed. No prettier parser configured for language {buffer_language:?}");
-                                return Err(anyhow!("Cannot determine prettier parser for unsaved file"));
+                                anyhow::bail!("Cannot determine prettier parser for unsaved file");
                             }
 
                         }
@@ -443,9 +452,13 @@ impl Prettier {
                             },
                         })
                     })?
-                    .context("prettier params calculation")?;
+                    .context("building prettier request")?;
 
-                let response = local.server.request::<Format>(params).await?;
+                let response = local
+                    .server
+                    .request::<Format>(params)
+                    .await
+                    .into_response()?;
                 let diff_task = buffer.update(cx, |buffer, cx| buffer.diff(response.text, cx))?;
                 Ok(diff_task.await)
             }
@@ -475,6 +488,7 @@ impl Prettier {
                 .server
                 .request::<ClearCache>(())
                 .await
+                .into_response()
                 .context("prettier clear cache"),
             #[cfg(any(test, feature = "test-support"))]
             Self::Test(_) => Ok(()),
@@ -645,7 +659,8 @@ mod tests {
                 &HashSet::default(),
                 Path::new("/root/work/project/src/index.js")
             )
-            .await.unwrap(),
+            .await
+            .unwrap(),
             ControlFlow::Continue(Some(PathBuf::from("/root/work/project"))),
             "Should successfully find a prettier for path hierarchy that has node_modules with prettier, but no package.json mentions of it"
         );

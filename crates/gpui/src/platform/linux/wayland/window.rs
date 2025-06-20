@@ -13,7 +13,7 @@ use futures::channel::oneshot::Receiver;
 use raw_window_handle as rwh;
 use wayland_backend::client::ObjectId;
 use wayland_client::WEnum;
-use wayland_client::{protocol::wl_surface, Proxy};
+use wayland_client::{Proxy, protocol::wl_surface};
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1;
 use wayland_protocols::wp::viewporter::client::wp_viewport;
 use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1;
@@ -22,16 +22,17 @@ use wayland_protocols::xdg::shell::client::xdg_toplevel::{self};
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 
 use crate::{platform::{
+    PlatformAtlas, PlatformInputHandler, PlatformWindow,
     blade::{BladeContext, BladeRenderer, BladeSurfaceConfig},
     linux::wayland::{display::WaylandDisplay, serial::SerialKind},
-    PlatformAtlas, PlatformInputHandler, PlatformWindow,
 }, WindowStyle};
 use crate::scene::Scene;
 use crate::{
-    px, size, AnyWindowHandle, Bounds, Decorations, Globals, GpuSpecs, Modifiers, Output, Pixels,
-    PlatformDisplay, PlatformInput, Point, PromptLevel, RequestFrameOptions, ResizeEdge,
-    ScaledPixels, Size, Tiling, WaylandClientStatePtr, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowParams,
+    AnyWindowHandle, Bounds, Decorations, Globals, GpuSpecs, Modifiers, Output, Pixels,
+    PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel, RequestFrameOptions,
+    ResizeEdge, ScaledPixels, Size, Tiling, WaylandClientStatePtr, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
+    WindowParams, px, size,
 };
 
 #[derive(Default)]
@@ -115,7 +116,6 @@ pub struct WaylandWindowStatePtr {
 }
 
 impl WaylandWindowState {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         handle: AnyWindowHandle,
         surface: wl_surface::WlSurface,
@@ -635,12 +635,8 @@ impl WaylandWindowStatePtr {
         let mut bounds: Option<Bounds<Pixels>> = None;
         if let Some(mut input_handler) = state.input_handler.take() {
             drop(state);
-            if let Some(selection) = input_handler.selected_text_range(true) {
-                bounds = input_handler.bounds_for_range(if selection.reversed {
-                    selection.range.start..selection.range.start
-                } else {
-                    selection.range.end..selection.range.end
-                });
+            if let Some(selection) = input_handler.marked_text_range() {
+                bounds = input_handler.bounds_for_range(selection.start..selection.start);
             }
             self.state.borrow_mut().input_handler = Some(input_handler);
         }
@@ -751,12 +747,28 @@ where
 
 impl rwh::HasWindowHandle for WaylandWindow {
     fn window_handle(&self) -> Result<rwh::WindowHandle<'_>, rwh::HandleError> {
-        unimplemented!()
+        let surface = self.0.surface().id().as_ptr() as *mut libc::c_void;
+        let c_ptr = NonNull::new(surface).ok_or(rwh::HandleError::Unavailable)?;
+        let handle = rwh::WaylandWindowHandle::new(c_ptr);
+        let raw_handle = rwh::RawWindowHandle::Wayland(handle);
+        Ok(unsafe { rwh::WindowHandle::borrow_raw(raw_handle) })
     }
 }
+
 impl rwh::HasDisplayHandle for WaylandWindow {
     fn display_handle(&self) -> Result<rwh::DisplayHandle<'_>, rwh::HandleError> {
-        unimplemented!()
+        let display = self
+            .0
+            .surface()
+            .backend()
+            .upgrade()
+            .ok_or(rwh::HandleError::Unavailable)?
+            .display_ptr() as *mut libc::c_void;
+
+        let c_ptr = NonNull::new(display).ok_or(rwh::HandleError::Unavailable)?;
+        let handle = rwh::WaylandDisplayHandle::new(c_ptr);
+        let raw_handle = rwh::RawDisplayHandle::Wayland(handle);
+        Ok(unsafe { rwh::DisplayHandle::borrow_raw(raw_handle) })
     }
 }
 
@@ -796,6 +808,25 @@ impl PlatformWindow for WaylandWindow {
 
     fn content_size(&self) -> Size<Pixels> {
         self.borrow().bounds.size
+    }
+
+    fn resize(&mut self, size: Size<Pixels>) {
+        let state = self.borrow();
+        let state_ptr = self.0.clone();
+        let dp_size = size.to_device_pixels(self.scale_factor());
+
+        state.xdg_surface.set_window_geometry(
+            state.bounds.origin.x.0 as i32,
+            state.bounds.origin.y.0 as i32,
+            dp_size.width.0,
+            dp_size.height.0,
+        );
+
+        state
+            .globals
+            .executor
+            .spawn(async move { state_ptr.resize(size) })
+            .detach();
     }
 
     fn scale_factor(&self) -> f32 {
@@ -856,7 +887,7 @@ impl PlatformWindow for WaylandWindow {
         _level: PromptLevel,
         _msg: &str,
         _detail: Option<&str>,
-        _answers: &[&str],
+        _answers: &[PromptButton],
     ) -> Option<Receiver<usize>> {
         None
     }
@@ -958,6 +989,9 @@ impl PlatformWindow for WaylandWindow {
 
     fn on_close(&self, callback: Box<dyn FnOnce()>) {
         self.0.callbacks.borrow_mut().close = Some(callback);
+    }
+
+    fn on_hit_test_window_control(&self, _callback: Box<dyn FnMut() -> Option<WindowControlArea>>) {
     }
 
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>) {

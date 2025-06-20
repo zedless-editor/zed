@@ -1,12 +1,10 @@
-use futures::{channel::mpsc, SinkExt as _};
-use gpui::{App, Entity, Task, Window};
+use futures::{SinkExt as _, channel::mpsc};
+use gpui::{App, AppContext as _, Entity, Task, Window};
 use http_client::{AsyncBody, HttpClient, Request};
 use jupyter_protocol::{ExecutionState, JupyterKernelspec, JupyterMessage, KernelInfoReply};
 
-use async_tungstenite::{
-    async_std::connect_async,
-    tungstenite::{client::IntoClientRequest, http::HeaderValue},
-};
+use async_tungstenite::tokio::connect_async;
+use async_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue};
 
 use futures::StreamExt;
 use smol::io::AsyncReadExt as _;
@@ -56,7 +54,7 @@ pub async fn launch_remote_kernel(
     if !response.status().is_success() {
         let mut body = String::new();
         response.into_body().read_to_string(&mut body).await?;
-        return Err(anyhow::anyhow!("Failed to launch kernel: {}", body));
+        anyhow::bail!("Failed to launch kernel: {body}");
     }
 
     let mut body = String::new();
@@ -81,36 +79,31 @@ pub async fn list_remote_kernelspecs(
 
     let response = http_client.send(request).await?;
 
-    if response.status().is_success() {
-        let mut body = response.into_body();
+    anyhow::ensure!(
+        response.status().is_success(),
+        "Failed to fetch kernel specs: {}",
+        response.status()
+    );
+    let mut body = response.into_body();
 
-        let mut body_bytes = Vec::new();
-        body.read_to_end(&mut body_bytes).await?;
+    let mut body_bytes = Vec::new();
+    body.read_to_end(&mut body_bytes).await?;
 
-        let kernel_specs: KernelSpecsResponse = serde_json::from_slice(&body_bytes)?;
+    let kernel_specs: KernelSpecsResponse = serde_json::from_slice(&body_bytes)?;
 
-        let remote_kernelspecs = kernel_specs
-            .kernelspecs
-            .into_iter()
-            .map(|(name, spec)| RemoteKernelSpecification {
-                name: name.clone(),
-                url: remote_server.base_url.clone(),
-                token: remote_server.token.clone(),
-                kernelspec: spec.spec,
-            })
-            .collect::<Vec<RemoteKernelSpecification>>();
+    let remote_kernelspecs = kernel_specs
+        .kernelspecs
+        .into_iter()
+        .map(|(name, spec)| RemoteKernelSpecification {
+            name: name.clone(),
+            url: remote_server.base_url.clone(),
+            token: remote_server.token.clone(),
+            kernelspec: spec.spec,
+        })
+        .collect::<Vec<RemoteKernelSpecification>>();
 
-        if remote_kernelspecs.is_empty() {
-            Err(anyhow::anyhow!("No kernel specs found"))
-        } else {
-            Ok(remote_kernelspecs.clone())
-        }
-    } else {
-        Err(anyhow::anyhow!(
-            "Failed to fetch kernel specs: {}",
-            response.status()
-        ))
-    }
+    anyhow::ensure!(!remote_kernelspecs.is_empty(), "No kernel specs found");
+    Ok(remote_kernelspecs.clone())
 }
 
 impl PartialEq for RemoteKernelSpecification {
@@ -148,7 +141,7 @@ impl RemoteRunningKernel {
 
         let http_client = cx.http_client();
 
-        window.spawn(cx, |cx| async move {
+        window.spawn(cx, async move |cx| {
             let kernel_id = launch_remote_kernel(
                 &remote_server,
                 http_client.clone(),
@@ -189,7 +182,7 @@ impl RemoteRunningKernel {
             let (request_tx, mut request_rx) =
                 futures::channel::mpsc::channel::<JupyterMessage>(100);
 
-            let routing_task = cx.background_executor().spawn({
+            let routing_task = cx.background_spawn({
                 async move {
                     while let Some(message) = request_rx.next().await {
                         w.send(message).await.ok();
@@ -201,12 +194,12 @@ impl RemoteRunningKernel {
             let receiving_task = cx.spawn({
                 let session = session.clone();
 
-                |mut cx| async move {
+                async move |cx| {
                     while let Some(message) = r.next().await {
                         match message {
                             Ok(message) => {
                                 session
-                                    .update_in(&mut cx, |session, window, cx| {
+                                    .update_in(cx, |session, window, cx| {
                                         session.route(&message, window, cx);
                                     })
                                     .ok();
@@ -281,7 +274,7 @@ impl RunningKernel for RemoteRunningKernel {
         let token = self.remote_server.token.clone();
         let http_client = self.http_client.clone();
 
-        window.spawn(cx, |_| async move {
+        window.spawn(cx, async move |_| {
             let request = Request::builder()
                 .method("DELETE")
                 .uri(&url)
@@ -290,14 +283,12 @@ impl RunningKernel for RemoteRunningKernel {
 
             let response = http_client.send(request).await?;
 
-            if response.status().is_success() {
-                Ok(())
-            } else {
-                Err(anyhow::anyhow!(
-                    "Failed to shutdown kernel: {}",
-                    response.status()
-                ))
-            }
+            anyhow::ensure!(
+                response.status().is_success(),
+                "Failed to shutdown kernel: {}",
+                response.status()
+            );
+            Ok(())
         })
     }
 }

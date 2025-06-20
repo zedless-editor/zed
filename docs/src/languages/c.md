@@ -2,7 +2,7 @@
 
 C support is available natively in Zed.
 
-- Tree Sitter: [tree-sitter/tree-sitter-c](https://github.com/tree-sitter/tree-sitter-c)
+- Tree-sitter: [tree-sitter/tree-sitter-c](https://github.com/tree-sitter/tree-sitter-c)
 - Language Server: [clangd/clangd](https://github.com/clangd/clangd)
 
 ## Clangd: Force detect as C
@@ -47,8 +47,6 @@ You can trigger formatting via {#kb editor::Format} or the `editor: format` acti
     }
   }
 ```
-
-See [Clang-Format Style Options](https://clang.llvm.org/docs/ClangFormatStyleOptions.html) for a complete list of options.
 
 ## Compile Commands
 

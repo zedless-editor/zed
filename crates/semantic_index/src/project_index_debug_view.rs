@@ -1,12 +1,12 @@
 use crate::ProjectIndex;
 use gpui::{
-    canvas, div, list, uniform_list, AnyElement, App, CursorStyle, Entity, EventEmitter,
-    FocusHandle, Focusable, IntoElement, ListOffset, ListState, MouseMoveEvent, Render,
-    UniformListScrollHandle,
+    AnyElement, App, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    ListOffset, ListState, MouseMoveEvent, Render, UniformListScrollHandle, canvas, div, list,
+    uniform_list,
 };
 use project::WorktreeId;
 use settings::Settings;
-use std::{path::Path, sync::Arc};
+use std::{ops::Range, path::Path, sync::Arc};
 use theme::ThemeSettings;
 use ui::prelude::*;
 use workspace::item::Item;
@@ -51,12 +51,12 @@ impl ProjectIndexDebugView {
 
     fn update_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let worktree_indices = self.index.read(cx).worktree_indices(cx);
-        cx.spawn_in(window, |this, mut cx| async move {
+        cx.spawn_in(window, async move |this, cx| {
             let mut rows = Vec::new();
 
             for index in worktree_indices {
                 let (root_path, worktree_id, worktree_paths) =
-                    index.read_with(&cx, |index, cx| {
+                    index.read_with(cx, |index, cx| {
                         let worktree = index.worktree().read(cx);
                         (
                             worktree.abs_path(),
@@ -73,7 +73,7 @@ impl ProjectIndexDebugView {
                 );
             }
 
-            this.update(&mut cx, |this, cx| {
+            this.update(cx, |this, cx| {
                 this.rows = rows;
                 cx.notify();
             })
@@ -96,7 +96,7 @@ impl ProjectIndexDebugView {
             .embedding_index()
             .chunks_for_path(file_path.clone(), cx);
 
-        cx.spawn_in(window, |this, mut cx| async move {
+        cx.spawn_in(window, async move |this, cx| {
             let chunks = chunks.await?;
             let content = fs.load(&root_path.join(&file_path)).await?;
             let chunks = chunks
@@ -114,7 +114,7 @@ impl ProjectIndexDebugView {
                 })
                 .collect::<Vec<_>>();
 
-            this.update(&mut cx, |this, cx| {
+            this.update(cx, |this, cx| {
                 let view = cx.entity().downgrade();
                 this.selected_path = Some(PathState {
                     path: file_path,
@@ -224,10 +224,9 @@ impl Render for ProjectIndexDebugView {
                 .into_any_element()
         } else {
             let mut list = uniform_list(
-                cx.entity().clone(),
                 "ProjectIndexDebugView",
                 self.rows.len(),
-                move |this, range, _, cx| {
+                cx.processor(move |this, range: Range<usize>, _, cx| {
                     this.rows[range]
                         .iter()
                         .enumerate()
@@ -262,7 +261,7 @@ impl Render for ProjectIndexDebugView {
                                 })),
                         })
                         .collect()
-                },
+                }),
             )
             .track_scroll(self.list_scroll_handle.clone())
             .size_full()
@@ -289,8 +288,8 @@ impl EventEmitter<()> for ProjectIndexDebugView {}
 impl Item for ProjectIndexDebugView {
     type Event = ();
 
-    fn tab_content_text(&self, _window: &Window, _cx: &App) -> Option<SharedString> {
-        Some("Project Index (Debug)".into())
+    fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
+        "Project Index (Debug)".into()
     }
 
     fn clone_on_split(

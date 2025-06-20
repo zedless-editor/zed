@@ -8,13 +8,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use calloop::{
-    generic::{FdWrapper, Generic},
-    EventLoop, LoopHandle, RegistrationToken,
-};
-
 use anyhow::Context as _;
+use calloop::{
+    EventLoop, LoopHandle, RegistrationToken,
+    generic::{FdWrapper, Generic},
+};
 use collections::HashMap;
+use futures::channel::oneshot;
 use http_client::Url;
 use smallvec::SmallVec;
 use util::ResultExt;
@@ -30,38 +30,40 @@ use x11rb::{
         AtomEnum, ChangeWindowAttributesAux, ClientMessageData, ClientMessageEvent,
         ConnectionExt as _, EventMask, KeyPressEvent,
     },
-    protocol::{randr, render, xinput, xkb, xproto, Event},
+    protocol::{Event, randr, render, xinput, xkb, xproto},
     resource_manager::Database,
     wrapper::ConnectionExt as _,
     xcb_ffi::XCBConnection,
 };
-use xim::{x11rb::X11rbClient, AttributeName, Client, InputStyle};
+use xim::{AttributeName, Client, InputStyle, x11rb::X11rbClient};
 use xkbc::x11::ffi::{XKB_X11_MIN_MAJOR_XKB_VERSION, XKB_X11_MIN_MINOR_XKB_VERSION};
 use xkbcommon::xkb::{self as xkbc, LayoutIndex, ModMask, STATE_LAYOUT_EFFECTIVE};
 
 use super::{
-    button_or_scroll_from_event_detail, get_valuator_axis_index, modifiers_from_state,
-    pressed_button_from_mask, ButtonOrScroll, ScrollDirection,
+    ButtonOrScroll, ScrollDirection, button_or_scroll_from_event_detail,
+    clipboard::{self, Clipboard},
+    get_valuator_axis_index, modifiers_from_state, pressed_button_from_mask,
 };
 use super::{X11Display, X11WindowStatePtr, XcbAtoms};
 use super::{XimCallbackEvent, XimHandler};
 
 use crate::platform::{
+    LinuxCommon, PlatformWindow,
     blade::BladeContext,
     linux::{
-        get_xkb_compose_state, is_within_click_distance, open_uri_internal,
+        LinuxClient, get_xkb_compose_state, is_within_click_distance, open_uri_internal,
         platform::{DOUBLE_CLICK_INTERVAL, SCROLL_LINES},
         reveal_path_internal,
         xdg_desktop_portal::{Event as XDPEvent, XDPEventSource},
-        LinuxClient,
     },
-    LinuxCommon, PlatformWindow,
+    scap_screen_capture::scap_screen_sources,
 };
 use crate::{
-    modifiers_from_xinput_info, point, px, AnyWindowHandle, Bounds, ClipboardItem, CursorStyle,
-    DisplayId, FileDropEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton, Pixels,
-    Platform, PlatformDisplay, PlatformInput, Point, RequestFrameOptions, ScaledPixels,
-    ScrollDelta, Size, TouchPhase, WindowParams, X11Window,
+    AnyWindowHandle, Bounds, ClipboardItem, CursorStyle, DisplayId, FileDropEvent, Keystroke,
+    LinuxKeyboardLayout, Modifiers, ModifiersChangedEvent, MouseButton, Pixels, Platform,
+    PlatformDisplay, PlatformInput, PlatformKeyboardLayout, Point, RequestFrameOptions,
+    ScaledPixels, ScreenCaptureSource, ScrollDelta, Size, TouchPhase, WindowParams, X11Window,
+    modifiers_from_xinput_info, point, px,
 };
 
 /// Value for DeviceId parameters which selects all devices.
@@ -200,7 +202,7 @@ pub struct X11ClientState {
     pointer_device_states: BTreeMap<xinput::DeviceId, PointerDeviceState>,
 
     pub(crate) common: LinuxCommon,
-    pub(crate) clipboard: x11_clipboard::Clipboard,
+    pub(crate) clipboard: Clipboard,
     pub(crate) clipboard_item: Option<ClipboardItem>,
     pub(crate) xdnd_state: Xdnd,
 }
@@ -387,7 +389,7 @@ impl X11Client {
             .reply()
             .unwrap();
 
-        let clipboard = x11_clipboard::Clipboard::new().unwrap();
+        let clipboard = Clipboard::new().unwrap();
 
         let xcb_connection = Rc::new(xcb_connection);
 
@@ -839,6 +841,14 @@ impl X11Client {
                         state.xkb_device_id,
                     )
                 };
+                let depressed_layout = xkb_state.serialize_layout(xkbc::STATE_LAYOUT_DEPRESSED);
+                let latched_layout = xkb_state.serialize_layout(xkbc::STATE_LAYOUT_LATCHED);
+                let locked_layout = xkb_state.serialize_layout(xkbc::ffi::XKB_STATE_LAYOUT_LOCKED);
+                state.previous_xkb_state = XKBStateNotiy {
+                    depressed_layout,
+                    latched_layout,
+                    locked_layout,
+                };
                 state.xkb = xkb_state;
             }
             Event::XkbStateNotify(event) => {
@@ -1282,14 +1292,16 @@ impl LinuxClient for X11Client {
         f(&mut self.0.borrow_mut().common)
     }
 
-    fn keyboard_layout(&self) -> String {
+    fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout> {
         let state = self.0.borrow();
         let layout_idx = state.xkb.serialize_layout(STATE_LAYOUT_EFFECTIVE);
-        state
-            .xkb
-            .get_keymap()
-            .layout_get_name(layout_idx)
-            .to_string()
+        Box::new(LinuxKeyboardLayout::new(
+            state
+                .xkb
+                .get_keymap()
+                .layout_get_name(layout_idx)
+                .to_string(),
+        ))
     }
 
     fn displays(&self) -> Vec<Rc<dyn PlatformDisplay>> {
@@ -1326,6 +1338,16 @@ impl LinuxClient for X11Client {
         Some(Rc::new(
             X11Display::new(&state.xcb_connection, state.scale_factor, id.0 as usize).ok()?,
         ))
+    }
+
+    fn is_screen_capture_supported(&self) -> bool {
+        true
+    }
+
+    fn screen_capture_sources(
+        &self,
+    ) -> oneshot::Receiver<anyhow::Result<Vec<Box<dyn ScreenCaptureSource>>>> {
+        scap_screen_sources(&self.0.borrow().common.foreground_executor)
     }
 
     fn open_window(
@@ -1438,13 +1460,16 @@ impl LinuxClient for X11Client {
         let cursor = match state.cursor_cache.get(&style) {
             Some(cursor) => *cursor,
             None => {
-                let Some(cursor) = state
-                    .cursor_handle
-                    .load_cursor(&state.xcb_connection, &style.to_icon_name())
-                    .log_err()
-                else {
+                let Some(cursor) = (match style {
+                    CursorStyle::None => create_invisible_cursor(&state.xcb_connection).log_err(),
+                    _ => state
+                        .cursor_handle
+                        .load_cursor(&state.xcb_connection, style.to_icon_name())
+                        .log_err(),
+                }) else {
                     return;
                 };
+
                 state.cursor_cache.insert(style, cursor);
                 cursor
             }
@@ -1480,39 +1505,36 @@ impl LinuxClient for X11Client {
         let state = self.0.borrow_mut();
         state
             .clipboard
-            .store(
-                state.clipboard.setter.atoms.primary,
-                state.clipboard.setter.atoms.utf8_string,
-                item.text().unwrap_or_default().as_bytes(),
+            .set_text(
+                std::borrow::Cow::Owned(item.text().unwrap_or_default()),
+                clipboard::ClipboardKind::Primary,
+                clipboard::WaitConfig::None,
             )
-            .ok();
+            .context("Failed to write to clipboard (primary)")
+            .log_with_level(log::Level::Debug);
     }
 
     fn write_to_clipboard(&self, item: crate::ClipboardItem) {
         let mut state = self.0.borrow_mut();
         state
             .clipboard
-            .store(
-                state.clipboard.setter.atoms.clipboard,
-                state.clipboard.setter.atoms.utf8_string,
-                item.text().unwrap_or_default().as_bytes(),
+            .set_text(
+                std::borrow::Cow::Owned(item.text().unwrap_or_default()),
+                clipboard::ClipboardKind::Clipboard,
+                clipboard::WaitConfig::None,
             )
-            .ok();
+            .context("Failed to write to clipboard (clipboard)")
+            .log_with_level(log::Level::Debug);
         state.clipboard_item.replace(item);
     }
 
     fn read_from_primary(&self) -> Option<crate::ClipboardItem> {
         let state = self.0.borrow_mut();
-        state
+        return state
             .clipboard
-            .load(
-                state.clipboard.getter.atoms.primary,
-                state.clipboard.getter.atoms.utf8_string,
-                state.clipboard.getter.atoms.property,
-                Duration::from_secs(3),
-            )
-            .map(|text| crate::ClipboardItem::new_string(String::from_utf8(text).unwrap()))
-            .ok()
+            .get_any(clipboard::ClipboardKind::Primary)
+            .context("Failed to read from clipboard (primary)")
+            .log_with_level(log::Level::Debug);
     }
 
     fn read_from_clipboard(&self) -> Option<crate::ClipboardItem> {
@@ -1521,26 +1543,15 @@ impl LinuxClient for X11Client {
         // which has metadata attached.
         if state
             .clipboard
-            .setter
-            .connection
-            .get_selection_owner(state.clipboard.setter.atoms.clipboard)
-            .ok()
-            .and_then(|r| r.reply().ok())
-            .map(|reply| reply.owner == state.clipboard.setter.window)
-            .unwrap_or(false)
+            .is_owner(clipboard::ClipboardKind::Clipboard)
         {
             return state.clipboard_item.clone();
         }
-        state
+        return state
             .clipboard
-            .load(
-                state.clipboard.getter.atoms.clipboard,
-                state.clipboard.getter.atoms.utf8_string,
-                state.clipboard.getter.atoms.property,
-                Duration::from_secs(3),
-            )
-            .map(|text| crate::ClipboardItem::new_string(String::from_utf8(text).unwrap()))
-            .ok()
+            .get_any(clipboard::ClipboardKind::Clipboard)
+            .context("Failed to read from clipboard (clipboard)")
+            .log_with_level(log::Level::Debug);
     }
 
     fn run(&self) {
@@ -1937,4 +1948,20 @@ fn make_scroll_wheel_event(
         modifiers,
         touch_phase: TouchPhase::default(),
     }
+}
+
+fn create_invisible_cursor(
+    connection: &XCBConnection,
+) -> anyhow::Result<crate::platform::linux::x11::client::xproto::Cursor> {
+    let empty_pixmap = connection.generate_id()?;
+    let root = connection.setup().roots[0].root;
+    connection.create_pixmap(1, empty_pixmap, root, 1, 1)?;
+
+    let cursor = connection.generate_id()?;
+    connection.create_cursor(cursor, empty_pixmap, empty_pixmap, 0, 0, 0, 0, 0, 0, 0, 0)?;
+
+    connection.free_pixmap(empty_pixmap)?;
+
+    connection.flush()?;
+    Ok(cursor)
 }

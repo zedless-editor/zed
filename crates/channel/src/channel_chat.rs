@@ -1,9 +1,8 @@
 use crate::{Channel, ChannelStore};
-use anyhow::{anyhow, Result};
+use anyhow::{Context as _, Result};
 use client::{
-    proto,
+    ChannelId, Client, Subscription, TypedEnvelope, UserId, proto,
     user::{User, UserStore},
-    ChannelId, Client, Subscription, TypedEnvelope, UserId,
 };
 use collections::HashSet;
 use futures::lock::Mutex;
@@ -16,7 +15,7 @@ use std::{
 };
 use sum_tree::{Bias, SumTree};
 use time::OffsetDateTime;
-use util::{post_inc, ResultExt as _, TryFutureExt};
+use util::{ResultExt as _, TryFutureExt, post_inc};
 
 pub struct ChannelChat {
     pub channel_id: ChannelId,
@@ -106,7 +105,7 @@ impl ChannelChat {
         channel_store: Entity<ChannelStore>,
         user_store: Entity<UserStore>,
         client: Arc<Client>,
-        mut cx: AsyncApp,
+        cx: &mut AsyncApp,
     ) -> Result<Entity<Self>> {
         let channel_id = channel.id;
         let subscription = client.subscribe_to_entity(channel_id.0).unwrap();
@@ -132,7 +131,7 @@ impl ChannelChat {
                 last_acknowledged_id: None,
                 rng: StdRng::from_entropy(),
                 first_loaded_message_id: None,
-                _subscription: subscription.set_entity(&cx.entity(), &mut cx.to_async()),
+                _subscription: subscription.set_entity(&cx.entity(), &cx.to_async()),
             }
         })?;
         Self::handle_loaded_messages(
@@ -141,7 +140,7 @@ impl ChannelChat {
             client,
             response.messages,
             response.done,
-            &mut cx,
+            cx,
         )
         .await?;
         Ok(handle)
@@ -171,19 +170,20 @@ impl ChannelChat {
         message: MessageParams,
         cx: &mut Context<Self>,
     ) -> Result<Task<Result<u64>>> {
-        if message.text.trim().is_empty() {
-            Err(anyhow!("message body can't be empty"))?;
-        }
+        anyhow::ensure!(
+            !message.text.trim().is_empty(),
+            "message body can't be empty"
+        );
 
         let current_user = self
             .user_store
             .read(cx)
             .current_user()
-            .ok_or_else(|| anyhow!("current_user is not present"))?;
+            .context("current_user is not present")?;
 
         let channel_id = self.channel_id;
         let pending_id = ChannelMessageId::Pending(post_inc(&mut self.next_pending_message_id));
-        let nonce = self.rng.gen();
+        let nonce = self.rng.r#gen();
         self.insert_messages(
             SumTree::from_item(
                 ChannelMessage {
@@ -205,7 +205,7 @@ impl ChannelChat {
         let outgoing_messages_lock = self.outgoing_messages_lock.clone();
 
         // todo - handle messages that fail to send (e.g. >1024 chars)
-        Ok(cx.spawn(move |this, mut cx| async move {
+        Ok(cx.spawn(async move |this, cx| {
             let outgoing_message_guard = outgoing_messages_lock.lock().await;
             let request = rpc.request(proto::SendChannelMessage {
                 channel_id: channel_id.0,
@@ -216,10 +216,10 @@ impl ChannelChat {
             });
             let response = request.await?;
             drop(outgoing_message_guard);
-            let response = response.message.ok_or_else(|| anyhow!("invalid message"))?;
+            let response = response.message.context("invalid message")?;
             let id = response.id;
-            let message = ChannelMessage::from_proto(response, &user_store, &mut cx).await?;
-            this.update(&mut cx, |this, cx| {
+            let message = ChannelMessage::from_proto(response, &user_store, cx).await?;
+            this.update(cx, |this, cx| {
                 this.insert_messages(SumTree::from_item(message, &()), cx);
                 if this.first_loaded_message_id.is_none() {
                     this.first_loaded_message_id = Some(id);
@@ -234,9 +234,9 @@ impl ChannelChat {
             channel_id: self.channel_id.0,
             message_id: id,
         });
-        cx.spawn(move |this, mut cx| async move {
+        cx.spawn(async move |this, cx| {
             response.await?;
-            this.update(&mut cx, |this, cx| {
+            this.update(cx, |this, cx| {
                 this.message_removed(id, cx);
             })?;
             Ok(())
@@ -257,7 +257,7 @@ impl ChannelChat {
             cx,
         );
 
-        let nonce: u128 = self.rng.gen();
+        let nonce: u128 = self.rng.r#gen();
 
         let request = self.rpc.request(proto::UpdateChannelMessage {
             channel_id: self.channel_id.0,
@@ -266,7 +266,7 @@ impl ChannelChat {
             nonce: Some(nonce.into()),
             mentions: mentions_to_proto(&message.mentions),
         });
-        Ok(cx.spawn(move |_, _| async move {
+        Ok(cx.spawn(async move |_, _| {
             request.await?;
             Ok(())
         }))
@@ -281,7 +281,7 @@ impl ChannelChat {
         let user_store = self.user_store.clone();
         let channel_id = self.channel_id;
         let before_message_id = self.first_loaded_message_id()?;
-        Some(cx.spawn(move |this, mut cx| {
+        Some(cx.spawn(async move |this, cx| {
             async move {
                 let response = rpc
                     .request(proto::GetChannelMessages {
@@ -295,13 +295,14 @@ impl ChannelChat {
                     rpc,
                     response.messages,
                     response.done,
-                    &mut cx,
+                    cx,
                 )
                 .await?;
 
                 anyhow::Ok(())
             }
             .log_err()
+            .await
         }))
     }
 
@@ -338,7 +339,7 @@ impl ChannelChat {
                                     .item()
                                     .map_or(false, |message| message.id == message_id)
                                 {
-                                    Some(cursor.start().1 .0)
+                                    Some(cursor.start().1.0)
                                 } else {
                                     None
                                 },
@@ -386,7 +387,7 @@ impl ChannelChat {
         let loaded_messages = messages_from_proto(proto_messages, &user_store, cx).await?;
 
         let first_loaded_message_id = loaded_messages.first().map(|m| m.id);
-        let loaded_message_ids = this.update(cx, |this, _| {
+        let loaded_message_ids = this.read_with(cx, |this, _| {
             let mut loaded_message_ids: HashSet<u64> = HashSet::default();
             for message in loaded_messages.iter() {
                 if let Some(saved_message_id) = message.id.into() {
@@ -439,7 +440,7 @@ impl ChannelChat {
         let user_store = self.user_store.clone();
         let rpc = self.rpc.clone();
         let channel_id = self.channel_id;
-        cx.spawn(move |this, mut cx| {
+        cx.spawn(async move |this, cx| {
             async move {
                 let response = rpc
                     .request(proto::JoinChannelChat {
@@ -452,11 +453,11 @@ impl ChannelChat {
                     rpc.clone(),
                     response.messages,
                     response.done,
-                    &mut cx,
+                    cx,
                 )
                 .await?;
 
-                let pending_messages = this.update(&mut cx, |this, _| {
+                let pending_messages = this.read_with(cx, |this, _| {
                     this.pending_messages().cloned().collect::<Vec<_>>()
                 })?;
 
@@ -470,12 +471,12 @@ impl ChannelChat {
                     });
                     let response = request.await?;
                     let message = ChannelMessage::from_proto(
-                        response.message.ok_or_else(|| anyhow!("invalid message"))?,
+                        response.message.context("invalid message")?,
                         &user_store,
-                        &mut cx,
+                        cx,
                     )
                     .await?;
-                    this.update(&mut cx, |this, cx| {
+                    this.update(cx, |this, cx| {
                         this.insert_messages(SumTree::from_item(message, &()), cx);
                     })?;
                 }
@@ -483,6 +484,7 @@ impl ChannelChat {
                 anyhow::Ok(())
             }
             .log_err()
+            .await
         })
         .detach();
     }
@@ -529,11 +531,8 @@ impl ChannelChat {
         message: TypedEnvelope<proto::ChannelMessageSent>,
         mut cx: AsyncApp,
     ) -> Result<()> {
-        let user_store = this.update(&mut cx, |this, _| this.user_store.clone())?;
-        let message = message
-            .payload
-            .message
-            .ok_or_else(|| anyhow!("empty message"))?;
+        let user_store = this.read_with(&mut cx, |this, _| this.user_store.clone())?;
+        let message = message.payload.message.context("empty message")?;
         let message_id = message.id;
 
         let message = ChannelMessage::from_proto(message, &user_store, &mut cx).await?;
@@ -564,11 +563,8 @@ impl ChannelChat {
         message: TypedEnvelope<proto::ChannelMessageUpdate>,
         mut cx: AsyncApp,
     ) -> Result<()> {
-        let user_store = this.update(&mut cx, |this, _| this.user_store.clone())?;
-        let message = message
-            .payload
-            .message
-            .ok_or_else(|| anyhow!("empty message"))?;
+        let user_store = this.read_with(&mut cx, |this, _| this.user_store.clone())?;
+        let message = message.payload.message.context("empty message")?;
 
         let message = ChannelMessage::from_proto(message, &user_store, &mut cx).await?;
 
@@ -593,7 +589,7 @@ impl ChannelChat {
 
             let mut old_cursor = self.messages.cursor::<(ChannelMessageId, Count)>(&());
             let mut new_messages = old_cursor.slice(&first_message.id, Bias::Left, &());
-            let start_ix = old_cursor.start().1 .0;
+            let start_ix = old_cursor.start().1.0;
             let removed_messages = old_cursor.slice(&last_message.id, Bias::Right, &());
             let removed_count = removed_messages.summary().count;
             let new_count = messages.summary().count;
@@ -611,7 +607,7 @@ impl ChannelChat {
                 );
 
                 while let Some(message) = old_cursor.item() {
-                    let message_ix = old_cursor.start().1 .0;
+                    let message_ix = old_cursor.start().1.0;
                     if nonces.contains(&message.nonce) {
                         if ranges.last().map_or(false, |r| r.end == message_ix) {
                             ranges.last_mut().unwrap().end += 1;
@@ -752,10 +748,7 @@ impl ChannelMessage {
                 .collect(),
             timestamp: OffsetDateTime::from_unix_timestamp(message.timestamp as i64)?,
             sender,
-            nonce: message
-                .nonce
-                .ok_or_else(|| anyhow!("nonce is required"))?
-                .into(),
+            nonce: message.nonce.context("nonce is required")?.into(),
             reply_to_message_id: message.reply_to_message_id,
             edited_at,
         })

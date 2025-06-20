@@ -1,68 +1,47 @@
 {
-  lib,
   mkShell,
-  stdenv,
-  useMoldLinker,
-  clangStdenv,
-  curl,
-  cmake,
-  perl,
-  pkg-config,
-  protobuf,
-  rustPlatform,
+  makeFontsConf,
+
+  zed-editor,
+
   rust-analyzer,
-  bzip2,
-  fontconfig,
-  freetype,
-  libgit2,
-  openssl,
-  sqlite,
-  zlib,
-  zstd,
-  cargo,
-  rustc,
-  alsa-lib,
-  libxkbcommon,
-  wayland,
-  xorg,
-  vulkan-loader,
-  apple-sdk_15
+  cargo-nextest,
+  cargo-hakari,
+  cargo-machete,
+  nixfmt-rfc-style,
+  protobuf,
 }:
-mkShell.override {stdenv = useMoldLinker clangStdenv;} {
+(mkShell.override { inherit (zed-editor) stdenv; }) {
+  inputsFrom = [ zed-editor ];
   packages = [
-    curl
-    cmake
-    perl
-    pkg-config
-    protobuf
-    rustPlatform.bindgenHook
     rust-analyzer
-    cargo
-    rustc
+    cargo-nextest
+    cargo-hakari
+    cargo-machete
+    nixfmt-rfc-style
   ];
 
-  buildInputs =
-    [
-      bzip2
-      curl
-      fontconfig
-      freetype
-      libgit2
-      openssl
-      sqlite
-      zlib
-      zstd
-    ]
-    ++ lib.optionals stdenv.hostPlatform.isLinux [
-      alsa-lib
-      libxkbcommon
-      wayland
-      xorg.libxcb
-      vulkan-loader
-    ]
-    ++ lib.optional stdenv.hostPlatform.isDarwin apple-sdk_15;
-
-  PROTOC = "${protobuf}/bin/protoc";
-
-  ZSTD_SYS_USE_PKG_CONFIG = true;
+  env =
+    let
+      baseEnvs =
+        (zed-editor.overrideAttrs (attrs: {
+          passthru = { inherit (attrs) env; };
+        })).env; # exfil `env`; it's not in drvAttrs
+    in
+    (removeAttrs baseEnvs [
+      "LK_CUSTOM_WEBRTC" # download the staticlib during the build as usual
+      "CARGO_PROFILE" # let you specify the profile
+      "TARGET_DIR"
+    ])
+    // {
+      # note: different than `$FONTCONFIG_FILE` in `build.nix` – this refers to relative paths
+      # outside the nix store instead of to `$src`
+      FONTCONFIG_FILE = makeFontsConf {
+        fontDirectories = [
+          "./assets/fonts/plex-mono"
+          "./assets/fonts/plex-sans"
+        ];
+      };
+      PROTOC = "${protobuf}/bin/protoc";
+    };
 }

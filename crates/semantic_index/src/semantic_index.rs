@@ -42,8 +42,7 @@ impl SemanticDb {
         cx: &mut AsyncApp,
     ) -> Result<Self> {
         let db_connection = cx
-            .background_executor()
-            .spawn(async move {
+            .background_spawn(async move {
                 std::fs::create_dir_all(&db_path)?;
                 unsafe {
                     heed::EnvOpenOptions::new()
@@ -265,12 +264,11 @@ impl Drop for SemanticDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::anyhow;
     use chunking::Chunk;
     use embedding_index::{ChunkedFile, EmbeddingIndex};
     use feature_flags::FeatureFlagAppExt;
     use fs::FakeFs;
-    use futures::{future::BoxFuture, FutureExt};
+    use futures::{FutureExt, future::BoxFuture};
     use gpui::TestAppContext;
     use indexing::IndexingEntrySet;
     use language::language_settings::AllLanguageSettings;
@@ -279,10 +277,10 @@ mod tests {
     use settings::SettingsStore;
     use smol::channel;
     use std::{future, path::Path, sync::Arc};
-    use util::separator;
+    use util::path;
 
     fn init_test(cx: &mut TestAppContext) {
-        env_logger::try_init().ok();
+        zlog::init_test();
 
         cx.update(|cx| {
             let store = SettingsStore::test(cx);
@@ -424,7 +422,7 @@ mod tests {
 
         assert_eq!(
             search_result.path.to_string_lossy(),
-            separator!("fixture/needle.md")
+            path!("fixture/needle.md")
         );
 
         let content = cx
@@ -432,8 +430,7 @@ mod tests {
                 let worktree = search_result.worktree.read(cx);
                 let entry_abs_path = worktree.abs_path().join(&search_result.path);
                 let fs = project.read(cx).fs().clone();
-                cx.background_executor()
-                    .spawn(async move { fs.load(&entry_abs_path).await.unwrap() })
+                cx.background_spawn(async move { fs.load(&entry_abs_path).await.unwrap() })
             })
             .await;
 
@@ -448,15 +445,15 @@ mod tests {
         cx.executor().allow_parking();
 
         let provider = Arc::new(TestEmbeddingProvider::new(3, |text| {
-            if text.contains('g') {
-                Err(anyhow!("cannot embed text containing a 'g' character"))
-            } else {
-                Ok(Embedding::new(
-                    ('a'..='z')
-                        .map(|char| text.chars().filter(|c| *c == char).count() as f32)
-                        .collect(),
-                ))
-            }
+            anyhow::ensure!(
+                !text.contains('g'),
+                "cannot embed text containing a 'g' character"
+            );
+            Ok(Embedding::new(
+                ('a'..='z')
+                    .map(|char| text.chars().filter(|c| *c == char).count() as f32)
+                    .collect(),
+            ))
         }));
 
         let (indexing_progress_tx, _) = channel::unbounded();

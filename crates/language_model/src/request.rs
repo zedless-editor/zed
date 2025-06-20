@@ -1,19 +1,69 @@
 use std::io::{Cursor, Write};
+use std::sync::Arc;
 
 use crate::role::Role;
-use crate::LanguageModelToolUse;
+use crate::{LanguageModelToolUse, LanguageModelToolUseId};
+use anyhow::Result;
 use base64::write::EncoderWriter;
-use gpui::{point, size, App, DevicePixels, Image, ObjectFit, RenderImage, Size, Task};
-use image::{codecs::png::PngEncoder, imageops::resize, DynamicImage, ImageDecoder};
+use gpui::{
+    App, AppContext as _, DevicePixels, Image, ImageFormat, ObjectFit, SharedString, Size, Task,
+    point, px, size,
+};
+use image::codecs::png::PngEncoder;
 use serde::{Deserialize, Serialize};
-use ui::{px, SharedString};
 use util::ResultExt;
+use zed_llm_client::{CompletionIntent, CompletionMode};
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct LanguageModelImage {
     /// A base64-encoded PNG image.
     pub source: SharedString,
-    size: Size<DevicePixels>,
+    pub size: Size<DevicePixels>,
+}
+
+impl LanguageModelImage {
+    pub fn len(&self) -> usize {
+        self.source.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.source.is_empty()
+    }
+
+    // Parse Self from a JSON object with case-insensitive field names
+    pub fn from_json(obj: &serde_json::Map<String, serde_json::Value>) -> Option<Self> {
+        let mut source = None;
+        let mut size_obj = None;
+
+        // Find source and size fields (case-insensitive)
+        for (k, v) in obj.iter() {
+            match k.to_lowercase().as_str() {
+                "source" => source = v.as_str(),
+                "size" => size_obj = v.as_object(),
+                _ => {}
+            }
+        }
+
+        let source = source?;
+        let size_obj = size_obj?;
+
+        let mut width = None;
+        let mut height = None;
+
+        // Find width and height in size object (case-insensitive)
+        for (k, v) in size_obj.iter() {
+            match k.to_lowercase().as_str() {
+                "width" => width = v.as_i64().map(|w| w as i32),
+                "height" => height = v.as_i64().map(|h| h as i32),
+                _ => {}
+            }
+        }
+
+        Some(Self {
+            size: size(DevicePixels(width?), DevicePixels(height?)),
+            source: SharedString::from(source.to_string()),
+        })
+    }
 }
 
 impl std::fmt::Debug for LanguageModelImage {
@@ -29,28 +79,34 @@ impl std::fmt::Debug for LanguageModelImage {
 const ANTHROPIC_SIZE_LIMT: f32 = 1568.;
 
 impl LanguageModelImage {
-    pub fn from_image(data: Image, cx: &mut App) -> Task<Option<Self>> {
-        cx.background_executor().spawn(async move {
-            match data.format() {
-                gpui::ImageFormat::Png
-                | gpui::ImageFormat::Jpeg
-                | gpui::ImageFormat::Webp
-                | gpui::ImageFormat::Gif => {}
-                _ => return None,
-            };
+    pub fn empty() -> Self {
+        Self {
+            source: "".into(),
+            size: size(DevicePixels(0), DevicePixels(0)),
+        }
+    }
 
-            let image = image::codecs::png::PngDecoder::new(Cursor::new(data.bytes())).log_err()?;
-            let (width, height) = image.dimensions();
+    pub fn from_image(data: Arc<Image>, cx: &mut App) -> Task<Option<Self>> {
+        cx.background_spawn(async move {
+            let image_bytes = Cursor::new(data.bytes());
+            let dynamic_image = match data.format() {
+                ImageFormat::Png => image::codecs::png::PngDecoder::new(image_bytes)
+                    .and_then(image::DynamicImage::from_decoder),
+                ImageFormat::Jpeg => image::codecs::jpeg::JpegDecoder::new(image_bytes)
+                    .and_then(image::DynamicImage::from_decoder),
+                ImageFormat::Webp => image::codecs::webp::WebPDecoder::new(image_bytes)
+                    .and_then(image::DynamicImage::from_decoder),
+                ImageFormat::Gif => image::codecs::gif::GifDecoder::new(image_bytes)
+                    .and_then(image::DynamicImage::from_decoder),
+                _ => return None,
+            }
+            .log_err()?;
+
+            let width = dynamic_image.width();
+            let height = dynamic_image.height();
             let image_size = size(DevicePixels(width as i32), DevicePixels(height as i32));
 
-            let mut base64_image = Vec::new();
-
-            {
-                let mut base64_encoder = EncoderWriter::new(
-                    Cursor::new(&mut base64_image),
-                    &base64::engine::general_purpose::STANDARD,
-                );
-
+            let base64_image = {
                 if image_size.width.0 > ANTHROPIC_SIZE_LIMT as i32
                     || image_size.height.0 > ANTHROPIC_SIZE_LIMT as i32
                 {
@@ -61,22 +117,18 @@ impl LanguageModelImage {
                         },
                         image_size,
                     );
-                    let image = DynamicImage::from_decoder(image).log_err()?.resize(
+                    let resized_image = dynamic_image.resize(
                         new_bounds.size.width.0 as u32,
                         new_bounds.size.height.0 as u32,
                         image::imageops::FilterType::Triangle,
                     );
 
-                    let mut png = Vec::new();
-                    image
-                        .write_with_encoder(PngEncoder::new(&mut png))
-                        .log_err()?;
-
-                    base64_encoder.write_all(png.as_slice()).log_err()?;
+                    encode_as_base64(data, resized_image)
                 } else {
-                    base64_encoder.write_all(data.bytes()).log_err()?;
+                    encode_as_base64(data, dynamic_image)
                 }
             }
+            .log_err()?;
 
             // SAFETY: The base64 encoder should not produce non-UTF8.
             let source = unsafe { String::from_utf8_unchecked(base64_image) };
@@ -85,68 +137,6 @@ impl LanguageModelImage {
                 size: image_size,
                 source: source.into(),
             })
-        })
-    }
-
-    /// Resolves image into an LLM-ready format (base64).
-    pub fn from_render_image(data: &RenderImage) -> Option<Self> {
-        let image_size = data.size(0);
-
-        let mut bytes = data.as_bytes(0).unwrap_or(&[]).to_vec();
-        // Convert from BGRA to RGBA.
-        for pixel in bytes.chunks_exact_mut(4) {
-            pixel.swap(2, 0);
-        }
-        let mut image = image::RgbaImage::from_vec(
-            image_size.width.0 as u32,
-            image_size.height.0 as u32,
-            bytes,
-        )
-        .expect("We already know this works");
-
-        // https://docs.anthropic.com/en/docs/build-with-claude/vision
-        if image_size.width.0 > ANTHROPIC_SIZE_LIMT as i32
-            || image_size.height.0 > ANTHROPIC_SIZE_LIMT as i32
-        {
-            let new_bounds = ObjectFit::ScaleDown.get_bounds(
-                gpui::Bounds {
-                    origin: point(px(0.0), px(0.0)),
-                    size: size(px(ANTHROPIC_SIZE_LIMT), px(ANTHROPIC_SIZE_LIMT)),
-                },
-                image_size,
-            );
-
-            image = resize(
-                &image,
-                new_bounds.size.width.0 as u32,
-                new_bounds.size.height.0 as u32,
-                image::imageops::FilterType::Triangle,
-            );
-        }
-
-        let mut png = Vec::new();
-
-        image
-            .write_with_encoder(PngEncoder::new(&mut png))
-            .log_err()?;
-
-        let mut base64_image = Vec::new();
-
-        {
-            let mut base64_encoder = EncoderWriter::new(
-                Cursor::new(&mut base64_image),
-                &base64::engine::general_purpose::STANDARD,
-            );
-
-            base64_encoder.write_all(png.as_slice()).log_err()?;
-        }
-
-        // SAFETY: The base64 encoder should not produce non-UTF8.
-        let source = unsafe { String::from_utf8_unchecked(base64_image) };
-
-        Some(LanguageModelImage {
-            size: image_size,
-            source: source.into(),
         })
     }
 
@@ -159,21 +149,187 @@ impl LanguageModelImage {
         // so this method is more of a rough guess.
         (width * height) / 750
     }
+
+    pub fn to_base64_url(&self) -> String {
+        format!("data:image/png;base64,{}", self.source)
+    }
+}
+
+fn encode_as_base64(data: Arc<Image>, image: image::DynamicImage) -> Result<Vec<u8>> {
+    let mut base64_image = Vec::new();
+    {
+        let mut base64_encoder = EncoderWriter::new(
+            Cursor::new(&mut base64_image),
+            &base64::engine::general_purpose::STANDARD,
+        );
+        if data.format() == ImageFormat::Png {
+            base64_encoder.write_all(data.bytes())?;
+        } else {
+            let mut png = Vec::new();
+            image.write_with_encoder(PngEncoder::new(&mut png))?;
+
+            base64_encoder.write_all(png.as_slice())?;
+        }
+    }
+    Ok(base64_image)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct LanguageModelToolResult {
-    pub tool_use_id: String,
+    pub tool_use_id: LanguageModelToolUseId,
+    pub tool_name: Arc<str>,
     pub is_error: bool,
-    pub content: String,
+    pub content: LanguageModelToolResultContent,
+    pub output: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Eq, PartialEq, Hash)]
+pub enum LanguageModelToolResultContent {
+    Text(Arc<str>),
+    Image(LanguageModelImage),
+}
+
+impl<'de> Deserialize<'de> for LanguageModelToolResultContent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+
+        // Models can provide these responses in several styles. Try each in order.
+
+        // 1. Try as plain string
+        if let Ok(text) = serde_json::from_value::<String>(value.clone()) {
+            return Ok(Self::Text(Arc::from(text)));
+        }
+
+        // 2. Try as object
+        if let Some(obj) = value.as_object() {
+            // get a JSON field case-insensitively
+            fn get_field<'a>(
+                obj: &'a serde_json::Map<String, serde_json::Value>,
+                field: &str,
+            ) -> Option<&'a serde_json::Value> {
+                obj.iter()
+                    .find(|(k, _)| k.to_lowercase() == field.to_lowercase())
+                    .map(|(_, v)| v)
+            }
+
+            // Accept wrapped text format: { "type": "text", "text": "..." }
+            if let (Some(type_value), Some(text_value)) =
+                (get_field(&obj, "type"), get_field(&obj, "text"))
+            {
+                if let Some(type_str) = type_value.as_str() {
+                    if type_str.to_lowercase() == "text" {
+                        if let Some(text) = text_value.as_str() {
+                            return Ok(Self::Text(Arc::from(text)));
+                        }
+                    }
+                }
+            }
+
+            // Check for wrapped Text variant: { "text": "..." }
+            if let Some((_key, value)) = obj.iter().find(|(k, _)| k.to_lowercase() == "text") {
+                if obj.len() == 1 {
+                    // Only one field, and it's "text" (case-insensitive)
+                    if let Some(text) = value.as_str() {
+                        return Ok(Self::Text(Arc::from(text)));
+                    }
+                }
+            }
+
+            // Check for wrapped Image variant: { "image": { "source": "...", "size": ... } }
+            if let Some((_key, value)) = obj.iter().find(|(k, _)| k.to_lowercase() == "image") {
+                if obj.len() == 1 {
+                    // Only one field, and it's "image" (case-insensitive)
+                    // Try to parse the nested image object
+                    if let Some(image_obj) = value.as_object() {
+                        if let Some(image) = LanguageModelImage::from_json(image_obj) {
+                            return Ok(Self::Image(image));
+                        }
+                    }
+                }
+            }
+
+            // Try as direct Image (object with "source" and "size" fields)
+            if let Some(image) = LanguageModelImage::from_json(&obj) {
+                return Ok(Self::Image(image));
+            }
+        }
+
+        // If none of the variants match, return an error with the problematic JSON
+        Err(D::Error::custom(format!(
+            "data did not match any variant of LanguageModelToolResultContent. Expected either a string, \
+             an object with 'type': 'text', a wrapped variant like {{\"Text\": \"...\"}}, or an image object. Got: {}",
+            serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
+        )))
+    }
+}
+
+impl LanguageModelToolResultContent {
+    pub fn to_str(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(&text),
+            Self::Image(_) => None,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Text(text) => text.chars().all(|c| c.is_whitespace()),
+            Self::Image(_) => false,
+        }
+    }
+}
+
+impl From<&str> for LanguageModelToolResultContent {
+    fn from(value: &str) -> Self {
+        Self::Text(Arc::from(value))
+    }
+}
+
+impl From<String> for LanguageModelToolResultContent {
+    fn from(value: String) -> Self {
+        Self::Text(Arc::from(value))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub enum MessageContent {
     Text(String),
+    Thinking {
+        text: String,
+        signature: Option<String>,
+    },
+    RedactedThinking(Vec<u8>),
     Image(LanguageModelImage),
     ToolUse(LanguageModelToolUse),
     ToolResult(LanguageModelToolResult),
+}
+
+impl MessageContent {
+    pub fn to_str(&self) -> Option<&str> {
+        match self {
+            MessageContent::Text(text) => Some(text.as_str()),
+            MessageContent::Thinking { text, .. } => Some(text.as_str()),
+            MessageContent::RedactedThinking(_) => None,
+            MessageContent::ToolResult(tool_result) => tool_result.content.to_str(),
+            MessageContent::ToolUse(_) | MessageContent::Image(_) => None,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            MessageContent::Text(text) => text.chars().all(|c| c.is_whitespace()),
+            MessageContent::Thinking { text, .. } => text.chars().all(|c| c.is_whitespace()),
+            MessageContent::ToolResult(tool_result) => tool_result.content.is_empty(),
+            MessageContent::RedactedThinking(_)
+            | MessageContent::ToolUse(_)
+            | MessageContent::Image(_) => false,
+        }
+    }
 }
 
 impl From<String> for MessageContent {
@@ -197,30 +353,16 @@ pub struct LanguageModelRequestMessage {
 
 impl LanguageModelRequestMessage {
     pub fn string_contents(&self) -> String {
-        let mut string_buffer = String::new();
-        for string in self.content.iter().filter_map(|content| match content {
-            MessageContent::Text(text) => Some(text),
-            MessageContent::ToolResult(tool_result) => Some(&tool_result.content),
-            MessageContent::ToolUse(_) | MessageContent::Image(_) => None,
-        }) {
-            string_buffer.push_str(string.as_str())
+        let mut buffer = String::new();
+        for string in self.content.iter().filter_map(|content| content.to_str()) {
+            buffer.push_str(string);
         }
-        string_buffer
+
+        buffer
     }
 
     pub fn contents_empty(&self) -> bool {
-        self.content.is_empty()
-            || self
-                .content
-                .first()
-                .map(|content| match content {
-                    MessageContent::Text(text) => text.chars().all(|c| c.is_whitespace()),
-                    MessageContent::ToolResult(tool_result) => {
-                        tool_result.content.chars().all(|c| c.is_whitespace())
-                    }
-                    MessageContent::ToolUse(_) | MessageContent::Image(_) => true,
-                })
-                .unwrap_or(false)
+        self.content.iter().all(|content| content.is_empty())
     }
 }
 
@@ -231,267 +373,193 @@ pub struct LanguageModelRequestTool {
     pub input_schema: serde_json::Value,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct LanguageModelRequest {
-    pub messages: Vec<LanguageModelRequestMessage>,
-    pub tools: Vec<LanguageModelRequestTool>,
-    pub stop: Vec<String>,
-    pub temperature: Option<f32>,
+#[derive(Debug, PartialEq, Hash, Clone, Serialize, Deserialize)]
+pub enum LanguageModelToolChoice {
+    Auto,
+    Any,
+    None,
 }
 
-impl LanguageModelRequest {
-    pub fn into_open_ai(self, model: String, max_output_tokens: Option<u32>) -> open_ai::Request {
-        let stream = !model.starts_with("o1-");
-        open_ai::Request {
-            model,
-            messages: self
-                .messages
-                .into_iter()
-                .map(|msg| match msg.role {
-                    Role::User => open_ai::RequestMessage::User {
-                        content: msg.string_contents(),
-                    },
-                    Role::Assistant => open_ai::RequestMessage::Assistant {
-                        content: Some(msg.string_contents()),
-                        tool_calls: Vec::new(),
-                    },
-                    Role::System => open_ai::RequestMessage::System {
-                        content: msg.string_contents(),
-                    },
-                })
-                .collect(),
-            stream,
-            stop: self.stop,
-            temperature: self.temperature.unwrap_or(1.0),
-            max_tokens: max_output_tokens,
-            tools: Vec::new(),
-            tool_choice: None,
-        }
-    }
-
-    pub fn into_google(self, model: String) -> google_ai::GenerateContentRequest {
-        google_ai::GenerateContentRequest {
-            model,
-            contents: self
-                .messages
-                .into_iter()
-                .map(|msg| google_ai::Content {
-                    parts: vec![google_ai::Part::TextPart(google_ai::TextPart {
-                        text: msg.string_contents(),
-                    })],
-                    role: match msg.role {
-                        Role::User => google_ai::Role::User,
-                        Role::Assistant => google_ai::Role::Model,
-                        Role::System => google_ai::Role::User, // Google AI doesn't have a system role
-                    },
-                })
-                .collect(),
-            generation_config: Some(google_ai::GenerationConfig {
-                candidate_count: Some(1),
-                stop_sequences: Some(self.stop),
-                max_output_tokens: None,
-                temperature: self.temperature.map(|t| t as f64).or(Some(1.0)),
-                top_p: None,
-                top_k: None,
-            }),
-            safety_settings: None,
-        }
-    }
-
-    pub fn into_anthropic(
-        self,
-        model: String,
-        default_temperature: f32,
-        max_output_tokens: u32,
-    ) -> anthropic::Request {
-        let mut new_messages: Vec<anthropic::Message> = Vec::new();
-        let mut system_message = String::new();
-
-        for message in self.messages {
-            if message.contents_empty() {
-                continue;
-            }
-
-            match message.role {
-                Role::User | Role::Assistant => {
-                    let cache_control = if message.cache {
-                        Some(anthropic::CacheControl {
-                            cache_type: anthropic::CacheControlType::Ephemeral,
-                        })
-                    } else {
-                        None
-                    };
-                    let anthropic_message_content: Vec<anthropic::RequestContent> = message
-                        .content
-                        .into_iter()
-                        .filter_map(|content| match content {
-                            MessageContent::Text(text) => {
-                                if !text.is_empty() {
-                                    Some(anthropic::RequestContent::Text {
-                                        text,
-                                        cache_control,
-                                    })
-                                } else {
-                                    None
-                                }
-                            }
-                            MessageContent::Image(image) => {
-                                Some(anthropic::RequestContent::Image {
-                                    source: anthropic::ImageSource {
-                                        source_type: "base64".to_string(),
-                                        media_type: "image/png".to_string(),
-                                        data: image.source.to_string(),
-                                    },
-                                    cache_control,
-                                })
-                            }
-                            MessageContent::ToolUse(tool_use) => {
-                                Some(anthropic::RequestContent::ToolUse {
-                                    id: tool_use.id.to_string(),
-                                    name: tool_use.name,
-                                    input: tool_use.input,
-                                    cache_control,
-                                })
-                            }
-                            MessageContent::ToolResult(tool_result) => {
-                                Some(anthropic::RequestContent::ToolResult {
-                                    tool_use_id: tool_result.tool_use_id,
-                                    is_error: tool_result.is_error,
-                                    content: tool_result.content,
-                                    cache_control,
-                                })
-                            }
-                        })
-                        .collect();
-                    let anthropic_role = match message.role {
-                        Role::User => anthropic::Role::User,
-                        Role::Assistant => anthropic::Role::Assistant,
-                        Role::System => unreachable!("System role should never occur here"),
-                    };
-                    if let Some(last_message) = new_messages.last_mut() {
-                        if last_message.role == anthropic_role {
-                            last_message.content.extend(anthropic_message_content);
-                            continue;
-                        }
-                    }
-                    new_messages.push(anthropic::Message {
-                        role: anthropic_role,
-                        content: anthropic_message_content,
-                    });
-                }
-                Role::System => {
-                    if !system_message.is_empty() {
-                        system_message.push_str("\n\n");
-                    }
-                    system_message.push_str(&message.string_contents());
-                }
-            }
-        }
-
-        anthropic::Request {
-            model,
-            messages: new_messages,
-            max_tokens: max_output_tokens,
-            system: Some(system_message),
-            tools: self
-                .tools
-                .into_iter()
-                .map(|tool| anthropic::Tool {
-                    name: tool.name,
-                    description: tool.description,
-                    input_schema: tool.input_schema,
-                })
-                .collect(),
-            tool_choice: None,
-            metadata: None,
-            stop_sequences: Vec::new(),
-            temperature: self.temperature.or(Some(default_temperature)),
-            top_k: None,
-            top_p: None,
-        }
-    }
-
-    pub fn into_deepseek(self, model: String, max_output_tokens: Option<u32>) -> deepseek::Request {
-        let is_reasoner = model == "deepseek-reasoner";
-
-        let len = self.messages.len();
-        let merged_messages =
-            self.messages
-                .into_iter()
-                .fold(Vec::with_capacity(len), |mut acc, msg| {
-                    let role = msg.role;
-                    let content = msg.string_contents();
-
-                    if is_reasoner {
-                        if let Some(last_msg) = acc.last_mut() {
-                            match (last_msg, role) {
-                                (deepseek::RequestMessage::User { content: last }, Role::User) => {
-                                    last.push(' ');
-                                    last.push_str(&content);
-                                    return acc;
-                                }
-
-                                (
-                                    deepseek::RequestMessage::Assistant {
-                                        content: last_content,
-                                        ..
-                                    },
-                                    Role::Assistant,
-                                ) => {
-                                    *last_content = last_content
-                                        .take()
-                                        .map(|c| {
-                                            let mut s =
-                                                String::with_capacity(c.len() + content.len() + 1);
-                                            s.push_str(&c);
-                                            s.push(' ');
-                                            s.push_str(&content);
-                                            s
-                                        })
-                                        .or(Some(content));
-
-                                    return acc;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-
-                    acc.push(match role {
-                        Role::User => deepseek::RequestMessage::User { content },
-                        Role::Assistant => deepseek::RequestMessage::Assistant {
-                            content: Some(content),
-                            tool_calls: Vec::new(),
-                        },
-                        Role::System => deepseek::RequestMessage::System { content },
-                    });
-                    acc
-                });
-
-        deepseek::Request {
-            model,
-            messages: merged_messages,
-            stream: true,
-            max_tokens: max_output_tokens,
-            temperature: if is_reasoner { None } else { self.temperature },
-            response_format: None,
-            tools: self
-                .tools
-                .into_iter()
-                .map(|tool| deepseek::ToolDefinition::Function {
-                    function: deepseek::FunctionDefinition {
-                        name: tool.name,
-                        description: Some(tool.description),
-                        parameters: Some(tool.input_schema),
-                    },
-                })
-                .collect(),
-        }
-    }
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct LanguageModelRequest {
+    pub thread_id: Option<String>,
+    pub prompt_id: Option<String>,
+    pub intent: Option<CompletionIntent>,
+    pub mode: Option<CompletionMode>,
+    pub messages: Vec<LanguageModelRequestMessage>,
+    pub tools: Vec<LanguageModelRequestTool>,
+    pub tool_choice: Option<LanguageModelToolChoice>,
+    pub stop: Vec<String>,
+    pub temperature: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct LanguageModelResponseMessage {
     pub role: Option<Role>,
     pub content: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_language_model_tool_result_content_deserialization() {
+        let json = r#""This is plain text""#;
+        let result: LanguageModelToolResultContent = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            result,
+            LanguageModelToolResultContent::Text("This is plain text".into())
+        );
+
+        let json = r#"{"type": "text", "text": "This is wrapped text"}"#;
+        let result: LanguageModelToolResultContent = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            result,
+            LanguageModelToolResultContent::Text("This is wrapped text".into())
+        );
+
+        let json = r#"{"Type": "TEXT", "TEXT": "Case insensitive"}"#;
+        let result: LanguageModelToolResultContent = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            result,
+            LanguageModelToolResultContent::Text("Case insensitive".into())
+        );
+
+        let json = r#"{"Text": "Wrapped variant"}"#;
+        let result: LanguageModelToolResultContent = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            result,
+            LanguageModelToolResultContent::Text("Wrapped variant".into())
+        );
+
+        let json = r#"{"text": "Lowercase wrapped"}"#;
+        let result: LanguageModelToolResultContent = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            result,
+            LanguageModelToolResultContent::Text("Lowercase wrapped".into())
+        );
+
+        // Test image deserialization
+        let json = r#"{
+            "source": "base64encodedimagedata",
+            "size": {
+                "width": 100,
+                "height": 200
+            }
+        }"#;
+        let result: LanguageModelToolResultContent = serde_json::from_str(json).unwrap();
+        match result {
+            LanguageModelToolResultContent::Image(image) => {
+                assert_eq!(image.source.as_ref(), "base64encodedimagedata");
+                assert_eq!(image.size.width.0, 100);
+                assert_eq!(image.size.height.0, 200);
+            }
+            _ => panic!("Expected Image variant"),
+        }
+
+        // Test wrapped Image variant
+        let json = r#"{
+            "Image": {
+                "source": "wrappedimagedata",
+                "size": {
+                    "width": 50,
+                    "height": 75
+                }
+            }
+        }"#;
+        let result: LanguageModelToolResultContent = serde_json::from_str(json).unwrap();
+        match result {
+            LanguageModelToolResultContent::Image(image) => {
+                assert_eq!(image.source.as_ref(), "wrappedimagedata");
+                assert_eq!(image.size.width.0, 50);
+                assert_eq!(image.size.height.0, 75);
+            }
+            _ => panic!("Expected Image variant"),
+        }
+
+        // Test wrapped Image variant with case insensitive
+        let json = r#"{
+            "image": {
+                "Source": "caseinsensitive",
+                "SIZE": {
+                    "width": 30,
+                    "height": 40
+                }
+            }
+        }"#;
+        let result: LanguageModelToolResultContent = serde_json::from_str(json).unwrap();
+        match result {
+            LanguageModelToolResultContent::Image(image) => {
+                assert_eq!(image.source.as_ref(), "caseinsensitive");
+                assert_eq!(image.size.width.0, 30);
+                assert_eq!(image.size.height.0, 40);
+            }
+            _ => panic!("Expected Image variant"),
+        }
+
+        // Test that wrapped text with wrong type fails
+        let json = r#"{"type": "blahblah", "text": "This should fail"}"#;
+        let result: Result<LanguageModelToolResultContent, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+
+        // Test that malformed JSON fails
+        let json = r#"{"invalid": "structure"}"#;
+        let result: Result<LanguageModelToolResultContent, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+
+        // Test edge cases
+        let json = r#""""#; // Empty string
+        let result: LanguageModelToolResultContent = serde_json::from_str(json).unwrap();
+        assert_eq!(result, LanguageModelToolResultContent::Text("".into()));
+
+        // Test with extra fields in wrapped text (should be ignored)
+        let json = r#"{"type": "text", "text": "Hello", "extra": "field"}"#;
+        let result: LanguageModelToolResultContent = serde_json::from_str(json).unwrap();
+        assert_eq!(result, LanguageModelToolResultContent::Text("Hello".into()));
+
+        // Test direct image with case-insensitive fields
+        let json = r#"{
+            "SOURCE": "directimage",
+            "Size": {
+                "width": 200,
+                "height": 300
+            }
+        }"#;
+        let result: LanguageModelToolResultContent = serde_json::from_str(json).unwrap();
+        match result {
+            LanguageModelToolResultContent::Image(image) => {
+                assert_eq!(image.source.as_ref(), "directimage");
+                assert_eq!(image.size.width.0, 200);
+                assert_eq!(image.size.height.0, 300);
+            }
+            _ => panic!("Expected Image variant"),
+        }
+
+        // Test that multiple fields prevent wrapped variant interpretation
+        let json = r#"{"Text": "not wrapped", "extra": "field"}"#;
+        let result: Result<LanguageModelToolResultContent, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+
+        // Test wrapped text with uppercase TEXT variant
+        let json = r#"{"TEXT": "Uppercase variant"}"#;
+        let result: LanguageModelToolResultContent = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            result,
+            LanguageModelToolResultContent::Text("Uppercase variant".into())
+        );
+
+        // Test that numbers and other JSON values fail gracefully
+        let json = r#"123"#;
+        let result: Result<LanguageModelToolResultContent, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+
+        let json = r#"null"#;
+        let result: Result<LanguageModelToolResultContent, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+
+        let json = r#"[1, 2, 3]"#;
+        let result: Result<LanguageModelToolResultContent, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
 }

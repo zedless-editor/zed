@@ -20,7 +20,7 @@
       "aarch64-darwin"
     ];
 
-    forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f (nixpkgs.legacyPackages.${system}));
+    forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
   in {
     packages = forAllSystems (pkgs: {
       zed-editor = pkgs.callPackage ./nix/package.nix {};
@@ -28,7 +28,9 @@
     });
 
     devShells = forAllSystems (pkgs: {
-      default = pkgs.callPackage ./nix/shell.nix {};
+      default = pkgs.callPackage ./nix/shell.nix {
+        inherit (self.packages.${pkgs.stdenv.system}) zed-editor;
+      };
     });
 
     formatter = forAllSystems (pkgs: pkgs.nixfmt-rfc-style);

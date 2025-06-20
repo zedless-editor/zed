@@ -2,12 +2,13 @@ use std::sync::OnceLock;
 
 use ::util::ResultExt;
 use windows::{
-    Wdk::System::SystemServices::RtlGetVersion,
-    Win32::{Foundation::*, Graphics::Dwm::*, UI::WindowsAndMessaging::*},
     UI::{
         Color,
         ViewManagement::{UIColorType, UISettings},
     },
+    Wdk::System::SystemServices::RtlGetVersion,
+    Win32::{Foundation::*, Graphics::Dwm::*, UI::WindowsAndMessaging::*},
+    core::{BOOL, HSTRING},
 };
 
 use crate::*;
@@ -105,7 +106,7 @@ pub(crate) fn windows_credentials_target_name(url: &str) -> String {
     format!("zed:url={}", url)
 }
 
-pub(crate) fn load_cursor(style: CursorStyle) -> HCURSOR {
+pub(crate) fn load_cursor(style: CursorStyle) -> Option<HCURSOR> {
     static ARROW: OnceLock<SafeCursor> = OnceLock::new();
     static IBEAM: OnceLock<SafeCursor> = OnceLock::new();
     static CROSS: OnceLock<SafeCursor> = OnceLock::new();
@@ -126,17 +127,20 @@ pub(crate) fn load_cursor(style: CursorStyle) -> HCURSOR {
         | CursorStyle::ResizeUpDown
         | CursorStyle::ResizeRow => (&SIZENS, IDC_SIZENS),
         CursorStyle::OperationNotAllowed => (&NO, IDC_NO),
+        CursorStyle::None => return None,
         _ => (&ARROW, IDC_ARROW),
     };
-    *(*lock.get_or_init(|| {
-        HCURSOR(
-            unsafe { LoadImageW(None, name, IMAGE_CURSOR, 0, 0, LR_DEFAULTSIZE | LR_SHARED) }
-                .log_err()
-                .unwrap_or_default()
-                .0,
-        )
-        .into()
-    }))
+    Some(
+        *(*lock.get_or_init(|| {
+            HCURSOR(
+                unsafe { LoadImageW(None, name, IMAGE_CURSOR, 0, 0, LR_DEFAULTSIZE | LR_SHARED) }
+                    .log_err()
+                    .unwrap_or_default()
+                    .0,
+            )
+            .into()
+        })),
+    )
 }
 
 /// This function is used to configure the dark mode for the window built-in title bar.
@@ -181,4 +185,15 @@ pub(crate) fn system_appearance() -> Result<WindowAppearance> {
 #[inline(always)]
 fn is_color_light(color: &Color) -> bool {
     ((5 * color.G as u32) + (2 * color.R as u32) + color.B as u32) > (8 * 128)
+}
+
+pub(crate) fn show_error(title: &str, content: String) {
+    let _ = unsafe {
+        MessageBoxW(
+            None,
+            &HSTRING::from(content),
+            &HSTRING::from(title),
+            MB_ICONERROR | MB_SYSTEMMODAL,
+        )
+    };
 }

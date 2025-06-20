@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
-use gpui::{hsla, FontStyle, FontWeight, HighlightStyle, Hsla, WindowBackgroundAppearance};
+use gpui::{FontStyle, FontWeight, HighlightStyle, Hsla, WindowBackgroundAppearance, hsla};
 
 use crate::{
-    default_color_scales, AccentColors, Appearance, PlayerColors, StatusColors,
-    StatusColorsRefinement, SyntaxTheme, SystemColors, Theme, ThemeColors, ThemeFamily,
-    ThemeStyles,
+    AccentColors, Appearance, PlayerColors, StatusColors, StatusColorsRefinement, SyntaxTheme,
+    SystemColors, Theme, ThemeColors, ThemeFamily, ThemeStyles, default_color_scales,
 };
 
 /// The default theme family for Zed.
@@ -114,6 +113,7 @@ pub(crate) fn zed_default_dark() -> Theme {
                 icon_disabled: hsla(220.0 / 360., 6.4 / 100., 45.7 / 100., 1.0),
                 icon_placeholder: hsla(220.0 / 360., 6.4 / 100., 45.7 / 100., 1.0),
                 icon_accent: blue,
+                debugger_accent: red,
                 status_bar_background: bg,
                 title_bar_background: bg,
                 title_bar_inactive_background: bg,
@@ -128,6 +128,12 @@ pub(crate) fn zed_default_dark() -> Theme {
                 editor_subheader_background: bg,
                 editor_active_line_background: hsla(222.9 / 360., 13.5 / 100., 20.4 / 100., 1.0),
                 editor_highlighted_line_background: hsla(207.8 / 360., 81. / 100., 66. / 100., 0.1),
+                editor_debugger_active_line_background: hsla(
+                    207.8 / 360.,
+                    81. / 100.,
+                    66. / 100.,
+                    0.2,
+                ),
                 editor_line_number: hsla(222.0 / 360., 11.5 / 100., 34.1 / 100., 1.0),
                 editor_active_line_number: hsla(216.0 / 360., 5.9 / 100., 49.6 / 100., 1.0),
                 editor_hover_line_number: hsla(216.0 / 360., 5.9 / 100., 56.7 / 100., 1.0),
@@ -184,21 +190,29 @@ pub(crate) fn zed_default_dark() -> Theme {
                 pane_group_border: hsla(225. / 360., 13. / 100., 12. / 100., 1.),
                 scrollbar_thumb_background: gpui::transparent_black(),
                 scrollbar_thumb_hover_background: hsla(225.0 / 360., 11.8 / 100., 26.7 / 100., 1.0),
+                scrollbar_thumb_active_background: hsla(
+                    225.0 / 360.,
+                    11.8 / 100.,
+                    26.7 / 100.,
+                    1.0,
+                ),
                 scrollbar_thumb_border: hsla(228. / 360., 8. / 100., 25. / 100., 1.),
                 scrollbar_track_background: gpui::transparent_black(),
                 scrollbar_track_border: hsla(228. / 360., 8. / 100., 25. / 100., 1.),
+                minimap_thumb_background: hsla(225.0 / 360., 11.8 / 100., 26.7 / 100., 0.7),
+                minimap_thumb_hover_background: hsla(225.0 / 360., 11.8 / 100., 26.7 / 100., 0.7),
+                minimap_thumb_active_background: hsla(225.0 / 360., 11.8 / 100., 26.7 / 100., 0.7),
+                minimap_thumb_border: hsla(228. / 360., 8. / 100., 25. / 100., 1.),
                 editor_foreground: hsla(218. / 360., 14. / 100., 71. / 100., 1.),
                 link_text_hover: blue,
                 version_control_added: ADDED_COLOR,
-                version_control_added_background: ADDED_COLOR.opacity(0.1),
                 version_control_deleted: REMOVED_COLOR,
-                version_control_deleted_background: REMOVED_COLOR.opacity(0.1),
                 version_control_modified: MODIFIED_COLOR,
-                version_control_modified_background: MODIFIED_COLOR.opacity(0.1),
                 version_control_renamed: MODIFIED_COLOR,
                 version_control_conflict: crate::orange().light().step_12(),
-                version_control_conflict_background: crate::orange().light().step_12().opacity(0.1),
                 version_control_ignored: crate::gray().light().step_12(),
+                version_control_conflict_marker_ours: crate::green().light().step_12().alpha(0.5),
+                version_control_conflict_marker_theirs: crate::blue().light().step_12().alpha(0.5),
             },
             status: StatusColors {
                 conflict: yellow,

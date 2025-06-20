@@ -1,12 +1,12 @@
 #[cfg(any(test, feature = "test-support"))]
 pub mod test;
 
-mod socks;
+mod proxy;
 pub mod telemetry;
 pub mod user;
 pub mod zed_urls;
 
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail};
 use async_recursion::async_recursion;
 use async_tungstenite::tungstenite::{
     client::IntoClientRequest,
@@ -15,21 +15,22 @@ use async_tungstenite::tungstenite::{
 };
 use chrono::{DateTime, Utc};
 use clock::SystemClock;
+use credentials_provider::CredentialsProvider;
 use futures::{
-    channel::oneshot, future::BoxFuture, AsyncReadExt, FutureExt, SinkExt, Stream, StreamExt,
-    TryFutureExt as _, TryStreamExt,
+    AsyncReadExt, FutureExt, SinkExt, Stream, StreamExt, TryFutureExt as _, TryStreamExt,
+    channel::oneshot, future::BoxFuture,
 };
-use gpui::{actions, App, AsyncApp, Entity, Global, Task, WeakEntity};
+use gpui::{App, AsyncApp, Entity, Global, Task, WeakEntity, actions};
 use http_client::{AsyncBody, HttpClient, HttpClientWithUrl};
 use parking_lot::RwLock;
 use postage::watch;
+use proxy::connect_proxy_stream;
 use rand::prelude::*;
 use release_channel::{AppVersion, ReleaseChannel};
 use rpc::proto::{AnyTypedEnvelope, EnvelopedMessage, PeerId, RequestMessage};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{Settings, SettingsSources};
-use socks::connect_socks_proxy_stream;
 use std::pin::Pin;
 use std::{
     any::TypeId,
@@ -39,15 +40,16 @@ use std::{
     marker::PhantomData,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, LazyLock, Weak,
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 use telemetry::Telemetry;
 use thiserror::Error;
+use tokio::net::TcpStream;
 use url::Url;
-use util::{ResultExt, TryFutureExt};
+use util::{ConnectionResult, ResultExt};
 
 pub use rpc::*;
 pub use telemetry_events::Event;
@@ -57,14 +59,6 @@ static ZED_SERVER_URL: LazyLock<Option<String>> =
     LazyLock::new(|| std::env::var("ZED_SERVER_URL").ok());
 static ZED_RPC_URL: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("ZED_RPC_URL").ok());
 
-/// An environment variable whose presence indicates that the development auth
-/// provider should be used.
-///
-/// Only works in development. Setting this environment variable in other release
-/// channels is a no-op.
-pub static ZED_DEVELOPMENT_AUTH: LazyLock<bool> = LazyLock::new(|| {
-    std::env::var("ZED_DEVELOPMENT_AUTH").map_or(false, |value| !value.is_empty())
-});
 pub static IMPERSONATE_LOGIN: LazyLock<Option<String>> = LazyLock::new(|| {
     std::env::var("ZED_IMPERSONATE")
         .ok()
@@ -111,6 +105,8 @@ impl Settings for ClientSettings {
         }
         Ok(result)
     }
+
+    fn import_from_vscode(_vscode: &settings::VsCodeSettings, _current: &mut Self::FileContent) {}
 }
 
 #[derive(Default, Clone, Serialize, Deserialize, JsonSchema)]
@@ -137,6 +133,10 @@ impl Settings for ProxySettings {
                 .or(sources.default.proxy.clone()),
         })
     }
+
+    fn import_from_vscode(vscode: &settings::VsCodeSettings, current: &mut Self::FileContent) {
+        vscode.string_setting("http.proxy", &mut current.proxy);
+    }
 }
 
 pub fn init_settings(cx: &mut App) {
@@ -152,7 +152,17 @@ pub fn init(client: &Arc<Client>, cx: &mut App) {
         move |_: &SignIn, cx| {
             if let Some(client) = client.upgrade() {
                 cx.spawn(
-                    |cx| async move { client.authenticate_and_connect(true, &cx).log_err().await },
+                    async move |cx| match client.authenticate_and_connect(true, &cx).await {
+                        ConnectionResult::Timeout => {
+                            log::error!("Initial authentication timed out");
+                        }
+                        ConnectionResult::ConnectionReset => {
+                            log::error!("Initial authentication connection reset");
+                        }
+                        ConnectionResult::Result(r) => {
+                            r.log_err();
+                        }
+                    },
                 )
                 .detach();
             }
@@ -163,7 +173,7 @@ pub fn init(client: &Arc<Client>, cx: &mut App) {
         let client = client.clone();
         move |_: &SignOut, cx| {
             if let Some(client) = client.upgrade() {
-                cx.spawn(|cx| async move {
+                cx.spawn(async move |cx| {
                     client.sign_out(&cx).await;
                 })
                 .detach();
@@ -175,7 +185,7 @@ pub fn init(client: &Arc<Client>, cx: &mut App) {
         let client = client.clone();
         move |_: &Reconnect, cx| {
             if let Some(client) = client.upgrade() {
-                cx.spawn(|cx| async move {
+                cx.spawn(async move |cx| {
                     client.reconnect(&cx);
                 })
                 .detach();
@@ -193,7 +203,7 @@ pub struct Client {
     peer: Arc<Peer>,
     http: Arc<HttpClientWithUrl>,
     telemetry: Arc<Telemetry>,
-    credentials_provider: Arc<dyn CredentialsProvider + Send + Sync + 'static>,
+    credentials_provider: ClientCredentialsProvider,
     state: RwLock<ClientState>,
     handler_set: parking_lot::Mutex<ProtoMessageHandlerSet>,
 
@@ -304,16 +314,46 @@ impl Credentials {
     }
 }
 
-/// A provider for [`Credentials`].
-///
-/// Used to abstract over reading and writing credentials to some form of
-/// persistence (like the system keychain).
-trait CredentialsProvider {
+pub struct ClientCredentialsProvider {
+    provider: Arc<dyn CredentialsProvider>,
+}
+
+impl ClientCredentialsProvider {
+    pub fn new(cx: &App) -> Self {
+        Self {
+            provider: <dyn CredentialsProvider>::global(cx),
+        }
+    }
+
+    fn server_url(&self, cx: &AsyncApp) -> Result<String> {
+        cx.update(|cx| ClientSettings::get_global(cx).server_url.clone())
+    }
+
     /// Reads the credentials from the provider.
     fn read_credentials<'a>(
         &'a self,
         cx: &'a AsyncApp,
-    ) -> Pin<Box<dyn Future<Output = Option<Credentials>> + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Option<Credentials>> + 'a>> {
+        async move {
+            if IMPERSONATE_LOGIN.is_some() {
+                return None;
+            }
+
+            let server_url = self.server_url(cx).ok()?;
+            let (user_id, access_token) = self
+                .provider
+                .read_credentials(&server_url, cx)
+                .await
+                .log_err()
+                .flatten()?;
+
+            Some(Credentials {
+                user_id: user_id.parse().ok()?,
+                access_token: String::from_utf8(access_token).ok()?,
+            })
+        }
+        .boxed_local()
+    }
 
     /// Writes the credentials to the provider.
     fn write_credentials<'a>(
@@ -321,13 +361,32 @@ trait CredentialsProvider {
         user_id: u64,
         access_token: String,
         cx: &'a AsyncApp,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
+        async move {
+            let server_url = self.server_url(cx)?;
+            self.provider
+                .write_credentials(
+                    &server_url,
+                    &user_id.to_string(),
+                    access_token.as_bytes(),
+                    cx,
+                )
+                .await
+        }
+        .boxed_local()
+    }
 
     /// Deletes the credentials from the provider.
     fn delete_credentials<'a>(
         &'a self,
         cx: &'a AsyncApp,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
+        async move {
+            let server_url = self.server_url(cx)?;
+            self.provider.delete_credentials(&server_url, cx).await
+        }
+        .boxed_local()
+    }
 }
 
 impl Default for ClientState {
@@ -431,14 +490,14 @@ impl<T: 'static> Drop for PendingEntitySubscription<T> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Deserialize, Debug)]
 pub struct TelemetrySettings {
     pub diagnostics: bool,
     pub metrics: bool,
 }
 
 /// Control what info is collected by Zed.
-#[derive(Default, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Default, Clone, Serialize, Deserialize, JsonSchema, Debug)]
 pub struct TelemetrySettingsContent {
     /// Send debug info like crash reports.
     ///
@@ -456,25 +515,19 @@ impl settings::Settings for TelemetrySettings {
     type FileContent = TelemetrySettingsContent;
 
     fn load(sources: SettingsSources<Self::FileContent>, _: &mut App) -> Result<Self> {
-        Ok(Self {
-            diagnostics: sources
-                .user
-                .as_ref()
-                .or(sources.server.as_ref())
-                .and_then(|v| v.diagnostics)
-                .unwrap_or(
-                    sources
-                        .default
-                        .diagnostics
-                        .ok_or_else(Self::missing_default)?,
-                ),
-            metrics: sources
-                .user
-                .as_ref()
-                .or(sources.server.as_ref())
-                .and_then(|v| v.metrics)
-                .unwrap_or(sources.default.metrics.ok_or_else(Self::missing_default)?),
-        })
+        sources.json_merge()
+    }
+
+    fn import_from_vscode(vscode: &settings::VsCodeSettings, current: &mut Self::FileContent) {
+        vscode.enum_setting("telemetry.telemetryLevel", &mut current.metrics, |s| {
+            Some(s == "all")
+        });
+        vscode.enum_setting("telemetry.telemetryLevel", &mut current.diagnostics, |s| {
+            Some(matches!(s, "all" | "error" | "crash"))
+        });
+        // we could translate telemetry.telemetryLevel, but just because users didn't want
+        // to send microsoft telemetry doesn't mean they don't want to send it to zed. their
+        // all/error/crash/off correspond to combinations of our "diagnostics" and "metrics".
     }
 }
 
@@ -484,27 +537,12 @@ impl Client {
         http: Arc<HttpClientWithUrl>,
         cx: &mut App,
     ) -> Arc<Self> {
-        let use_zed_development_auth = match ReleaseChannel::try_global(cx) {
-            Some(ReleaseChannel::Dev) => *ZED_DEVELOPMENT_AUTH,
-            Some(ReleaseChannel::Nightly | ReleaseChannel::Preview | ReleaseChannel::Stable)
-            | None => false,
-        };
-
-        let credentials_provider: Arc<dyn CredentialsProvider + Send + Sync + 'static> =
-            if use_zed_development_auth {
-                Arc::new(DevelopmentCredentialsProvider {
-                    path: paths::config_dir().join("development_auth"),
-                })
-            } else {
-                Arc::new(KeychainCredentialsProvider)
-            };
-
         Arc::new(Self {
             id: AtomicU64::new(0),
             peer: Peer::new(0),
             telemetry: Telemetry::new(clock, http.clone(), cx),
             http,
-            credentials_provider,
+            credentials_provider: ClientCredentialsProvider::new(cx),
             state: Default::default(),
             handler_set: Default::default(),
 
@@ -519,7 +557,7 @@ impl Client {
 
     pub fn production(cx: &mut App) -> Arc<Self> {
         let clock = Arc::new(clock::RealSystemClock);
-        let http = Arc::new(HttpClientWithUrl::new_uri(
+        let http = Arc::new(HttpClientWithUrl::new_url(
             cx.http_client(),
             &ClientSettings::get_global(cx).server_url,
             cx.http_client().proxy().cloned(),
@@ -612,18 +650,33 @@ impl Client {
                 state._reconnect_task = None;
             }
             Status::ConnectionLost => {
-                let this = self.clone();
-                state._reconnect_task = Some(cx.spawn(move |cx| async move {
+                let client = self.clone();
+                state._reconnect_task = Some(cx.spawn(async move |cx| {
                     #[cfg(any(test, feature = "test-support"))]
                     let mut rng = StdRng::seed_from_u64(0);
                     #[cfg(not(any(test, feature = "test-support")))]
                     let mut rng = StdRng::from_entropy();
 
                     let mut delay = INITIAL_RECONNECTION_DELAY;
-                    while let Err(error) = this.authenticate_and_connect(true, &cx).await {
-                        log::error!("failed to connect {}", error);
-                        if matches!(*this.status().borrow(), Status::ConnectionError) {
-                            this.set_status(
+                    loop {
+                        match client.authenticate_and_connect(true, &cx).await {
+                            ConnectionResult::Timeout => {
+                                log::error!("client connect attempt timed out")
+                            }
+                            ConnectionResult::ConnectionReset => {
+                                log::error!("client connect attempt reset")
+                            }
+                            ConnectionResult::Result(r) => {
+                                if let Err(error) = r {
+                                    log::error!("failed to connect: {error}");
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+
+                        if matches!(*client.status().borrow(), Status::ConnectionError) {
+                            client.set_status(
                                 Status::ReconnectionError {
                                     next_reconnection: Instant::now() + delay,
                                 },
@@ -658,9 +711,10 @@ impl Client {
         let id = (TypeId::of::<T>(), remote_id);
 
         let mut state = self.handler_set.lock();
-        if state.entities_by_type_and_remote_id.contains_key(&id) {
-            return Err(anyhow!("already subscribed to entity"));
-        }
+        anyhow::ensure!(
+            !state.entities_by_type_and_remote_id.contains_key(&id),
+            "already subscribed to entity"
+        );
 
         state
             .entities_by_type_and_remote_id
@@ -781,7 +835,7 @@ impl Client {
         self: &Arc<Self>,
         try_provider: bool,
         cx: &AsyncApp,
-    ) -> anyhow::Result<()> {
+    ) -> ConnectionResult<()> {
         let was_disconnected = match *self.status().borrow() {
             Status::SignedOut => true,
             Status::ConnectionError
@@ -790,9 +844,14 @@ impl Client {
             | Status::Reauthenticating { .. }
             | Status::ReconnectionError { .. } => false,
             Status::Connected { .. } | Status::Connecting { .. } | Status::Reconnecting { .. } => {
-                return Ok(())
+                return ConnectionResult::Result(Ok(()));
             }
-            Status::UpgradeRequired => return Err(EstablishConnectionError::UpgradeRequired)?,
+            Status::UpgradeRequired => {
+                return ConnectionResult::Result(
+                    Err(EstablishConnectionError::UpgradeRequired)
+                        .context("client auth and connect"),
+                );
+            }
         };
         if was_disconnected {
             self.set_status(Status::Authenticating, cx);
@@ -816,12 +875,12 @@ impl Client {
                         Ok(creds) => credentials = Some(creds),
                         Err(err) => {
                             self.set_status(Status::ConnectionError, cx);
-                            return Err(err);
+                            return ConnectionResult::Result(Err(err));
                         }
                     }
                 }
                 _ = status_rx.next().fuse() => {
-                    return Err(anyhow!("authentication canceled"));
+                    return ConnectionResult::Result(Err(anyhow!("authentication canceled")));
                 }
             }
         }
@@ -842,15 +901,22 @@ impl Client {
                     Ok(conn) => {
                         self.state.write().credentials = Some(credentials.clone());
                         if !read_from_provider && IMPERSONATE_LOGIN.is_none() {
-                                self.credentials_provider.write_credentials(credentials.user_id, credentials.access_token, cx).await.log_err();
-
+                            self.credentials_provider.write_credentials(credentials.user_id, credentials.access_token, cx).await.log_err();
                         }
 
                         futures::select_biased! {
-                            result = self.set_connection(conn, cx).fuse() => result,
+                            result = self.set_connection(conn, cx).fuse() => {
+                                match result.context("client auth and connect") {
+                                    Ok(()) => ConnectionResult::Result(Ok(())),
+                                    Err(err) => {
+                                        self.set_status(Status::ConnectionError, cx);
+                                        ConnectionResult::Result(Err(err))
+                                    },
+                                }
+                            },
                             _ = timeout => {
                                 self.set_status(Status::ConnectionError, cx);
-                                Err(anyhow!("timed out waiting on hello message from server"))
+                                ConnectionResult::Timeout
                             }
                         }
                     }
@@ -862,22 +928,22 @@ impl Client {
                             self.authenticate_and_connect(false, cx).await
                         } else {
                             self.set_status(Status::ConnectionError, cx);
-                            Err(EstablishConnectionError::Unauthorized)?
+                            ConnectionResult::Result(Err(EstablishConnectionError::Unauthorized).context("client auth and connect"))
                         }
                     }
                     Err(EstablishConnectionError::UpgradeRequired) => {
                         self.set_status(Status::UpgradeRequired, cx);
-                        Err(EstablishConnectionError::UpgradeRequired)?
+                        ConnectionResult::Result(Err(EstablishConnectionError::UpgradeRequired).context("client auth and connect"))
                     }
                     Err(error) => {
                         self.set_status(Status::ConnectionError, cx);
-                        Err(error)?
+                        ConnectionResult::Result(Err(error).context("client auth and connect"))
                     }
                 }
             }
             _ = &mut timeout => {
                 self.set_status(Status::ConnectionError, cx);
-                Err(anyhow!("timed out trying to establish connection"))
+                ConnectionResult::Timeout
             }
         }
     }
@@ -893,10 +959,7 @@ impl Client {
 
         let peer_id = async {
             log::debug!("waiting for server hello");
-            let message = incoming
-                .next()
-                .await
-                .ok_or_else(|| anyhow!("no hello message received"))?;
+            let message = incoming.next().await.context("no hello message received")?;
             log::debug!("got server hello");
             let hello_message_type_name = message.payload_type_name().to_string();
             let hello = message
@@ -908,10 +971,7 @@ impl Client {
                         hello_message_type_name
                     )
                 })?;
-            let peer_id = hello
-                .payload
-                .peer_id
-                .ok_or_else(|| anyhow!("invalid peer id"))?;
+            let peer_id = hello.payload.peer_id.context("invalid peer id")?;
             Ok(peer_id)
         };
 
@@ -938,13 +998,11 @@ impl Client {
 
         cx.spawn({
             let this = self.clone();
-            |cx| {
-                async move {
-                    while let Some(message) = incoming.next().await {
-                        this.handle_message(message, &cx);
-                        // Don't starve the main thread when receiving lots of messages at once.
-                        smol::future::yield_now().await;
-                    }
+            async move |cx| {
+                while let Some(message) = incoming.next().await {
+                    this.handle_message(message, &cx);
+                    // Don't starve the main thread when receiving lots of messages at once.
+                    smol::future::yield_now().await;
                 }
             }
         })
@@ -952,22 +1010,20 @@ impl Client {
 
         cx.spawn({
             let this = self.clone();
-            move |cx| async move {
-                match handle_io.await {
-                    Ok(()) => {
-                        if *this.status().borrow()
-                            == (Status::Connected {
-                                connection_id,
-                                peer_id,
-                            })
-                        {
-                            this.set_status(Status::SignedOut, &cx);
-                        }
+            async move |cx| match handle_io.await {
+                Ok(()) => {
+                    if *this.status().borrow()
+                        == (Status::Connected {
+                            connection_id,
+                            peer_id,
+                        })
+                    {
+                        this.set_status(Status::SignedOut, &cx);
                     }
-                    Err(err) => {
-                        log::error!("connection error: {:?}", err);
-                        this.set_status(Status::ConnectionLost, &cx);
-                    }
+                }
+                Err(err) => {
+                    log::error!("connection error: {:?}", err);
+                    this.set_status(Status::ConnectionLost, &cx);
                 }
             }
         })
@@ -1002,7 +1058,7 @@ impl Client {
         &self,
         http: Arc<HttpClientWithUrl>,
         release_channel: Option<ReleaseChannel>,
-    ) -> impl Future<Output = Result<url::Url>> {
+    ) -> impl Future<Output = Result<url::Url>> + use<> {
         #[cfg(any(test, feature = "test-support"))]
         let url_override = self.rpc_url.read().clone();
 
@@ -1025,22 +1081,19 @@ impl Client {
             }
 
             let response = http.get(&url, Default::default(), false).await?;
-            let collab_url = if response.status().is_redirection() {
-                response
-                    .headers()
-                    .get("Location")
-                    .ok_or_else(|| anyhow!("missing location header in /rpc response"))?
-                    .to_str()
-                    .map_err(EstablishConnectionError::other)?
-                    .to_string()
-            } else {
-                Err(anyhow!(
-                    "unexpected /rpc response status {}",
-                    response.status()
-                ))?
-            };
-
-            Url::parse(&collab_url).context("invalid rpc url")
+            anyhow::ensure!(
+                response.status().is_redirection(),
+                "unexpected /rpc response status {}",
+                response.status()
+            );
+            let collab_url = response
+                .headers()
+                .get("Location")
+                .context("missing location header in /rpc response")?
+                .to_str()
+                .map_err(EstablishConnectionError::other)?
+                .to_string();
+            Url::parse(&collab_url).with_context(|| format!("parsing colab rpc url {collab_url}"))
         }
     }
 
@@ -1064,7 +1117,7 @@ impl Client {
         let rpc_url = self.rpc_url(http, release_channel);
         let system_id = self.telemetry.system_id();
         let metrics_id = self.telemetry.metrics_id();
-        cx.background_executor().spawn(async move {
+        cx.spawn(async move |cx| {
             use HttpOrHttps::*;
 
             #[derive(Debug)]
@@ -1082,8 +1135,16 @@ impl Client {
             let rpc_host = rpc_url
                 .host_str()
                 .zip(rpc_url.port_or_known_default())
-                .ok_or_else(|| anyhow!("missing host in rpc url"))?;
-            let stream = connect_socks_proxy_stream(proxy.as_ref(), rpc_host).await?;
+                .context("missing host in rpc url")?;
+
+            let stream = {
+                let handle = cx.update(|cx| gpui_tokio::Tokio::handle(cx)).ok().unwrap();
+                let _guard = handle.enter();
+                match proxy {
+                    Some(proxy) => connect_proxy_stream(&proxy, rpc_host).await?,
+                    None => Box::new(TcpStream::connect(rpc_host).await?),
+                }
+            };
 
             log::info!("connected to rpc endpoint {}", rpc_url);
 
@@ -1122,42 +1183,31 @@ impl Client {
                 request_headers.insert("x-zed-metrics-id", HeaderValue::from_str(&metrics_id)?);
             }
 
-            match url_scheme {
-                Https => {
-                    let (stream, _) =
-                        async_tungstenite::async_tls::client_async_tls_with_connector(
-                            request,
-                            stream,
-                            Some(http_client::tls_config().into()),
-                        )
-                        .await?;
-                    Ok(Connection::new(
-                        stream
-                            .map_err(|error| anyhow!(error))
-                            .sink_map_err(|error| anyhow!(error)),
-                    ))
-                }
-                Http => {
-                    let (stream, _) = async_tungstenite::client_async(request, stream).await?;
-                    Ok(Connection::new(
-                        stream
-                            .map_err(|error| anyhow!(error))
-                            .sink_map_err(|error| anyhow!(error)),
-                    ))
-                }
-            }
+            let (stream, _) = async_tungstenite::tokio::client_async_tls_with_connector_and_config(
+                request,
+                stream,
+                Some(Arc::new(http_client_tls::tls_config()).into()),
+                None,
+            )
+            .await?;
+
+            Ok(Connection::new(
+                stream
+                    .map_err(|error| anyhow!(error))
+                    .sink_map_err(|error| anyhow!(error)),
+            ))
         })
     }
 
     pub fn authenticate_with_browser(self: &Arc<Self>, cx: &AsyncApp) -> Task<Result<Credentials>> {
         let http = self.http.clone();
         let this = self.clone();
-        cx.spawn(|cx| async move {
+        cx.spawn(async move |cx| {
             let background = cx.background_executor().clone();
 
             let (open_url_tx, open_url_rx) = oneshot::channel::<String>();
             cx.update(|cx| {
-                cx.spawn(move |cx| async move {
+                cx.spawn(async move |cx| {
                     let url = open_url_rx.await?;
                     cx.update(|cx| cx.open_url(&url))
                 })
@@ -1240,16 +1290,13 @@ impl Client {
                                     )
                                     .context("failed to respond to login http request")?;
                                     return Ok((
-                                        user_id
-                                            .ok_or_else(|| anyhow!("missing user_id parameter"))?,
-                                        access_token.ok_or_else(|| {
-                                            anyhow!("missing access_token parameter")
-                                        })?,
+                                        user_id.context("missing user_id parameter")?,
+                                        access_token.context("missing access_token parameter")?,
                                     ));
                                 }
                             }
 
-                            Err(anyhow!("didn't receive login redirect"))
+                            anyhow::bail!("didn't receive login redirect");
                         })
                         .await?;
 
@@ -1367,13 +1414,12 @@ impl Client {
         let mut response = http.send(request).await?;
         let mut body = String::new();
         response.body_mut().read_to_string(&mut body).await?;
-        if !response.status().is_success() {
-            Err(anyhow!(
-                "admin user request failed {} - {}",
-                response.status().as_u16(),
-                body,
-            ))?;
-        }
+        anyhow::ensure!(
+            response.status().is_success(),
+            "admin user request failed {} - {}",
+            response.status().as_u16(),
+            body,
+        );
         let response: AuthenticatedUserResponse = serde_json::from_str(&body)?;
 
         // Use the admin API token to authenticate as the impersonated user.
@@ -1410,7 +1456,7 @@ impl Client {
         if let Status::Connected { connection_id, .. } = *self.status().borrow() {
             Ok(connection_id)
         } else {
-            Err(anyhow!("not connected"))
+            anyhow::bail!("not connected");
         }
     }
 
@@ -1422,7 +1468,7 @@ impl Client {
     pub fn request<T: RequestMessage>(
         &self,
         request: T,
-    ) -> impl Future<Output = Result<T::Response>> {
+    ) -> impl Future<Output = Result<T::Response>> + use<T> {
         self.request_envelope(request)
             .map_ok(|envelope| envelope.payload)
     }
@@ -1454,7 +1500,7 @@ impl Client {
     pub fn request_envelope<T: RequestMessage>(
         &self,
         request: T,
-    ) -> impl Future<Output = Result<TypedEnvelope<T::Response>>> {
+    ) -> impl Future<Output = Result<TypedEnvelope<T::Response>>> + use<T> {
         let client_id = self.id();
         log::debug!(
             "rpc request start. client_id:{}. name:{}",
@@ -1479,7 +1525,7 @@ impl Client {
         &self,
         envelope: proto::Envelope,
         request_type: &'static str,
-    ) -> impl Future<Output = Result<proto::Envelope>> {
+    ) -> impl Future<Output = Result<proto::Envelope>> + use<> {
         let client_id = self.id();
         log::debug!(
             "rpc request start. client_id:{}. name:{}",
@@ -1519,25 +1565,23 @@ impl Client {
                 original_sender_id,
                 type_name
             );
-            cx.spawn(move |_| async move {
-                match future.await {
-                    Ok(()) => {
-                        log::debug!(
-                            "rpc message handled. client_id:{}, sender_id:{:?}, type:{}",
-                            client_id,
-                            original_sender_id,
-                            type_name
-                        );
-                    }
-                    Err(error) => {
-                        log::error!(
-                            "error handling message. client_id:{}, sender_id:{:?}, type:{}, error:{:?}",
-                            client_id,
-                            original_sender_id,
-                            type_name,
-                            error
-                        );
-                    }
+            cx.spawn(async move |_| match future.await {
+                Ok(()) => {
+                    log::debug!(
+                        "rpc message handled. client_id:{}, sender_id:{:?}, type:{}",
+                        client_id,
+                        original_sender_id,
+                        type_name
+                    );
+                }
+                Err(error) => {
+                    log::error!(
+                        "error handling message. client_id:{}, sender_id:{:?}, type:{}, error:{:?}",
+                        client_id,
+                        original_sender_id,
+                        type_name,
+                        error
+                    );
                 }
             })
             .detach();
@@ -1585,130 +1629,6 @@ impl ProtoClient for Client {
 
     fn is_via_collab(&self) -> bool {
         true
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct DevelopmentCredentials {
-    user_id: u64,
-    access_token: String,
-}
-
-/// A credentials provider that stores credentials in a local file.
-///
-/// This MUST only be used in development, as this is not a secure way of storing
-/// credentials on user machines.
-///
-/// Its existence is purely to work around the annoyance of having to constantly
-/// re-allow access to the system keychain when developing Zed.
-struct DevelopmentCredentialsProvider {
-    path: PathBuf,
-}
-
-impl CredentialsProvider for DevelopmentCredentialsProvider {
-    fn read_credentials<'a>(
-        &'a self,
-        _cx: &'a AsyncApp,
-    ) -> Pin<Box<dyn Future<Output = Option<Credentials>> + 'a>> {
-        async move {
-            if IMPERSONATE_LOGIN.is_some() {
-                return None;
-            }
-
-            let json = std::fs::read(&self.path).log_err()?;
-
-            let credentials: DevelopmentCredentials = serde_json::from_slice(&json).log_err()?;
-
-            Some(Credentials {
-                user_id: credentials.user_id,
-                access_token: credentials.access_token,
-            })
-        }
-        .boxed_local()
-    }
-
-    fn write_credentials<'a>(
-        &'a self,
-        user_id: u64,
-        access_token: String,
-        _cx: &'a AsyncApp,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
-        async move {
-            let json = serde_json::to_string(&DevelopmentCredentials {
-                user_id,
-                access_token,
-            })?;
-
-            std::fs::write(&self.path, json)?;
-
-            Ok(())
-        }
-        .boxed_local()
-    }
-
-    fn delete_credentials<'a>(
-        &'a self,
-        _cx: &'a AsyncApp,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
-        async move { Ok(std::fs::remove_file(&self.path)?) }.boxed_local()
-    }
-}
-
-/// A credentials provider that stores credentials in the system keychain.
-struct KeychainCredentialsProvider;
-
-impl CredentialsProvider for KeychainCredentialsProvider {
-    fn read_credentials<'a>(
-        &'a self,
-        cx: &'a AsyncApp,
-    ) -> Pin<Box<dyn Future<Output = Option<Credentials>> + 'a>> {
-        async move {
-            if IMPERSONATE_LOGIN.is_some() {
-                return None;
-            }
-
-            let (user_id, access_token) = cx
-                .update(|cx| cx.read_credentials(&ClientSettings::get_global(cx).server_url))
-                .log_err()?
-                .await
-                .log_err()??;
-
-            Some(Credentials {
-                user_id: user_id.parse().ok()?,
-                access_token: String::from_utf8(access_token).ok()?,
-            })
-        }
-        .boxed_local()
-    }
-
-    fn write_credentials<'a>(
-        &'a self,
-        user_id: u64,
-        access_token: String,
-        cx: &'a AsyncApp,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
-        async move {
-            cx.update(move |cx| {
-                cx.write_credentials(
-                    &ClientSettings::get_global(cx).server_url,
-                    &user_id.to_string(),
-                    access_token.as_bytes(),
-                )
-            })?
-            .await
-        }
-        .boxed_local()
-    }
-
-    fn delete_credentials<'a>(
-        &'a self,
-        cx: &'a AsyncApp,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
-        async move {
-            cx.update(move |cx| cx.delete_credentials(&ClientSettings::get_global(cx).server_url))?
-                .await
-        }
-        .boxed_local()
     }
 }
 
@@ -1806,7 +1726,7 @@ mod tests {
 
         // Time out when client tries to connect.
         client.override_authenticate(move |cx| {
-            cx.background_executor().spawn(async move {
+            cx.background_spawn(async move {
                 Ok(Credentials {
                     user_id,
                     access_token: "token".into(),
@@ -1814,7 +1734,7 @@ mod tests {
             })
         });
         client.override_establish_connection(|_, cx| {
-            cx.background_executor().spawn(async move {
+            cx.background_spawn(async move {
                 future::pending::<()>().await;
                 unreachable!()
             })
@@ -1831,7 +1751,7 @@ mod tests {
             status.next().await,
             Some(Status::ConnectionError { .. })
         ));
-        auth_and_connect.await.unwrap_err();
+        auth_and_connect.await.into_response().unwrap_err();
 
         // Allow the connection to be established.
         let server = FakeServer::for_client(user_id, &client, cx).await;
@@ -1848,7 +1768,7 @@ mod tests {
         // Time out when re-establishing the connection.
         server.allow_connections();
         client.override_establish_connection(|_, cx| {
-            cx.background_executor().spawn(async move {
+            cx.background_spawn(async move {
                 future::pending::<()>().await;
                 unreachable!()
             })
@@ -1887,7 +1807,7 @@ mod tests {
             move |cx| {
                 let auth_count = auth_count.clone();
                 let dropped_auth_count = dropped_auth_count.clone();
-                cx.background_executor().spawn(async move {
+                cx.background_spawn(async move {
                     *auth_count.lock() += 1;
                     let _drop = util::defer(move || *dropped_auth_count.lock() += 1);
                     future::pending::<()>().await;
@@ -1930,7 +1850,7 @@ mod tests {
         let (done_tx2, done_rx2) = smol::channel::unbounded();
         AnyProtoClient::from(client.clone()).add_entity_message_handler(
             move |entity: Entity<TestEntity>, _: TypedEnvelope<proto::JoinProject>, mut cx| {
-                match entity.update(&mut cx, |entity, _| entity.id).unwrap() {
+                match entity.read_with(&mut cx, |entity, _| entity.id).unwrap() {
                     1 => done_tx1.try_send(()).unwrap(),
                     2 => done_tx2.try_send(()).unwrap(),
                     _ => unreachable!(),
@@ -1967,8 +1887,16 @@ mod tests {
             .set_entity(&entity3, &mut cx.to_async());
         drop(subscription3);
 
-        server.send(proto::JoinProject { project_id: 1 });
-        server.send(proto::JoinProject { project_id: 2 });
+        server.send(proto::JoinProject {
+            project_id: 1,
+            committer_name: None,
+            committer_email: None,
+        });
+        server.send(proto::JoinProject {
+            project_id: 2,
+            committer_name: None,
+            committer_email: None,
+        });
         done_rx1.recv().await.unwrap();
         done_rx2.recv().await.unwrap();
     }

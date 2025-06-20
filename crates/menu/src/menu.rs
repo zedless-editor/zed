@@ -15,10 +15,11 @@ actions!(
         Cancel,
         Confirm,
         SecondaryConfirm,
-        SelectPrev,
+        SelectPrevious,
         SelectNext,
         SelectFirst,
         SelectLast,
-        Restart
+        Restart,
+        EndSlot,
     ]
 );

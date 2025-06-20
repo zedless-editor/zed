@@ -2,37 +2,33 @@ mod completion_diff_element;
 mod init;
 mod input_excerpt;
 mod license_detection;
-mod onboarding_banner;
 mod onboarding_modal;
 mod onboarding_telemetry;
 mod rate_completion_modal;
 
 pub(crate) use completion_diff_element::*;
 use db::kvp::KEY_VALUE_STORE;
-use editor::Editor;
 pub use init::*;
-use inline_completion::DataCollectionState;
-pub use license_detection::is_license_eligible_for_data_collection;
+use inline_completion::{DataCollectionState, EditPredictionUsage};
 use license_detection::LICENSE_FILES_TO_CHECK;
-pub use onboarding_banner::*;
+pub use license_detection::is_license_eligible_for_data_collection;
 pub use rate_completion_modal::*;
 
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use arrayvec::ArrayVec;
 use client::{Client, UserStore};
 use collections::{HashMap, HashSet, VecDeque};
 use futures::AsyncReadExt;
 use gpui::{
-    actions, App, AppContext as _, AsyncApp, Context, Entity, EntityId, Global, SemanticVersion,
-    Subscription, Task,
+    App, AppContext as _, AsyncApp, Context, Entity, EntityId, Global, SemanticVersion,
+    Subscription, Task, WeakEntity, actions,
 };
-use http_client::{HttpClient, Method};
+use http_client::{AsyncBody, HttpClient, Method, Request, Response};
 use input_excerpt::excerpt_for_cursor_position;
 use language::{
-    Anchor, Buffer, BufferSnapshot, CharClassifier, CharKind, EditPreview, OffsetRangeExt,
-    ToOffset, ToPoint,
+    Anchor, Buffer, BufferSnapshot, EditPreview, OffsetRangeExt, ToOffset, ToPoint, text_diff,
 };
-use language_models::LlmApiToken;
+use language_model::{LlmApiToken, RefreshLlmTokenListener};
 use postage::watch;
 use project::Project;
 use release_channel::AppVersion;
@@ -52,14 +48,14 @@ use std::{
 };
 use telemetry_events::InlineCompletionRating;
 use thiserror::Error;
-use util::ResultExt;
+use util::{ResultExt, maybe};
 use uuid::Uuid;
-use workspace::notifications::{ErrorMessagePrompt, NotificationId};
 use workspace::Workspace;
+use workspace::notifications::{ErrorMessagePrompt, NotificationId};
 use worktree::Worktree;
 use zed_llm_client::{
-    PredictEditsBody, PredictEditsResponse, EXPIRED_LLM_TOKEN_HEADER_NAME,
-    MINIMUM_REQUIRED_VERSION_HEADER_NAME,
+    AcceptEditPredictionBody, EXPIRED_LLM_TOKEN_HEADER_NAME, MINIMUM_REQUIRED_VERSION_HEADER_NAME,
+    PredictEditsBody, PredictEditsResponse, ZED_VERSION_HEADER_NAME,
 };
 
 const CURSOR_MARKER: &'static str = "<|user_cursor_is_here|>";
@@ -169,11 +165,7 @@ fn interpolate(
 
     edits.extend(model_edits.cloned());
 
-    if edits.is_empty() {
-        None
-    } else {
-        Some(edits)
-    }
+    if edits.is_empty() { None } else { Some(edits) }
 }
 
 impl std::fmt::Debug for InlineCompletion {
@@ -187,7 +179,7 @@ impl std::fmt::Debug for InlineCompletion {
 }
 
 pub struct Zeta {
-    editor: Option<Entity<Editor>>,
+    workspace: Option<WeakEntity<Workspace>>,
     client: Arc<Client>,
     events: VecDeque<Event>,
     registered_buffers: HashMap<gpui::EntityId, RegisteredBuffer>,
@@ -196,10 +188,12 @@ pub struct Zeta {
     data_collection_choice: Entity<DataCollectionChoice>,
     llm_token: LlmApiToken,
     _llm_token_subscription: Subscription,
+    last_usage: Option<EditPredictionUsage>,
     /// Whether the terms of service have been accepted.
     tos_accepted: bool,
     /// Whether an update to a newer version of Zed is required to continue using Zeta.
     update_required: bool,
+    user_store: Entity<UserStore>,
     _user_store_subscription: Subscription,
     license_detection_watchers: HashMap<WorktreeId, Rc<LicenseDetectionWatcher>>,
 }
@@ -210,14 +204,14 @@ impl Zeta {
     }
 
     pub fn register(
-        editor: Option<Entity<Editor>>,
+        workspace: Option<WeakEntity<Workspace>>,
         worktree: Option<Entity<Worktree>>,
         client: Arc<Client>,
         user_store: Entity<UserStore>,
         cx: &mut App,
     ) -> Entity<Self> {
         let this = Self::global(cx).unwrap_or_else(|| {
-            let entity = cx.new(|cx| Self::new(editor, client, user_store, cx));
+            let entity = cx.new(|cx| Self::new(workspace, client, user_store, cx));
             cx.set_global(ZetaGlobal(entity.clone()));
             entity
         });
@@ -239,19 +233,41 @@ impl Zeta {
         self.events.clear();
     }
 
+    pub fn usage(&self, cx: &App) -> Option<EditPredictionUsage> {
+        self.last_usage.or_else(|| {
+            let user_store = self.user_store.read(cx);
+            maybe!({
+                let amount = user_store.edit_predictions_usage_amount()?;
+                let limit = user_store.edit_predictions_usage_limit()?.variant?;
+
+                Some(EditPredictionUsage {
+                    amount: amount as i32,
+                    limit: match limit {
+                        proto::usage_limit::Variant::Limited(limited) => {
+                            zed_llm_client::UsageLimit::Limited(limited.limit as i32)
+                        }
+                        proto::usage_limit::Variant::Unlimited(_) => {
+                            zed_llm_client::UsageLimit::Unlimited
+                        }
+                    },
+                })
+            })
+        })
+    }
+
     fn new(
-        editor: Option<Entity<Editor>>,
+        workspace: Option<WeakEntity<Workspace>>,
         client: Arc<Client>,
         user_store: Entity<UserStore>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let refresh_llm_token_listener = language_models::RefreshLlmTokenListener::global(cx);
+        let refresh_llm_token_listener = RefreshLlmTokenListener::global(cx);
 
         let data_collection_choice = Self::load_data_collection_choices();
         let data_collection_choice = cx.new(|_| data_collection_choice);
 
         Self {
-            editor,
+            workspace,
             client,
             events: VecDeque::new(),
             shown_completions: VecDeque::new(),
@@ -264,13 +280,14 @@ impl Zeta {
                 |this, _listener, _event, cx| {
                     let client = this.client.clone();
                     let llm_token = this.llm_token.clone();
-                    cx.spawn(|_this, _cx| async move {
+                    cx.spawn(async move |_this, _cx| {
                         llm_token.refresh(&client).await?;
                         anyhow::Ok(())
                     })
                     .detach_and_log_err(cx);
                 },
             ),
+            last_usage: None,
             tos_accepted: user_store
                 .read(cx)
                 .current_user_has_accepted_terms()
@@ -288,6 +305,7 @@ impl Zeta {
                 }
             }),
             license_detection_watchers: HashMap::default(),
+            user_store,
         }
     }
 
@@ -355,7 +373,6 @@ impl Zeta {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn request_completion_impl<F, R>(
         &mut self,
         workspace: Option<Entity<Workspace>>,
@@ -368,7 +385,9 @@ impl Zeta {
     ) -> Task<Result<Option<InlineCompletion>>>
     where
         F: FnOnce(PerformPredictEditsParams) -> R + 'static,
-        R: Future<Output = Result<PredictEditsResponse>> + Send + 'static,
+        R: Future<Output = Result<(PredictEditsResponse, Option<EditPredictionUsage>)>>
+            + Send
+            + 'static,
     {
         let snapshot = self.report_changes_for_buffer(&buffer, cx);
         let diagnostic_groups = snapshot.diagnostic_groups(None);
@@ -408,7 +427,7 @@ impl Zeta {
             None
         };
 
-        cx.spawn(|_, cx| async move {
+        cx.spawn(async move |this, cx| {
             let request_sent_at = Instant::now();
 
             struct BackgroundValues {
@@ -420,8 +439,7 @@ impl Zeta {
             }
 
             let values = cx
-                .background_executor()
-                .spawn({
+                .background_spawn({
                     let snapshot = snapshot.clone();
                     let path = path.clone();
                     async move {
@@ -477,7 +495,7 @@ impl Zeta {
                 body,
             })
             .await;
-            let response = match response {
+            let (response, usage) = match response {
                 Ok(response) => response,
                 Err(err) => {
                     if err.is::<ZedUpdateRequiredError>() {
@@ -492,8 +510,8 @@ impl Zeta {
                                         NotificationId::unique::<ZedUpdateRequiredError>(),
                                         cx,
                                         |cx| {
-                                            cx.new(|_| {
-                                                ErrorMessagePrompt::new(err.to_string())
+                                            cx.new(|cx| {
+                                                ErrorMessagePrompt::new(err.to_string(), cx)
                                                     .with_link_button(
                                                         "Update Zed",
                                                         "https://zed.dev/releases",
@@ -512,6 +530,13 @@ impl Zeta {
             };
 
             log::debug!("completion response: {}", &response.output_excerpt);
+
+            if let Some(usage) = usage {
+                this.update(cx, |this, _cx| {
+                    this.last_usage = Some(usage);
+                })
+                .ok();
+            }
 
             Self::process_completion_response(
                 response,
@@ -670,12 +695,12 @@ and then another
             ),
         ];
 
-        cx.spawn(|zeta, mut cx| async move {
+        cx.spawn(async move |zeta, cx| {
             for task in completion_tasks {
                 task.await.unwrap();
             }
 
-            zeta.update(&mut cx, |zeta, _cx| {
+            zeta.update(cx, |zeta, _cx| {
                 zeta.shown_completions.get_mut(2).unwrap().edits = Arc::new([]);
                 zeta.shown_completions.get_mut(3).unwrap().edits = Arc::new([]);
             })
@@ -695,7 +720,7 @@ and then another
         use std::future::ready;
 
         self.request_completion_impl(None, project, buffer, position, false, cx, |_params| {
-            ready(Ok(response))
+            ready(Ok((response, None)))
         })
     }
 
@@ -708,9 +733,9 @@ and then another
         cx: &mut Context<Self>,
     ) -> Task<Result<Option<InlineCompletion>>> {
         let workspace = self
-            .editor
+            .workspace
             .as_ref()
-            .and_then(|editor| editor.read(cx).workspace());
+            .and_then(|workspace| workspace.upgrade());
         self.request_completion_impl(
             workspace,
             project,
@@ -724,7 +749,7 @@ and then another
 
     fn perform_predict_edits(
         params: PerformPredictEditsParams,
-    ) -> impl Future<Output = Result<PredictEditsResponse>> {
+    ) -> impl Future<Output = Result<(PredictEditsResponse, Option<EditPredictionUsage>)>> {
         async move {
             let PerformPredictEditsParams {
                 client,
@@ -753,6 +778,7 @@ and then another
                 let request = request_builder
                     .header("Content-Type", "application/json")
                     .header("Authorization", format!("Bearer {}", token))
+                    .header(ZED_VERSION_HEADER_NAME, app_version.to_string())
                     .body(serde_json::to_string(&body)?.into())?;
 
                 let mut response = http_client.send(request).await?;
@@ -762,17 +788,20 @@ and then another
                     .get(MINIMUM_REQUIRED_VERSION_HEADER_NAME)
                     .and_then(|version| SemanticVersion::from_str(version.to_str().ok()?).ok())
                 {
-                    if app_version < minimum_required_version {
-                        return Err(anyhow!(ZedUpdateRequiredError {
+                    anyhow::ensure!(
+                        app_version >= minimum_required_version,
+                        ZedUpdateRequiredError {
                             minimum_version: minimum_required_version
-                        }));
-                    }
+                        }
+                    );
                 }
 
                 if response.status().is_success() {
+                    let usage = EditPredictionUsage::from_headers(response.headers()).ok();
+
                     let mut body = String::new();
                     response.body_mut().read_to_string(&mut body).await?;
-                    return Ok(serde_json::from_str(&body)?);
+                    return Ok((serde_json::from_str(&body)?, usage));
                 } else if !did_retry
                     && response
                         .headers()
@@ -784,17 +813,84 @@ and then another
                 } else {
                     let mut body = String::new();
                     response.body_mut().read_to_string(&mut body).await?;
-                    return Err(anyhow!(
+                    anyhow::bail!(
                         "error predicting edits.\nStatus: {:?}\nBody: {}",
                         response.status(),
                         body
-                    ));
+                    );
                 }
             }
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    fn accept_edit_prediction(
+        &mut self,
+        request_id: InlineCompletionId,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<()>> {
+        let client = self.client.clone();
+        let llm_token = self.llm_token.clone();
+        let app_version = AppVersion::global(cx);
+        cx.spawn(async move |this, cx| {
+            let http_client = client.http_client();
+            let mut response = llm_token_retry(&llm_token, &client, |token| {
+                let request_builder = http_client::Request::builder().method(Method::POST);
+                let request_builder =
+                    if let Ok(accept_prediction_url) = std::env::var("ZED_ACCEPT_PREDICTION_URL") {
+                        request_builder.uri(accept_prediction_url)
+                    } else {
+                        request_builder.uri(
+                            http_client
+                                .build_zed_llm_url("/predict_edits/accept", &[])?
+                                .as_ref(),
+                        )
+                    };
+                Ok(request_builder
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", format!("Bearer {}", token))
+                    .header(ZED_VERSION_HEADER_NAME, app_version.to_string())
+                    .body(
+                        serde_json::to_string(&AcceptEditPredictionBody {
+                            request_id: request_id.0,
+                        })?
+                        .into(),
+                    )?)
+            })
+            .await?;
+
+            if let Some(minimum_required_version) = response
+                .headers()
+                .get(MINIMUM_REQUIRED_VERSION_HEADER_NAME)
+                .and_then(|version| SemanticVersion::from_str(version.to_str().ok()?).ok())
+            {
+                if app_version < minimum_required_version {
+                    return Err(anyhow!(ZedUpdateRequiredError {
+                        minimum_version: minimum_required_version
+                    }));
+                }
+            }
+
+            if response.status().is_success() {
+                if let Some(usage) = EditPredictionUsage::from_headers(response.headers()).ok() {
+                    this.update(cx, |this, cx| {
+                        this.last_usage = Some(usage);
+                        cx.notify();
+                    })?;
+                }
+
+                Ok(())
+            } else {
+                let mut body = String::new();
+                response.body_mut().read_to_string(&mut body).await?;
+                Err(anyhow!(
+                    "error accepting edit prediction.\nStatus: {:?}\nBody: {}",
+                    response.status(),
+                    body
+                ))
+            }
+        })
+    }
+
     fn process_completion_response(
         prediction_response: PredictEditsResponse,
         buffer: Entity<Buffer>,
@@ -811,12 +907,11 @@ and then another
         let snapshot = snapshot.clone();
         let request_id = prediction_response.request_id;
         let output_excerpt = prediction_response.output_excerpt;
-        cx.spawn(|cx| async move {
+        cx.spawn(async move |cx| {
             let output_excerpt: Arc<str> = output_excerpt.into();
 
             let edits: Arc<[(Range<Anchor>, String)]> = cx
-                .background_executor()
-                .spawn({
+                .background_spawn({
                     let output_excerpt = output_excerpt.clone();
                     let editable_range = editable_range.clone();
                     let snapshot = snapshot.clone();
@@ -825,7 +920,7 @@ and then another
                 .await?
                 .into();
 
-            let Some((edits, snapshot, edit_preview)) = buffer.read_with(&cx, {
+            let Some((edits, snapshot, edit_preview)) = buffer.read_with(cx, {
                 let edits = edits.clone();
                 |buffer, cx| {
                     let new_snapshot = buffer.snapshot();
@@ -921,77 +1016,18 @@ and then another
         offset: usize,
         snapshot: &BufferSnapshot,
     ) -> Vec<(Range<Anchor>, String)> {
-        fn tokenize(text: &str) -> Vec<&str> {
-            let classifier = CharClassifier::new(None).for_completion(true);
-            let mut chars = text.chars().peekable();
-            let mut prev_ch = chars.peek().copied();
-            let mut tokens = Vec::new();
-            let mut start = 0;
-            let mut end = 0;
-            while let Some(ch) = chars.next() {
-                let prev_kind = prev_ch.map(|ch| classifier.kind(ch));
-                let kind = classifier.kind(ch);
-                if Some(kind) != prev_kind || (kind == CharKind::Punctuation && Some(ch) != prev_ch)
-                {
-                    tokens.push(&text[start..end]);
-                    start = end;
-                }
-                end += ch.len_utf8();
-                prev_ch = Some(ch);
-            }
-            tokens.push(&text[start..end]);
-            tokens
-        }
-
-        let old_tokens = tokenize(&old_text);
-        let new_tokens = tokenize(new_text);
-
-        let diff = similar::TextDiffConfig::default()
-            .algorithm(similar::Algorithm::Patience)
-            .diff_slices(&old_tokens, &new_tokens);
-        let mut edits: Vec<(Range<usize>, String)> = Vec::new();
-        let mut old_start = offset;
-        for change in diff.iter_all_changes() {
-            let value = change.value();
-            match change.tag() {
-                similar::ChangeTag::Equal => {
-                    old_start += value.len();
-                }
-                similar::ChangeTag::Delete => {
-                    let old_end = old_start + value.len();
-                    if let Some((last_old_range, _)) = edits.last_mut() {
-                        if last_old_range.end == old_start {
-                            last_old_range.end = old_end;
-                        } else {
-                            edits.push((old_start..old_end, String::new()));
-                        }
-                    } else {
-                        edits.push((old_start..old_end, String::new()));
-                    }
-                    old_start = old_end;
-                }
-                similar::ChangeTag::Insert => {
-                    if let Some((last_old_range, last_new_text)) = edits.last_mut() {
-                        if last_old_range.end == old_start {
-                            last_new_text.push_str(value);
-                        } else {
-                            edits.push((old_start..old_start, value.into()));
-                        }
-                    } else {
-                        edits.push((old_start..old_start, value.into()));
-                    }
-                }
-            }
-        }
-
-        edits
+        text_diff(&old_text, &new_text)
             .into_iter()
             .map(|(mut old_range, new_text)| {
+                old_range.start += offset;
+                old_range.end += offset;
+
                 let prefix_len = common_prefix(
                     snapshot.chars_for_range(old_range.clone()),
                     new_text.chars(),
                 );
                 old_range.start += prefix_len;
+
                 let suffix_len = common_prefix(
                     snapshot.reversed_chars_for_range(old_range.clone()),
                     new_text[prefix_len..].chars().rev(),
@@ -1040,7 +1076,7 @@ and then another
             output_excerpt = completion.output_excerpt,
             feedback
         );
-        self.client.telemetry().flush_events();
+        self.client.telemetry().flush_events().detach();
         cx.notify();
     }
 
@@ -1129,7 +1165,7 @@ impl LicenseDetectionWatcher {
                 .map(|file| worktree.load_file(file, cx))
                 .collect::<ArrayVec<_, { LICENSE_FILES_TO_CHECK.len() }>>();
 
-            cx.background_executor().spawn(async move {
+            cx.background_spawn(async move {
                 for loaded_file in loaded_files.into_iter() {
                     let Ok(loaded_file) = loaded_file.await else {
                         continue;
@@ -1250,10 +1286,7 @@ impl Event {
                     writeln!(prompt, "User renamed {:?} to {:?}\n", old_path, new_path).unwrap();
                 }
 
-                let diff =
-                    similar::TextDiff::from_lines(&old_snapshot.text(), &new_snapshot.text())
-                        .unified_diff()
-                        .to_string();
+                let diff = language::unified_diff(&old_snapshot.text(), &new_snapshot.text());
                 if !diff.is_empty() {
                     write!(
                         prompt,
@@ -1416,6 +1449,34 @@ impl ProviderDataCollection {
     }
 }
 
+async fn llm_token_retry(
+    llm_token: &LlmApiToken,
+    client: &Arc<Client>,
+    build_request: impl Fn(String) -> Result<Request<AsyncBody>>,
+) -> Result<Response<AsyncBody>> {
+    let mut did_retry = false;
+    let http_client = client.http_client();
+    let mut token = llm_token.acquire(client).await?;
+    loop {
+        let request = build_request(token.clone())?;
+        let response = http_client.send(request).await?;
+
+        if !did_retry
+            && !response.status().is_success()
+            && response
+                .headers()
+                .get(EXPIRED_LLM_TOKEN_HEADER_NAME)
+                .is_some()
+        {
+            did_retry = true;
+            token = llm_token.refresh(client).await?;
+            continue;
+        }
+
+        return Ok(response);
+    }
+}
+
 pub struct ZetaInlineCompletionProvider {
     zeta: Entity<Zeta>,
     pending_completions: ArrayVec<PendingCompletion, 2>,
@@ -1476,6 +1537,10 @@ impl inline_completion::EditPredictionProvider for ZetaInlineCompletionProvider 
         self.provider_data_collection.toggle(cx);
     }
 
+    fn usage(&self, cx: &App) -> Option<EditPredictionUsage> {
+        self.zeta.read(cx).usage(cx)
+    }
+
     fn is_enabled(
         &self,
         _buffer: &Entity<Buffer>,
@@ -1509,6 +1574,17 @@ impl inline_completion::EditPredictionProvider for ZetaInlineCompletionProvider 
             return;
         }
 
+        if self
+            .zeta
+            .read(cx)
+            .user_store
+            .read_with(cx, |user_store, _| {
+                user_store.account_too_young() || user_store.has_overdue_invoices()
+            })
+        {
+            return;
+        }
+
         if let Some(current_completion) = self.current_completion.as_ref() {
             let snapshot = buffer.read(cx).snapshot();
             if current_completion
@@ -1525,14 +1601,14 @@ impl inline_completion::EditPredictionProvider for ZetaInlineCompletionProvider 
         let can_collect_data = self.provider_data_collection.can_collect_data(cx);
         let last_request_timestamp = self.last_request_timestamp;
 
-        let task = cx.spawn(|this, mut cx| async move {
+        let task = cx.spawn(async move |this, cx| {
             if let Some(timeout) = (last_request_timestamp + Self::THROTTLE_TIMEOUT)
                 .checked_duration_since(Instant::now())
             {
                 cx.background_executor().timer(timeout).await;
             }
 
-            let completion_request = this.update(&mut cx, |this, cx| {
+            let completion_request = this.update(cx, |this, cx| {
                 this.last_request_timestamp = Instant::now();
                 this.zeta.update(cx, |zeta, cx| {
                     zeta.request_completion(
@@ -1562,7 +1638,7 @@ impl inline_completion::EditPredictionProvider for ZetaInlineCompletionProvider 
                 .log_err()
                 .flatten()
             else {
-                this.update(&mut cx, |this, cx| {
+                this.update(cx, |this, cx| {
                     if this.pending_completions[0].id == pending_completion_id {
                         this.pending_completions.remove(0);
                     } else {
@@ -1575,7 +1651,7 @@ impl inline_completion::EditPredictionProvider for ZetaInlineCompletionProvider 
                 return;
             };
 
-            this.update(&mut cx, |this, cx| {
+            this.update(cx, |this, cx| {
                 if this.pending_completions[0].id == pending_completion_id {
                     this.pending_completions.remove(0);
                 } else {
@@ -1628,7 +1704,18 @@ impl inline_completion::EditPredictionProvider for ZetaInlineCompletionProvider 
         // Right now we don't support cycling.
     }
 
-    fn accept(&mut self, _cx: &mut Context<Self>) {
+    fn accept(&mut self, cx: &mut Context<Self>) {
+        let completion_id = self
+            .current_completion
+            .as_ref()
+            .map(|completion| completion.completion.id);
+        if let Some(completion_id) = completion_id {
+            self.zeta
+                .update(cx, |zeta, cx| {
+                    zeta.accept_edit_prediction(completion_id, cx)
+                })
+                .detach();
+        }
         self.pending_completions.clear();
     }
 
@@ -1714,7 +1801,6 @@ mod tests {
     use http_client::FakeHttpClient;
     use indoc::indoc;
     use language::Point;
-    use language_models::RefreshLlmTokenListener;
     use rpc::proto;
     use settings::SettingsStore;
 
@@ -1948,6 +2034,7 @@ mod tests {
             zeta.request_completion(None, &buffer, cursor, false, cx)
         });
 
+        server.receive::<proto::GetUsers>().await.unwrap();
         let token_request = server.receive::<proto::GetLlmToken>().await.unwrap();
         server.respond(
             token_request.receipt(),
@@ -2002,6 +2089,7 @@ mod tests {
             zeta.request_completion(None, &buffer, cursor, false, cx)
         });
 
+        server.receive::<proto::GetUsers>().await.unwrap();
         let token_request = server.receive::<proto::GetLlmToken>().await.unwrap();
         server.respond(
             token_request.receipt(),
@@ -2052,8 +2140,6 @@ mod tests {
 
     #[ctor::ctor]
     fn init_logger() {
-        if std::env::var("RUST_LOG").is_ok() {
-            env_logger::init();
-        }
+        zlog::init_test();
     }
 }

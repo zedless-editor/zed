@@ -1,4 +1,4 @@
-use crate::{prelude::*, LabelLike};
+use crate::{LabelLike, prelude::*};
 use gpui::StyleRefinement;
 
 /// A struct representing a label element in the UI.
@@ -29,7 +29,7 @@ use gpui::StyleRefinement;
 ///
 /// let my_label = Label::new("Deleted").strikethrough(true);
 /// ```
-#[derive(IntoElement, IntoComponent)]
+#[derive(IntoElement, RegisterComponent)]
 pub struct Label {
     base: LabelLike,
     label: SharedString,
@@ -51,10 +51,12 @@ impl Label {
             label: label.into(),
         }
     }
-}
 
-// nate: If we are going to do this, we might as well just
-// impl Styled for Label and not constrain styles
+    /// Sets the text of the [`Label`].
+    pub fn set_text(&mut self, text: impl Into<SharedString>) {
+        self.label = text.into();
+    }
+}
 
 // Style methods.
 impl Label {
@@ -171,19 +173,26 @@ impl LabelCommon for Label {
         self
     }
 
-    fn text_ellipsis(mut self) -> Self {
-        self.base = self.base.text_ellipsis();
+    /// Truncates overflowing text with an ellipsis (`…`) if needed.
+    fn truncate(mut self) -> Self {
+        self.base = self.base.truncate();
         self
     }
 
     fn single_line(mut self) -> Self {
-        self.label = SharedString::from(self.label.replace('\n', "␤"));
+        self.label = SharedString::from(self.label.replace('\n', "⏎"));
         self.base = self.base.single_line();
         self
     }
 
     fn buffer_font(mut self, cx: &App) -> Self {
         self.base = self.base.buffer_font(cx);
+        self
+    }
+
+    /// Styles the label to look like inline code.
+    fn inline_code(mut self, cx: &App) -> Self {
+        self.base = self.base.inline_code(cx);
         self
     }
 }
@@ -194,12 +203,17 @@ impl RenderOnce for Label {
     }
 }
 
-mod label_preview {
-    use crate::prelude::*;
+impl Component for Label {
+    fn scope() -> ComponentScope {
+        ComponentScope::Typography
+    }
 
-    // View this component preview using `workspace: open component-preview`
-    impl ComponentPreview for Label {
-        fn preview(_window: &mut Window, _cx: &App) -> AnyElement {
+    fn description() -> Option<&'static str> {
+        Some("A text label component that supports various styles, sizes, and formatting options.")
+    }
+
+    fn preview(_window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+        Some(
             v_flex()
                 .gap_6()
                 .children(vec![
@@ -227,6 +241,7 @@ mod label_preview {
                             single_example("Italic", Label::new("Code Comment").italic().into_any_element()),
                             single_example("Strikethrough", Label::new("Deprecated Feature").strikethrough().into_any_element()),
                             single_example("Underline", Label::new("Clickable Link").underline().into_any_element()),
+                            single_example("Inline Code", Label::new("fn main() {}").inline_code(cx).into_any_element()),
                         ],
                     ),
                     example_group_with_title(
@@ -240,11 +255,11 @@ mod label_preview {
                         "Special Cases",
                         vec![
                             single_example("Single Line", Label::new("Line 1\nLine 2\nLine 3").single_line().into_any_element()),
-                            single_example("Text Ellipsis", div().max_w_24().child(Label::new("This is a very long file name that should be truncated: very_long_file_name_with_many_words.rs").text_ellipsis()).into_any_element()),
+                            single_example("Text Ellipsis", div().max_w_24().child(Label::new("This is a very long file name that should be truncated: very_long_file_name_with_many_words.rs").truncate()).into_any_element()),
                         ],
                     ),
                 ])
                 .into_any_element()
-        }
+        )
     }
 }

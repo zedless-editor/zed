@@ -1,7 +1,7 @@
+use crate::KeyBinding;
 use crate::{h_flex, prelude::*};
-use crate::{ElevationIndex, KeyBinding};
-use gpui::{point, AnyElement, App, BoxShadow, IntoElement, Window};
-use smallvec::smallvec;
+use gpui::{AnyElement, App, BoxShadow, FontStyle, Hsla, IntoElement, Window, point};
+use theme::Appearance;
 
 /// Represents a hint for a keybinding, optionally with a prefix and suffix.
 ///
@@ -17,13 +17,13 @@ use smallvec::smallvec;
 ///     .prefix("Save:")
 ///     .size(Pixels::from(14.0));
 /// ```
-#[derive(Debug, IntoElement, IntoComponent)]
+#[derive(Debug, IntoElement, RegisterComponent)]
 pub struct KeybindingHint {
     prefix: Option<SharedString>,
     suffix: Option<SharedString>,
     keybinding: KeyBinding,
     size: Option<Pixels>,
-    elevation: Option<ElevationIndex>,
+    background_color: Hsla,
 }
 
 impl KeybindingHint {
@@ -37,15 +37,15 @@ impl KeybindingHint {
     /// ```
     /// use ui::prelude::*;
     ///
-    /// let hint = KeybindingHint::new(KeyBinding::from_str("Ctrl+C"));
+    /// let hint = KeybindingHint::new(KeyBinding::from_str("Ctrl+C"), Hsla::new(0.0, 0.0, 0.0, 1.0));
     /// ```
-    pub fn new(keybinding: KeyBinding) -> Self {
+    pub fn new(keybinding: KeyBinding, background_color: Hsla) -> Self {
         Self {
             prefix: None,
             suffix: None,
             keybinding,
             size: None,
-            elevation: None,
+            background_color,
         }
     }
 
@@ -59,15 +59,19 @@ impl KeybindingHint {
     /// ```
     /// use ui::prelude::*;
     ///
-    /// let hint = KeybindingHint::with_prefix("Copy:", KeyBinding::from_str("Ctrl+C"));
+    /// let hint = KeybindingHint::with_prefix("Copy:", KeyBinding::from_str("Ctrl+C"), Hsla::new(0.0, 0.0, 0.0, 1.0));
     /// ```
-    pub fn with_prefix(prefix: impl Into<SharedString>, keybinding: KeyBinding) -> Self {
+    pub fn with_prefix(
+        prefix: impl Into<SharedString>,
+        keybinding: KeyBinding,
+        background_color: Hsla,
+    ) -> Self {
         Self {
             prefix: Some(prefix.into()),
             suffix: None,
             keybinding,
             size: None,
-            elevation: None,
+            background_color,
         }
     }
 
@@ -81,15 +85,19 @@ impl KeybindingHint {
     /// ```
     /// use ui::prelude::*;
     ///
-    /// let hint = KeybindingHint::with_suffix(KeyBinding::from_str("Ctrl+V"), "Paste");
+    /// let hint = KeybindingHint::with_suffix(KeyBinding::from_str("Ctrl+V"), "Paste", Hsla::new(0.0, 0.0, 0.0, 1.0));
     /// ```
-    pub fn with_suffix(keybinding: KeyBinding, suffix: impl Into<SharedString>) -> Self {
+    pub fn with_suffix(
+        keybinding: KeyBinding,
+        suffix: impl Into<SharedString>,
+        background_color: Hsla,
+    ) -> Self {
         Self {
             prefix: None,
             suffix: Some(suffix.into()),
             keybinding,
             size: None,
-            elevation: None,
+            background_color,
         }
     }
 
@@ -143,58 +151,49 @@ impl KeybindingHint {
         self.size = size.into();
         self
     }
-
-    /// Sets the elevation of the keybinding hint.
-    ///
-    /// This method allows specifying the elevation index for the keybinding hint,
-    /// which affects its visual appearance in terms of depth or layering.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ui::prelude::*;
-    ///
-    /// let hint = KeybindingHint::new(KeyBinding::from_str("Ctrl+A"))
-    ///     .elevation(ElevationIndex::new(1));
-    /// ```
-    pub fn elevation(mut self, elevation: impl Into<Option<ElevationIndex>>) -> Self {
-        self.elevation = elevation.into();
-        self
-    }
 }
 
 impl RenderOnce for KeybindingHint {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let colors = cx.theme().colors().clone();
+        let is_light = cx.theme().appearance() == Appearance::Light;
+
+        let border_color =
+            self.background_color
+                .blend(colors.text.alpha(if is_light { 0.08 } else { 0.16 }));
+        let bg_color =
+            self.background_color
+                .blend(colors.text.alpha(if is_light { 0.06 } else { 0.12 }));
+        let shadow_color = colors.text.alpha(if is_light { 0.04 } else { 0.08 });
 
         let size = self
             .size
             .unwrap_or(TextSize::Small.rems(cx).to_pixels(window.rem_size()));
         let kb_size = size - px(2.0);
-        let kb_bg = if let Some(elevation) = self.elevation {
-            elevation.on_elevation_bg(cx)
-        } else {
-            theme::color_alpha(colors.element_background, 0.6)
-        };
 
-        h_flex()
-            .items_center()
+        let mut base = h_flex();
+
+        base.text_style()
+            .get_or_insert_with(Default::default)
+            .font_style = Some(FontStyle::Italic);
+
+        base.items_center()
             .gap_0p5()
             .font_buffer(cx)
             .text_size(size)
-            .text_color(colors.text_muted)
+            .text_color(colors.text_disabled)
             .children(self.prefix)
             .child(
                 h_flex()
                     .items_center()
-                    .rounded_md()
+                    .rounded_sm()
                     .px_0p5()
                     .mr_0p5()
                     .border_1()
-                    .border_color(kb_bg)
-                    .bg(kb_bg.opacity(0.8))
-                    .shadow(smallvec![BoxShadow {
-                        color: cx.theme().colors().editor_background.opacity(0.8),
+                    .border_color(border_color)
+                    .bg(bg_color)
+                    .shadow(vec![BoxShadow {
+                        color: shadow_color,
                         offset: point(px(0.), px(1.)),
                         blur_radius: px(0.),
                         spread_radius: px(0.),
@@ -205,101 +204,81 @@ impl RenderOnce for KeybindingHint {
     }
 }
 
-// View this component preview using `workspace: open component-preview`
-impl ComponentPreview for KeybindingHint {
-    fn preview(window: &mut Window, _cx: &App) -> AnyElement {
-        let enter_fallback = gpui::KeyBinding::new("enter", menu::Confirm, None);
-        let enter = KeyBinding::for_action(&menu::Confirm, window)
-            .unwrap_or(KeyBinding::new(enter_fallback));
+impl Component for KeybindingHint {
+    fn scope() -> ComponentScope {
+        ComponentScope::None
+    }
 
-        v_flex()
-            .gap_6()
-            .children(vec![
-                example_group_with_title(
-                    "Basic",
-                    vec![
-                        single_example(
-                            "With Prefix",
-                            KeybindingHint::with_prefix("Go to Start:", enter.clone())
+    fn description() -> Option<&'static str> {
+        Some("Displays a keyboard shortcut hint with optional prefix and suffix text")
+    }
+
+    fn preview(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+        let enter_fallback = gpui::KeyBinding::new("enter", menu::Confirm, None);
+        let enter = KeyBinding::for_action(&menu::Confirm, window, cx)
+            .unwrap_or(KeyBinding::new(enter_fallback, cx));
+
+        let bg_color = cx.theme().colors().surface_background;
+
+        Some(
+            v_flex()
+                .gap_6()
+                .children(vec![
+                    example_group_with_title(
+                        "Basic",
+                        vec![
+                            single_example(
+                                "With Prefix",
+                                KeybindingHint::with_prefix(
+                                    "Go to Start:",
+                                    enter.clone(),
+                                    bg_color,
+                                )
                                 .into_any_element(),
-                        ),
-                        single_example(
-                            "With Suffix",
-                            KeybindingHint::with_suffix(enter.clone(), "Go to End")
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "With Prefix and Suffix",
-                            KeybindingHint::new(enter.clone())
-                                .prefix("Confirm:")
-                                .suffix("Execute selected action")
-                                .into_any_element(),
-                        ),
-                    ],
-                ),
-                example_group_with_title(
-                    "Sizes",
-                    vec![
-                        single_example(
-                            "Small",
-                            KeybindingHint::new(enter.clone())
-                                .size(Pixels::from(12.0))
-                                .prefix("Small:")
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Medium",
-                            KeybindingHint::new(enter.clone())
-                                .size(Pixels::from(16.0))
-                                .suffix("Medium")
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Large",
-                            KeybindingHint::new(enter.clone())
-                                .size(Pixels::from(20.0))
-                                .prefix("Large:")
-                                .suffix("Size")
-                                .into_any_element(),
-                        ),
-                    ],
-                ),
-                example_group_with_title(
-                    "Elevations",
-                    vec![
-                        single_example(
-                            "Surface",
-                            KeybindingHint::new(enter.clone())
-                                .elevation(ElevationIndex::Surface)
-                                .prefix("Surface:")
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Elevated Surface",
-                            KeybindingHint::new(enter.clone())
-                                .elevation(ElevationIndex::ElevatedSurface)
-                                .suffix("Elevated")
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Editor Surface",
-                            KeybindingHint::new(enter.clone())
-                                .elevation(ElevationIndex::EditorSurface)
-                                .prefix("Editor:")
-                                .suffix("Surface")
-                                .into_any_element(),
-                        ),
-                        single_example(
-                            "Modal Surface",
-                            KeybindingHint::new(enter.clone())
-                                .elevation(ElevationIndex::ModalSurface)
-                                .prefix("Modal:")
-                                .suffix("Enter")
-                                .into_any_element(),
-                        ),
-                    ],
-                ),
-            ])
-            .into_any_element()
+                            ),
+                            single_example(
+                                "With Suffix",
+                                KeybindingHint::with_suffix(enter.clone(), "Go to End", bg_color)
+                                    .into_any_element(),
+                            ),
+                            single_example(
+                                "With Prefix and Suffix",
+                                KeybindingHint::new(enter.clone(), bg_color)
+                                    .prefix("Confirm:")
+                                    .suffix("Execute selected action")
+                                    .into_any_element(),
+                            ),
+                        ],
+                    ),
+                    example_group_with_title(
+                        "Sizes",
+                        vec![
+                            single_example(
+                                "Small",
+                                KeybindingHint::new(enter.clone(), bg_color)
+                                    .size(Pixels::from(12.0))
+                                    .prefix("Small:")
+                                    .into_any_element(),
+                            ),
+                            single_example(
+                                "Medium",
+                                KeybindingHint::new(enter.clone(), bg_color)
+                                    .size(Pixels::from(16.0))
+                                    .suffix("Medium")
+                                    .into_any_element(),
+                            ),
+                            single_example(
+                                "Large",
+                                KeybindingHint::new(enter.clone(), bg_color)
+                                    .size(Pixels::from(20.0))
+                                    .prefix("Large:")
+                                    .suffix("Size")
+                                    .into_any_element(),
+                            ),
+                        ],
+                    ),
+                ])
+                .into_any_element(),
+        )
     }
 }

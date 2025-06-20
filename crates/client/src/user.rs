@@ -1,9 +1,9 @@
-use super::{proto, Client, Status, TypedEnvelope};
-use anyhow::{anyhow, Context as _, Result};
+use super::{Client, Status, TypedEnvelope, proto};
+use anyhow::{Context as _, Result, anyhow};
 use chrono::{DateTime, Utc};
-use collections::{hash_map::Entry, HashMap, HashSet};
+use collections::{HashMap, HashSet, hash_map::Entry};
 use feature_flags::FeatureFlagAppExt;
-use futures::{channel::mpsc, Future, StreamExt};
+use futures::{Future, StreamExt, channel::mpsc};
 use gpui::{
     App, AsyncApp, Context, Entity, EventEmitter, SharedString, SharedUri, Task, WeakEntity,
 };
@@ -11,7 +11,7 @@ use postage::{sink::Sink, watch};
 use rpc::proto::{RequestMessage, UsersResponse};
 use std::sync::{Arc, Weak};
 use text::ReplicaId;
-use util::TryFutureExt as _;
+use util::{TryFutureExt as _, maybe};
 
 pub type UserId = u64;
 
@@ -29,6 +29,12 @@ impl std::fmt::Display for ChannelId {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct ProjectId(pub u64);
 
+impl ProjectId {
+    pub fn to_proto(&self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(
     Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, serde::Serialize, serde::Deserialize,
 )]
@@ -43,7 +49,6 @@ pub struct User {
     pub github_login: String,
     pub avatar_uri: SharedUri,
     pub name: Option<String>,
-    pub email: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,6 +57,8 @@ pub struct Collaborator {
     pub replica_id: ReplicaId,
     pub user_id: UserId,
     pub is_host: bool,
+    pub committer_name: Option<String>,
+    pub committer_email: Option<String>,
 }
 
 impl PartialOrd for User {
@@ -95,6 +102,15 @@ pub struct UserStore {
     participant_indices: HashMap<u64, ParticipantIndex>,
     update_contacts_tx: mpsc::UnboundedSender<UpdateContacts>,
     current_plan: Option<proto::Plan>,
+    subscription_period: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    trial_started_at: Option<DateTime<Utc>>,
+    model_request_usage_amount: Option<u32>,
+    model_request_usage_limit: Option<proto::UsageLimit>,
+    edit_predictions_usage_amount: Option<u32>,
+    edit_predictions_usage_limit: Option<proto::UsageLimit>,
+    is_usage_based_billing_enabled: Option<bool>,
+    account_too_young: Option<bool>,
+    has_overdue_invoices: Option<bool>,
     current_user: watch::Receiver<Option<Arc<User>>>,
     accepted_tos_at: Option<Option<DateTime<Utc>>>,
     contacts: Vec<Arc<Contact>>,
@@ -154,6 +170,15 @@ impl UserStore {
             by_github_login: Default::default(),
             current_user: current_user_rx,
             current_plan: None,
+            subscription_period: None,
+            trial_started_at: None,
+            model_request_usage_amount: None,
+            model_request_usage_limit: None,
+            edit_predictions_usage_amount: None,
+            edit_predictions_usage_limit: None,
+            is_usage_based_billing_enabled: None,
+            account_too_young: None,
+            has_overdue_invoices: None,
             accepted_tos_at: None,
             contacts: Default::default(),
             incoming_contact_requests: Default::default(),
@@ -162,11 +187,10 @@ impl UserStore {
             invite_info: None,
             client: Arc::downgrade(&client),
             update_contacts_tx,
-            _maintain_contacts: cx.spawn(|this, mut cx| async move {
+            _maintain_contacts: cx.spawn(async move |this, cx| {
                 let _subscriptions = rpc_subscriptions;
                 while let Some(message) = update_contacts_rx.next().await {
-                    if let Ok(task) =
-                        this.update(&mut cx, |this, cx| this.update_contacts(message, cx))
+                    if let Ok(task) = this.update(cx, |this, cx| this.update_contacts(message, cx))
                     {
                         task.log_err().await;
                     } else {
@@ -174,7 +198,7 @@ impl UserStore {
                     }
                 }
             }),
-            _maintain_current_user: cx.spawn(|this, mut cx| async move {
+            _maintain_current_user: cx.spawn(async move |this, cx| {
                 let mut status = client.status();
                 let weak = Arc::downgrade(&client);
                 drop(client);
@@ -186,10 +210,9 @@ impl UserStore {
                     match status {
                         Status::Connected { .. } => {
                             if let Some(user_id) = client.user_id() {
-                                let fetch_user = if let Ok(fetch_user) = this
-                                    .update(&mut cx, |this, cx| {
-                                        this.get_user(user_id, cx).log_err()
-                                    }) {
+                                let fetch_user = if let Ok(fetch_user) =
+                                    this.update(cx, |this, cx| this.get_user(user_id, cx).log_err())
+                                {
                                     fetch_user
                                 } else {
                                     break;
@@ -233,12 +256,12 @@ impl UserStore {
 
                                 current_user_tx.send(user).await.ok();
 
-                                this.update(&mut cx, |_, cx| cx.notify())?;
+                                this.update(cx, |_, cx| cx.notify())?;
                             }
                         }
                         Status::SignedOut => {
                             current_user_tx.send(None).await.ok();
-                            this.update(&mut cx, |this, cx| {
+                            this.update(cx, |this, cx| {
                                 this.accepted_tos_at = None;
                                 cx.emit(Event::PrivateUserInfoUpdated);
                                 cx.notify();
@@ -247,7 +270,7 @@ impl UserStore {
                             .await;
                         }
                         Status::ConnectionLost => {
-                            this.update(&mut cx, |this, cx| {
+                            this.update(cx, |this, cx| {
                                 cx.notify();
                                 this.clear_contacts()
                             })?
@@ -302,7 +325,7 @@ impl UserStore {
         message: TypedEnvelope<proto::UpdateContacts>,
         mut cx: AsyncApp,
     ) -> Result<()> {
-        this.update(&mut cx, |this, _| {
+        this.read_with(&mut cx, |this, _| {
             this.update_contacts_tx
                 .unbounded_send(UpdateContacts::Update(message.payload))
                 .unwrap();
@@ -317,6 +340,28 @@ impl UserStore {
     ) -> Result<()> {
         this.update(&mut cx, |this, cx| {
             this.current_plan = Some(message.payload.plan());
+            this.subscription_period = maybe!({
+                let period = message.payload.subscription_period?;
+                let started_at = DateTime::from_timestamp(period.started_at as i64, 0)?;
+                let ended_at = DateTime::from_timestamp(period.ended_at as i64, 0)?;
+
+                Some((started_at, ended_at))
+            });
+            this.trial_started_at = message
+                .payload
+                .trial_started_at
+                .and_then(|trial_started_at| DateTime::from_timestamp(trial_started_at as i64, 0));
+            this.is_usage_based_billing_enabled = message.payload.is_usage_based_billing_enabled;
+            this.account_too_young = message.payload.account_too_young;
+            this.has_overdue_invoices = message.payload.has_overdue_invoices;
+
+            if let Some(usage) = message.payload.usage {
+                this.model_request_usage_amount = Some(usage.model_requests_usage_amount);
+                this.model_request_usage_limit = usage.model_requests_usage_limit;
+                this.edit_predictions_usage_amount = Some(usage.edit_predictions_usage_amount);
+                this.edit_predictions_usage_limit = usage.edit_predictions_usage_limit;
+            }
+
             cx.notify();
         })?;
         Ok(())
@@ -344,35 +389,30 @@ impl UserStore {
                 user_ids.extend(message.outgoing_requests.iter());
 
                 let load_users = self.get_users(user_ids.into_iter().collect(), cx);
-                cx.spawn(|this, mut cx| async move {
+                cx.spawn(async move |this, cx| {
                     load_users.await?;
 
                     // Users are fetched in parallel above and cached in call to get_users
                     // No need to parallelize here
                     let mut updated_contacts = Vec::new();
-                    let this = this
-                        .upgrade()
-                        .ok_or_else(|| anyhow!("can't upgrade user store handle"))?;
+                    let this = this.upgrade().context("can't upgrade user store handle")?;
                     for contact in message.contacts {
-                        updated_contacts.push(Arc::new(
-                            Contact::from_proto(contact, &this, &mut cx).await?,
-                        ));
+                        updated_contacts
+                            .push(Arc::new(Contact::from_proto(contact, &this, cx).await?));
                     }
 
                     let mut incoming_requests = Vec::new();
                     for request in message.incoming_requests {
                         incoming_requests.push({
-                            this.update(&mut cx, |this, cx| {
-                                this.get_user(request.requester_id, cx)
-                            })?
-                            .await?
+                            this.update(cx, |this, cx| this.get_user(request.requester_id, cx))?
+                                .await?
                         });
                     }
 
                     let mut outgoing_requests = Vec::new();
                     for requested_user_id in message.outgoing_requests {
                         outgoing_requests.push(
-                            this.update(&mut cx, |this, cx| this.get_user(requested_user_id, cx))?
+                            this.update(cx, |this, cx| this.get_user(requested_user_id, cx))?
                                 .await?,
                         );
                     }
@@ -384,7 +424,7 @@ impl UserStore {
                     let removed_outgoing_requests =
                         HashSet::<u64>::from_iter(message.remove_outgoing_requests.iter().copied());
 
-                    this.update(&mut cx, |this, cx| {
+                    this.update(cx, |this, cx| {
                         // Remove contacts
                         this.contacts
                             .retain(|contact| !removed_contacts.contains(&contact.user.id));
@@ -537,9 +577,9 @@ impl UserStore {
         cx: &Context<Self>,
     ) -> Task<Result<()>> {
         let client = self.client.upgrade();
-        cx.spawn(move |_, _| async move {
+        cx.spawn(async move |_, _| {
             client
-                .ok_or_else(|| anyhow!("can't upgrade client reference"))?
+                .context("can't upgrade client reference")?
                 .request(proto::RespondToContactRequest {
                     requester_id,
                     response: proto::ContactRequestResponse::Dismiss as i32,
@@ -559,12 +599,12 @@ impl UserStore {
         *self.pending_contact_requests.entry(user_id).or_insert(0) += 1;
         cx.notify();
 
-        cx.spawn(move |this, mut cx| async move {
+        cx.spawn(async move |this, cx| {
             let response = client
-                .ok_or_else(|| anyhow!("can't upgrade client reference"))?
+                .context("can't upgrade client reference")?
                 .request(request)
                 .await;
-            this.update(&mut cx, |this, cx| {
+            this.update(cx, |this, cx| {
                 if let Entry::Occupied(mut request_count) =
                     this.pending_contact_requests.entry(user_id)
                 {
@@ -580,7 +620,7 @@ impl UserStore {
         })
     }
 
-    pub fn clear_contacts(&self) -> impl Future<Output = ()> {
+    pub fn clear_contacts(&self) -> impl Future<Output = ()> + use<> {
         let (tx, mut rx) = postage::barrier::channel();
         self.update_contacts_tx
             .unbounded_send(UpdateContacts::Clear(tx))
@@ -608,9 +648,9 @@ impl UserStore {
         let mut user_ids_to_fetch = user_ids.clone();
         user_ids_to_fetch.retain(|id| !self.users.contains_key(id));
 
-        cx.spawn(|this, mut cx| async move {
+        cx.spawn(async move |this, cx| {
             if !user_ids_to_fetch.is_empty() {
-                this.update(&mut cx, |this, cx| {
+                this.update(cx, |this, cx| {
                     this.load_users(
                         proto::GetUsers {
                             user_ids: user_ids_to_fetch,
@@ -621,14 +661,14 @@ impl UserStore {
                 .await?;
             }
 
-            this.update(&mut cx, |this, _| {
+            this.read_with(cx, |this, _| {
                 user_ids
                     .iter()
                     .map(|user_id| {
                         this.users
                             .get(user_id)
                             .cloned()
-                            .ok_or_else(|| anyhow!("user {} not found", user_id))
+                            .with_context(|| format!("user {user_id} not found"))
                     })
                     .collect()
             })?
@@ -662,13 +702,13 @@ impl UserStore {
         }
 
         let load_users = self.get_users(vec![user_id], cx);
-        cx.spawn(move |this, mut cx| async move {
+        cx.spawn(async move |this, cx| {
             load_users.await?;
-            this.update(&mut cx, |this, _| {
+            this.read_with(cx, |this, _| {
                 this.users
                     .get(&user_id)
                     .cloned()
-                    .ok_or_else(|| anyhow!("server responded with no users"))
+                    .context("server responded with no users")
             })?
         })
     }
@@ -687,8 +727,46 @@ impl UserStore {
         self.current_plan
     }
 
+    pub fn subscription_period(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        self.subscription_period
+    }
+
+    pub fn trial_started_at(&self) -> Option<DateTime<Utc>> {
+        self.trial_started_at
+    }
+
+    pub fn usage_based_billing_enabled(&self) -> Option<bool> {
+        self.is_usage_based_billing_enabled
+    }
+
+    pub fn model_request_usage_amount(&self) -> Option<u32> {
+        self.model_request_usage_amount
+    }
+
+    pub fn model_request_usage_limit(&self) -> Option<proto::UsageLimit> {
+        self.model_request_usage_limit.clone()
+    }
+
+    pub fn edit_predictions_usage_amount(&self) -> Option<u32> {
+        self.edit_predictions_usage_amount
+    }
+
+    pub fn edit_predictions_usage_limit(&self) -> Option<proto::UsageLimit> {
+        self.edit_predictions_usage_limit.clone()
+    }
+
     pub fn watch_current_user(&self) -> watch::Receiver<Option<Arc<User>>> {
         self.current_user.clone()
+    }
+
+    /// Returns whether the user's account is too new to use the service.
+    pub fn account_too_young(&self) -> bool {
+        self.account_too_young.unwrap_or(false)
+    }
+
+    /// Returns whether the current user has overdue invoices and usage should be blocked.
+    pub fn has_overdue_invoices(&self) -> bool {
+        self.has_overdue_invoices.unwrap_or(false)
     }
 
     pub fn current_user_has_accepted_terms(&self) -> Option<bool> {
@@ -702,20 +780,17 @@ impl UserStore {
         };
 
         let client = self.client.clone();
-        cx.spawn(move |this, mut cx| async move {
-            if let Some(client) = client.upgrade() {
-                let response = client
-                    .request(proto::AcceptTermsOfService {})
-                    .await
-                    .context("error accepting tos")?;
-
-                this.update(&mut cx, |this, cx| {
-                    this.set_current_user_accepted_tos_at(Some(response.accepted_tos_at));
-                    cx.emit(Event::PrivateUserInfoUpdated);
-                })
-            } else {
-                Err(anyhow!("client not found"))
-            }
+        cx.spawn(async move |this, cx| -> anyhow::Result<()> {
+            let client = client.upgrade().context("client not found")?;
+            let response = client
+                .request(proto::AcceptTermsOfService {})
+                .await
+                .context("error accepting tos")?;
+            this.update(cx, |this, cx| {
+                this.set_current_user_accepted_tos_at(Some(response.accepted_tos_at));
+                cx.emit(Event::PrivateUserInfoUpdated);
+            })?;
+            Ok(())
         })
     }
 
@@ -731,12 +806,12 @@ impl UserStore {
         cx: &Context<Self>,
     ) -> Task<Result<Vec<Arc<User>>>> {
         let client = self.client.clone();
-        cx.spawn(|this, mut cx| async move {
+        cx.spawn(async move |this, cx| {
             if let Some(rpc) = client.upgrade() {
                 let response = rpc.request(request).await.context("error loading users")?;
                 let users = response.users;
 
-                this.update(&mut cx, |this, _| this.insert(users))
+                this.update(cx, |this, _| this.insert(users))
             } else {
                 Ok(Vec::new())
             }
@@ -790,8 +865,8 @@ impl UserStore {
         }
         if !missing_user_ids.is_empty() {
             let this = self.weak_self.clone();
-            cx.spawn(|mut cx| async move {
-                this.update(&mut cx, |this, cx| this.get_users(missing_user_ids, cx))?
+            cx.spawn(async move |cx| {
+                this.update(cx, |this, cx| this.get_users(missing_user_ids, cx))?
                     .await
             })
             .detach_and_log_err(cx);
@@ -807,7 +882,6 @@ impl User {
             github_login: message.github_login,
             avatar_uri: message.avatar_url.into(),
             name: message.name,
-            email: message.email,
         })
     }
 }
@@ -834,10 +908,12 @@ impl Contact {
 impl Collaborator {
     pub fn from_proto(message: proto::Collaborator) -> Result<Self> {
         Ok(Self {
-            peer_id: message.peer_id.ok_or_else(|| anyhow!("invalid peer id"))?,
+            peer_id: message.peer_id.context("invalid peer id")?,
             replica_id: message.replica_id as ReplicaId,
             user_id: message.user_id as UserId,
             is_host: message.is_host,
+            committer_name: message.committer_name,
+            committer_email: message.committer_email,
         })
     }
 }

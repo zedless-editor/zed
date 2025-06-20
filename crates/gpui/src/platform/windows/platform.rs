@@ -6,15 +6,15 @@ use std::{
     sync::Arc,
 };
 
-use ::util::{paths::SanitizedPath, ResultExt};
-use anyhow::{anyhow, Context as _, Result};
+use ::util::{ResultExt, paths::SanitizedPath};
+use anyhow::{Context as _, Result, anyhow};
 use async_task::Runnable;
 use futures::channel::oneshot::{self, Receiver};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use smallvec::SmallVec;
 use windows::{
-    core::*,
+    UI::ViewManagement::UISettings,
     Win32::{
         Foundation::*,
         Graphics::{
@@ -25,7 +25,7 @@ use windows::{
         System::{Com::*, LibraryLoader::*, Ole::*, SystemInformation::*, Threading::*},
         UI::{Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
     },
-    UI::ViewManagement::UISettings,
+    core::*,
 };
 
 use crate::{platform::blade::BladeContext, *};
@@ -33,8 +33,8 @@ use crate::{platform::blade::BladeContext, *};
 pub(crate) struct WindowsPlatform {
     state: RefCell<WindowsPlatformState>,
     raw_window_handles: RwLock<SmallVec<[HWND; 4]>>,
-    gpu_context: BladeContext,
     // The below members will never change throughout the entire lifecycle of the app.
+    gpu_context: BladeContext,
     icon: HICON,
     main_receiver: flume::Receiver<Runnable>,
     background_executor: BackgroundExecutor,
@@ -49,8 +49,9 @@ pub(crate) struct WindowsPlatform {
 pub(crate) struct WindowsPlatformState {
     callbacks: PlatformCallbacks,
     menus: Vec<OwnedMenu>,
+    jump_list: JumpList,
     // NOTE: standard cursor handles don't need to close.
-    pub(crate) current_cursor: HCURSOR,
+    pub(crate) current_cursor: Option<HCURSOR>,
 }
 
 #[derive(Default)]
@@ -61,15 +62,18 @@ struct PlatformCallbacks {
     app_menu_action: Option<Box<dyn FnMut(&dyn Action)>>,
     will_open_app_menu: Option<Box<dyn FnMut()>>,
     validate_app_menu_command: Option<Box<dyn FnMut(&dyn Action) -> bool>>,
+    keyboard_layout_change: Option<Box<dyn FnMut()>>,
 }
 
 impl WindowsPlatformState {
     fn new() -> Self {
         let callbacks = PlatformCallbacks::default();
+        let jump_list = JumpList::new();
         let current_cursor = load_cursor(CursorStyle::Arrow);
 
         Self {
             callbacks,
+            jump_list,
             current_cursor,
             menus: Vec::new(),
         }
@@ -77,9 +81,9 @@ impl WindowsPlatformState {
 }
 
 impl WindowsPlatform {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new() -> Result<Self> {
         unsafe {
-            OleInitialize(None).expect("unable to initialize Windows OLE");
+            OleInitialize(None).context("unable to initialize Windows OLE")?;
         }
         let (main_sender, main_receiver) = flume::unbounded::<Runnable>();
         let main_thread_id_win32 = unsafe { GetCurrentThreadId() };
@@ -93,19 +97,19 @@ impl WindowsPlatform {
         let foreground_executor = ForegroundExecutor::new(dispatcher);
         let bitmap_factory = ManuallyDrop::new(unsafe {
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)
-                .expect("Error creating bitmap factory.")
+                .context("Error creating bitmap factory.")?
         });
         let text_system = Arc::new(
             DirectWriteTextSystem::new(&bitmap_factory)
-                .expect("Error creating DirectWriteTextSystem"),
+                .context("Error creating DirectWriteTextSystem")?,
         );
         let icon = load_icon().unwrap_or_default();
         let state = RefCell::new(WindowsPlatformState::new());
         let raw_window_handles = RwLock::new(SmallVec::new());
-        let gpu_context = BladeContext::new().expect("Unable to init GPU context");
-        let windows_version = WindowsVersion::new().expect("Error retrieve windows version");
+        let gpu_context = BladeContext::new().context("Unable to init GPU context")?;
+        let windows_version = WindowsVersion::new().context("Error retrieve windows version")?;
 
-        Self {
+        Ok(Self {
             state,
             raw_window_handles,
             gpu_context,
@@ -118,20 +122,15 @@ impl WindowsPlatform {
             bitmap_factory,
             validation_number,
             main_thread_id_win32,
-        }
+        })
     }
 
     fn redraw_all(&self) {
         for handle in self.raw_window_handles.read().iter() {
             unsafe {
-                RedrawWindow(
-                    *handle,
-                    None,
-                    HRGN::default(),
-                    RDW_INVALIDATE | RDW_UPDATENOW,
-                )
-                .ok()
-                .log_err();
+                RedrawWindow(Some(*handle), None, None, RDW_INVALIDATE | RDW_UPDATENOW)
+                    .ok()
+                    .log_err();
             }
         }
     }
@@ -150,7 +149,7 @@ impl WindowsPlatform {
             .read()
             .iter()
             .for_each(|handle| unsafe {
-                PostMessageW(*handle, message, wparam, lparam).log_err();
+                PostMessageW(Some(*handle), message, wparam, lparam).log_err();
             });
     }
 
@@ -184,6 +183,38 @@ impl WindowsPlatform {
         }
     }
 
+    fn handle_dock_action_event(&self, action_idx: usize) {
+        let mut lock = self.state.borrow_mut();
+        if let Some(mut callback) = lock.callbacks.app_menu_action.take() {
+            let Some(action) = lock
+                .jump_list
+                .dock_menus
+                .get(action_idx)
+                .map(|dock_menu| dock_menu.action.boxed_clone())
+            else {
+                lock.callbacks.app_menu_action = Some(callback);
+                log::error!("Dock menu for index {action_idx} not found");
+                return;
+            };
+            drop(lock);
+            callback(&*action);
+            self.state.borrow_mut().callbacks.app_menu_action = Some(callback);
+        }
+    }
+
+    fn handle_input_lang_change(&self) {
+        let mut lock = self.state.borrow_mut();
+        if let Some(mut callback) = lock.callbacks.keyboard_layout_change.take() {
+            drop(lock);
+            callback();
+            self.state
+                .borrow_mut()
+                .callbacks
+                .keyboard_layout_change
+                .get_or_insert(callback);
+        }
+    }
+
     // Returns true if the app should quit.
     fn handle_events(&self) -> bool {
         let mut msg = MSG::default();
@@ -191,15 +222,15 @@ impl WindowsPlatform {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 match msg.message {
                     WM_QUIT => return true,
-                    WM_GPUI_CLOSE_ONE_WINDOW | WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD => {
+                    WM_INPUTLANGCHANGE
+                    | WM_GPUI_CLOSE_ONE_WINDOW
+                    | WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD
+                    | WM_GPUI_DOCK_MENU_ACTION => {
                         if self.handle_gpui_evnets(msg.message, msg.wParam, msg.lParam, &msg) {
                             return true;
                         }
                     }
                     _ => {
-                        // todo(windows)
-                        // crate `windows 0.56` reports true as Err
-                        TranslateMessage(&msg).as_bool();
                         DispatchMessageW(&msg);
                     }
                 }
@@ -227,9 +258,42 @@ impl WindowsPlatform {
                 }
             }
             WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD => self.run_foreground_task(),
+            WM_GPUI_DOCK_MENU_ACTION => self.handle_dock_action_event(lparam.0 as _),
+            WM_INPUTLANGCHANGE => self.handle_input_lang_change(),
             _ => unreachable!(),
         }
         false
+    }
+
+    fn set_dock_menus(&self, menus: Vec<MenuItem>) {
+        let mut actions = Vec::new();
+        menus.into_iter().for_each(|menu| {
+            if let Some(dock_menu) = DockMenuItem::new(menu).log_err() {
+                actions.push(dock_menu);
+            }
+        });
+        let mut lock = self.state.borrow_mut();
+        lock.jump_list.dock_menus = actions;
+        update_jump_list(&lock.jump_list).log_err();
+    }
+
+    fn update_jump_list(
+        &self,
+        menus: Vec<MenuItem>,
+        entries: Vec<SmallVec<[PathBuf; 2]>>,
+    ) -> Vec<SmallVec<[PathBuf; 2]>> {
+        let mut actions = Vec::new();
+        menus.into_iter().for_each(|menu| {
+            if let Some(dock_menu) = DockMenuItem::new(menu).log_err() {
+                actions.push(dock_menu);
+            }
+        });
+        let mut lock = self.state.borrow_mut();
+        lock.jump_list.dock_menus = actions;
+        lock.jump_list.recent_workspaces = entries;
+        update_jump_list(&lock.jump_list)
+            .log_err()
+            .unwrap_or_default()
     }
 }
 
@@ -246,12 +310,16 @@ impl Platform for WindowsPlatform {
         self.text_system.clone()
     }
 
-    fn keyboard_layout(&self) -> String {
-        "unknown".into()
+    fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout> {
+        Box::new(
+            WindowsKeyboardLayout::new()
+                .log_err()
+                .unwrap_or(WindowsKeyboardLayout::unknown()),
+        )
     }
 
-    fn on_keyboard_layout_change(&self, _callback: Box<dyn FnMut()>) {
-        // todo(windows)
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
+        self.state.borrow_mut().callbacks.keyboard_layout_change = Some(callback);
     }
 
     fn run(&self, on_finish_launching: Box<dyn 'static + FnOnce()>) {
@@ -343,6 +411,10 @@ impl Platform for WindowsPlatform {
 
     fn primary_display(&self) -> Option<Rc<dyn PlatformDisplay>> {
         WindowsDisplay::primary_monitor().map(|display| Rc::new(display) as Rc<dyn PlatformDisplay>)
+    }
+
+    fn is_screen_capture_supported(&self) -> bool {
+        false
     }
 
     fn screen_capture_sources(
@@ -479,8 +551,9 @@ impl Platform for WindowsPlatform {
         Some(self.state.borrow().menus.clone())
     }
 
-    // todo(windows)
-    fn set_dock_menu(&self, _menus: Vec<MenuItem>, _keymap: &Keymap) {}
+    fn set_dock_menu(&self, menus: Vec<MenuItem>, _keymap: &Keymap) {
+        self.set_dock_menus(menus);
+    }
 
     fn on_app_menu_action(&self, callback: Box<dyn FnMut(&dyn Action)>) {
         self.state.borrow_mut().callbacks.app_menu_action = Some(callback);
@@ -500,17 +573,17 @@ impl Platform for WindowsPlatform {
 
     // todo(windows)
     fn path_for_auxiliary_executable(&self, _name: &str) -> Result<PathBuf> {
-        Err(anyhow!("not yet implemented"))
+        anyhow::bail!("not yet implemented");
     }
 
     fn set_cursor_style(&self, style: CursorStyle) {
         let hcursor = load_cursor(style);
         let mut lock = self.state.borrow_mut();
-        if lock.current_cursor.0 != hcursor.0 {
+        if lock.current_cursor.map(|c| c.0) != hcursor.map(|c| c.0) {
             self.post_message(
                 WM_GPUI_CURSOR_STYLE_CHANGED,
                 WPARAM(0),
-                LPARAM(hcursor.0 as isize),
+                LPARAM(hcursor.map_or(0, |c| c.0 as isize)),
             );
             lock.current_cursor = hcursor;
         }
@@ -563,7 +636,7 @@ impl Platform for WindowsPlatform {
                 CredReadW(
                     PCWSTR::from_raw(target_name.as_ptr()),
                     CRED_TYPE_GENERIC,
-                    0,
+                    None,
                     &mut credentials,
                 )?
             };
@@ -591,13 +664,39 @@ impl Platform for WindowsPlatform {
             .chain(Some(0))
             .collect_vec();
         self.foreground_executor().spawn(async move {
-            unsafe { CredDeleteW(PCWSTR::from_raw(target_name.as_ptr()), CRED_TYPE_GENERIC, 0)? };
+            unsafe {
+                CredDeleteW(
+                    PCWSTR::from_raw(target_name.as_ptr()),
+                    CRED_TYPE_GENERIC,
+                    None,
+                )?
+            };
             Ok(())
         })
     }
 
     fn register_url_scheme(&self, _: &str) -> Task<anyhow::Result<()>> {
         Task::ready(Err(anyhow!("register_url_scheme unimplemented")))
+    }
+
+    fn perform_dock_menu_action(&self, action: usize) {
+        unsafe {
+            PostThreadMessageW(
+                self.main_thread_id_win32,
+                WM_GPUI_DOCK_MENU_ACTION,
+                WPARAM(self.validation_number),
+                LPARAM(action as isize),
+            )
+            .log_err();
+        }
+    }
+
+    fn update_jump_list(
+        &self,
+        menus: Vec<MenuItem>,
+        entries: Vec<SmallVec<[PathBuf; 2]>>,
+    ) -> Vec<SmallVec<[PathBuf; 2]>> {
+        self.update_jump_list(menus, entries)
     }
 }
 
@@ -613,7 +712,7 @@ impl Drop for WindowsPlatform {
 pub(crate) struct WindowCreationInfo {
     pub(crate) icon: HICON,
     pub(crate) executor: ForegroundExecutor,
-    pub(crate) current_cursor: HCURSOR,
+    pub(crate) current_cursor: Option<HCURSOR>,
     pub(crate) windows_version: WindowsVersion,
     pub(crate) validation_number: usize,
     pub(crate) main_receiver: flume::Receiver<Runnable>,
@@ -681,7 +780,7 @@ fn file_open_dialog(options: PathPromptOptions) -> Result<Option<Vec<PathBuf>>> 
         return Ok(None);
     }
 
-    let mut paths = Vec::new();
+    let mut paths = Vec::with_capacity(file_count as usize);
     for i in 0..file_count {
         let item = unsafe { results.GetItemAt(i)? };
         let path = unsafe { item.GetDisplayName(SIGDN_FILESYSPATH)?.to_string()? };
@@ -736,7 +835,7 @@ fn load_icon() -> Result<HICON> {
     let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
     let handle = unsafe {
         LoadImageW(
-            module,
+            Some(module.into()),
             windows::core::PCWSTR(1 as _),
             IMAGE_ICON,
             0,
@@ -756,7 +855,7 @@ fn should_auto_hide_scrollbars() -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{read_from_clipboard, write_to_clipboard, ClipboardItem};
+    use crate::{ClipboardItem, read_from_clipboard, write_to_clipboard};
 
     #[test]
     fn test_clipboard() {

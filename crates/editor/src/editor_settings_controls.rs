@@ -5,8 +5,8 @@ use project::project_settings::{InlineBlameSettings, ProjectSettings};
 use settings::{EditableSettingControl, Settings};
 use theme::{FontFamilyCache, ThemeSettings};
 use ui::{
-    prelude::*, CheckboxWithLabel, ContextMenu, DropdownMenu, NumericStepper, SettingsContainer,
-    SettingsGroup,
+    CheckboxWithLabel, ContextMenu, DropdownMenu, NumericStepper, SettingsContainer, SettingsGroup,
+    prelude::*,
 };
 
 use crate::EditorSettings;
@@ -125,8 +125,7 @@ impl EditableSettingControl for BufferFontSizeControl {
     }
 
     fn read(cx: &App) -> Self::Value {
-        let settings = ThemeSettings::get_global(cx);
-        settings.buffer_font_size
+        ThemeSettings::get_global(cx).buffer_font_size(cx)
     }
 
     fn apply(

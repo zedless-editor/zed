@@ -1,7 +1,7 @@
 use gpui::{Hsla, Rgba};
 
-use crate::scale::{ColorScaleSet, ColorScales};
 use crate::ColorScale;
+use crate::scale::{ColorScaleSet, ColorScales};
 use crate::{SystemColors, ThemeColors};
 
 pub(crate) fn neutral() -> ColorScaleSet {
@@ -68,6 +68,7 @@ impl ThemeColors {
             icon_disabled: neutral().light().step_9(),
             icon_placeholder: neutral().light().step_10(),
             icon_accent: blue().light().step_11(),
+            debugger_accent: red().light().step_10(),
             status_bar_background: neutral().light().step_2(),
             title_bar_background: neutral().light().step_2(),
             title_bar_inactive_background: neutral().light().step_3(),
@@ -85,15 +86,21 @@ impl ThemeColors {
             pane_group_border: neutral().light().step_6(),
             scrollbar_thumb_background: neutral().light_alpha().step_3(),
             scrollbar_thumb_hover_background: neutral().light_alpha().step_4(),
+            scrollbar_thumb_active_background: neutral().light_alpha().step_5(),
             scrollbar_thumb_border: gpui::transparent_black(),
             scrollbar_track_background: gpui::transparent_black(),
             scrollbar_track_border: neutral().light().step_5(),
+            minimap_thumb_background: neutral().light_alpha().step_3().alpha(0.7),
+            minimap_thumb_hover_background: neutral().light_alpha().step_4().alpha(0.7),
+            minimap_thumb_active_background: neutral().light_alpha().step_5().alpha(0.7),
+            minimap_thumb_border: gpui::transparent_black(),
             editor_foreground: neutral().light().step_12(),
             editor_background: neutral().light().step_1(),
             editor_gutter_background: neutral().light().step_1(),
             editor_subheader_background: neutral().light().step_2(),
             editor_active_line_background: neutral().light_alpha().step_3(),
             editor_highlighted_line_background: neutral().light_alpha().step_3(),
+            editor_debugger_active_line_background: yellow().dark_alpha().step_3(),
             editor_line_number: neutral().light().step_10(),
             editor_hover_line_number: neutral().light().step_12(),
             editor_active_line_number: neutral().light().step_11(),
@@ -136,15 +143,13 @@ impl ThemeColors {
             terminal_ansi_dim_white: neutral().light().step_11(),
             link_text_hover: orange().light().step_10(),
             version_control_added: ADDED_COLOR,
-            version_control_added_background: ADDED_COLOR.opacity(0.08),
             version_control_deleted: REMOVED_COLOR,
-            version_control_deleted_background: REMOVED_COLOR.opacity(0.08),
             version_control_modified: MODIFIED_COLOR,
-            version_control_modified_background: MODIFIED_COLOR.opacity(0.08),
             version_control_renamed: MODIFIED_COLOR,
             version_control_conflict: orange().light().step_12(),
-            version_control_conflict_background: orange().light().step_12().opacity(0.1),
             version_control_ignored: gray().light().step_12(),
+            version_control_conflict_marker_ours: green().light().step_10().alpha(0.5),
+            version_control_conflict_marker_theirs: blue().light().step_10().alpha(0.5),
         }
     }
 
@@ -185,6 +190,7 @@ impl ThemeColors {
             icon_disabled: neutral().dark().step_9(),
             icon_placeholder: neutral().dark().step_10(),
             icon_accent: blue().dark().step_11(),
+            debugger_accent: red().light().step_10(),
             status_bar_background: neutral().dark().step_2(),
             title_bar_background: neutral().dark().step_2(),
             title_bar_inactive_background: neutral().dark().step_3(),
@@ -202,15 +208,21 @@ impl ThemeColors {
             pane_group_border: neutral().dark().step_6(),
             scrollbar_thumb_background: neutral().dark_alpha().step_3(),
             scrollbar_thumb_hover_background: neutral().dark_alpha().step_4(),
+            scrollbar_thumb_active_background: neutral().dark_alpha().step_5(),
             scrollbar_thumb_border: gpui::transparent_black(),
             scrollbar_track_background: gpui::transparent_black(),
             scrollbar_track_border: neutral().dark().step_5(),
+            minimap_thumb_background: neutral().dark_alpha().step_3().alpha(0.7),
+            minimap_thumb_hover_background: neutral().dark_alpha().step_4().alpha(0.7),
+            minimap_thumb_active_background: neutral().dark_alpha().step_5().alpha(0.7),
+            minimap_thumb_border: gpui::transparent_black(),
             editor_foreground: neutral().dark().step_12(),
             editor_background: neutral().dark().step_1(),
             editor_gutter_background: neutral().dark().step_1(),
             editor_subheader_background: neutral().dark().step_3(),
             editor_active_line_background: neutral().dark_alpha().step_3(),
-            editor_highlighted_line_background: neutral().dark_alpha().step_4(),
+            editor_highlighted_line_background: yellow().dark_alpha().step_4(),
+            editor_debugger_active_line_background: yellow().dark_alpha().step_3(),
             editor_line_number: neutral().dark_alpha().step_10(),
             editor_hover_line_number: neutral().dark_alpha().step_12(),
             editor_active_line_number: neutral().dark_alpha().step_11(),
@@ -253,15 +265,13 @@ impl ThemeColors {
             terminal_ansi_dim_white: neutral().dark().step_10(),
             link_text_hover: orange().dark().step_10(),
             version_control_added: ADDED_COLOR,
-            version_control_added_background: ADDED_COLOR.opacity(0.1),
             version_control_deleted: REMOVED_COLOR,
-            version_control_deleted_background: REMOVED_COLOR.opacity(0.1),
             version_control_modified: MODIFIED_COLOR,
-            version_control_modified_background: MODIFIED_COLOR.opacity(0.1),
             version_control_renamed: MODIFIED_COLOR,
             version_control_conflict: orange().dark().step_12(),
-            version_control_conflict_background: orange().dark().step_12().opacity(0.1),
             version_control_ignored: gray().dark().step_12(),
+            version_control_conflict_marker_ours: green().dark().step_10().alpha(0.5),
+            version_control_conflict_marker_theirs: blue().dark().step_10().alpha(0.5),
         }
     }
 }
@@ -280,7 +290,7 @@ impl TryFrom<StaticColorScaleSet> for ColorScaleSet {
     type Error = anyhow::Error;
 
     fn try_from(value: StaticColorScaleSet) -> Result<Self, Self::Error> {
-        fn to_color_scale(scale: StaticColorScale) -> Result<ColorScale, anyhow::Error> {
+        fn to_color_scale(scale: StaticColorScale) -> anyhow::Result<ColorScale> {
             scale
                 .into_iter()
                 .map(|color| Rgba::try_from(color).map(Hsla::from))

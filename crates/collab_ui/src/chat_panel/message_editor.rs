@@ -2,27 +2,26 @@ use anyhow::{Context as _, Result};
 use channel::{ChannelChat, ChannelStore, MessageParams};
 use client::{UserId, UserStore};
 use collections::HashSet;
-use editor::{AnchorRangeExt, CompletionProvider, Editor, EditorElement, EditorStyle};
+use editor::{AnchorRangeExt, CompletionProvider, Editor, EditorElement, EditorStyle, ExcerptId};
 use fuzzy::{StringMatch, StringMatchCandidate};
 use gpui::{
     AsyncApp, AsyncWindowContext, Context, Entity, Focusable, FontStyle, FontWeight,
     HighlightStyle, IntoElement, Render, Task, TextStyle, WeakEntity, Window,
 };
 use language::{
-    language_settings::SoftWrap, Anchor, Buffer, BufferSnapshot, CodeLabel, LanguageRegistry,
-    LanguageServerId, ToOffset,
+    Anchor, Buffer, BufferSnapshot, CodeLabel, LanguageRegistry, ToOffset,
+    language_settings::SoftWrap,
 };
-use project::{search::SearchQuery, Completion};
+use project::{Completion, CompletionResponse, CompletionSource, search::SearchQuery};
 use settings::Settings;
 use std::{
-    cell::RefCell,
     ops::Range,
     rc::Rc,
     sync::{Arc, LazyLock},
     time::Duration,
 };
 use theme::ThemeSettings;
-use ui::{prelude::*, TextSize};
+use ui::{TextSize, prelude::*};
 
 use crate::panel_settings::MessageEditorSettings;
 
@@ -34,8 +33,10 @@ static MENTIONS_SEARCH: LazyLock<SearchQuery> = LazyLock::new(|| {
         false,
         false,
         false,
+        false,
         Default::default(),
         Default::default(),
+        false,
         None,
     )
     .unwrap()
@@ -56,12 +57,13 @@ struct MessageEditorCompletionProvider(WeakEntity<MessageEditor>);
 impl CompletionProvider for MessageEditorCompletionProvider {
     fn completions(
         &self,
+        _excerpt_id: ExcerptId,
         buffer: &Entity<Buffer>,
         buffer_position: language::Anchor,
         _: editor::CompletionContext,
         _window: &mut Window,
         cx: &mut Context<Editor>,
-    ) -> Task<anyhow::Result<Vec<Completion>>> {
+    ) -> Task<Result<Vec<CompletionResponse>>> {
         let Some(handle) = self.0.upgrade() else {
             return Task::ready(Ok(Vec::new()));
         };
@@ -70,22 +72,13 @@ impl CompletionProvider for MessageEditorCompletionProvider {
         })
     }
 
-    fn resolve_completions(
-        &self,
-        _buffer: Entity<Buffer>,
-        _completion_indices: Vec<usize>,
-        _completions: Rc<RefCell<Box<[Completion]>>>,
-        _cx: &mut Context<Editor>,
-    ) -> Task<anyhow::Result<bool>> {
-        Task::ready(Ok(false))
-    }
-
     fn is_completion_trigger(
         &self,
         _buffer: &Entity<Buffer>,
         _position: language::Anchor,
         text: &str,
         _trigger_in_words: bool,
+        _menu_is_open: bool,
         _cx: &mut Context<Editor>,
     ) -> bool {
         text == "@"
@@ -104,11 +97,12 @@ impl MessageEditor {
         let this = cx.entity().downgrade();
         editor.update(cx, |editor, cx| {
             editor.set_soft_wrap_mode(SoftWrap::EditorWidth, cx);
+            editor.set_offset_content(false, cx);
             editor.set_use_autoclose(false);
             editor.set_show_gutter(false, cx);
             editor.set_show_wrap_guides(false, cx);
             editor.set_show_indent_guides(false, cx);
-            editor.set_completion_provider(Some(Box::new(MessageEditorCompletionProvider(this))));
+            editor.set_completion_provider(Some(Rc::new(MessageEditorCompletionProvider(this))));
             editor.set_auto_replace_emoji_shortcode(
                 MessageEditorSettings::get_global(cx)
                     .auto_replace_emoji_shortcode
@@ -137,11 +131,9 @@ impl MessageEditor {
         .detach();
 
         let markdown = language_registry.language_for_name("Markdown");
-        cx.spawn_in(window, |_, mut cx| async move {
+        cx.spawn_in(window, async move |_, cx| {
             let markdown = markdown.await.context("failed to load Markdown language")?;
-            buffer.update(&mut cx, |buffer, cx| {
-                buffer.set_language(Some(markdown), cx)
-            })
+            buffer.update(cx, |buffer, cx| buffer.set_language(Some(markdown), cx))
         })
         .detach_and_log_err(cx);
 
@@ -232,7 +224,7 @@ impl MessageEditor {
     ) {
         if let language::BufferEvent::Reparsed | language::BufferEvent::Edited = event {
             let buffer = buffer.read(cx).snapshot();
-            self.mentions_task = Some(cx.spawn_in(window, |this, cx| async move {
+            self.mentions_task = Some(cx.spawn_in(window, async move |this, cx| {
                 cx.background_executor()
                     .timer(MENTIONS_DEBOUNCE_INTERVAL)
                     .await;
@@ -246,20 +238,21 @@ impl MessageEditor {
         buffer: &Entity<Buffer>,
         end_anchor: Anchor,
         cx: &mut Context<Self>,
-    ) -> Task<Result<Vec<Completion>>> {
+    ) -> Task<Result<Vec<CompletionResponse>>> {
         if let Some((start_anchor, query, candidates)) =
             self.collect_mention_candidates(buffer, end_anchor, cx)
         {
             if !candidates.is_empty() {
-                return cx.spawn(|_, cx| async move {
-                    Ok(Self::resolve_completions_for_candidates(
+                return cx.spawn(async move |_, cx| {
+                    let completion_response = Self::completions_for_candidates(
                         &cx,
                         query.as_str(),
                         &candidates,
                         start_anchor..end_anchor,
                         Self::completion_for_mention,
                     )
-                    .await)
+                    .await;
+                    Ok(vec![completion_response])
                 });
             }
         }
@@ -268,55 +261,65 @@ impl MessageEditor {
             self.collect_emoji_candidates(buffer, end_anchor, cx)
         {
             if !candidates.is_empty() {
-                return cx.spawn(|_, cx| async move {
-                    Ok(Self::resolve_completions_for_candidates(
+                return cx.spawn(async move |_, cx| {
+                    let completion_response = Self::completions_for_candidates(
                         &cx,
                         query.as_str(),
                         candidates,
                         start_anchor..end_anchor,
                         Self::completion_for_emoji,
                     )
-                    .await)
+                    .await;
+                    Ok(vec![completion_response])
                 });
             }
         }
 
-        Task::ready(Ok(vec![]))
+        Task::ready(Ok(vec![CompletionResponse {
+            completions: Vec::new(),
+            is_incomplete: false,
+        }]))
     }
 
-    async fn resolve_completions_for_candidates(
+    async fn completions_for_candidates(
         cx: &AsyncApp,
         query: &str,
         candidates: &[StringMatchCandidate],
         range: Range<Anchor>,
         completion_fn: impl Fn(&StringMatch) -> (String, CodeLabel),
-    ) -> Vec<Completion> {
+    ) -> CompletionResponse {
+        const LIMIT: usize = 10;
         let matches = fuzzy::match_strings(
             candidates,
             query,
             true,
-            10,
+            LIMIT,
             &Default::default(),
             cx.background_executor().clone(),
         )
         .await;
 
-        matches
+        let completions = matches
             .into_iter()
             .map(|mat| {
                 let (new_text, label) = completion_fn(&mat);
                 Completion {
-                    old_range: range.clone(),
+                    replace_range: range.clone(),
                     new_text,
                     label,
-                    documentation: None,
-                    server_id: LanguageServerId(0), // TODO: Make this optional or something?
-                    lsp_completion: Default::default(), // TODO: Make this optional or something?
+                    icon_path: None,
                     confirm: None,
-                    resolved: true,
+                    documentation: None,
+                    insert_text_mode: None,
+                    source: CompletionSource::Custom,
                 }
             })
-            .collect()
+            .collect::<Vec<_>>();
+
+        CompletionResponse {
+            is_incomplete: completions.len() >= LIMIT,
+            completions,
+        }
     }
 
     fn completion_for_mention(mat: &StringMatch) -> (String, CodeLabel) {
@@ -346,7 +349,7 @@ impl MessageEditor {
     ) -> Option<(Anchor, String, Vec<StringMatchCandidate>)> {
         let end_offset = end_anchor.to_offset(buffer.read(cx));
 
-        let query = buffer.update(cx, |buffer, _| {
+        let query = buffer.read_with(cx, |buffer, _| {
             let mut query = String::new();
             for ch in buffer.reversed_chars_at(end_offset).take(100) {
                 if ch == '@' {
@@ -404,7 +407,7 @@ impl MessageEditor {
 
         let end_offset = end_anchor.to_offset(buffer.read(cx));
 
-        let query = buffer.update(cx, |buffer, _| {
+        let query = buffer.read_with(cx, |buffer, _| {
             let mut query = String::new();
             for ch in buffer.reversed_chars_at(end_offset).take(100) {
                 if ch == ':' {
@@ -451,17 +454,16 @@ impl MessageEditor {
     async fn find_mentions(
         this: WeakEntity<MessageEditor>,
         buffer: BufferSnapshot,
-        mut cx: AsyncWindowContext,
+        cx: &mut AsyncWindowContext,
     ) {
         let (buffer, ranges) = cx
-            .background_executor()
-            .spawn(async move {
+            .background_spawn(async move {
                 let ranges = MENTIONS_SEARCH.search(&buffer, None).await;
                 (buffer, ranges)
             })
             .await;
 
-        this.update(&mut cx, |this, cx| {
+        this.update(cx, |this, cx| {
             let mut anchor_ranges = Vec::new();
             let mut mentioned_user_ids = Vec::new();
             let mut text = String::new();
@@ -532,7 +534,7 @@ impl Render for MessageEditor {
             .px_2()
             .py_1()
             .bg(cx.theme().colors().editor_background)
-            .rounded_md()
+            .rounded_sm()
             .child(EditorElement::new(
                 &self.editor,
                 EditorStyle {

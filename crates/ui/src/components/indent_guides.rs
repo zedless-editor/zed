@@ -1,8 +1,7 @@
-#![allow(missing_docs)]
 use std::{cmp::Ordering, ops::Range, rc::Rc};
 
 use gpui::{
-    fill, point, size, AnyElement, App, Bounds, Entity, Hsla, Point, UniformListDecoration,
+    AnyElement, App, Bounds, Entity, Hsla, Point, UniformListDecoration, fill, point, size,
 };
 use smallvec::SmallVec;
 
@@ -50,8 +49,13 @@ pub fn indent_guides<V: Render>(
     entity: Entity<V>,
     indent_size: Pixels,
     colors: IndentGuideColors,
-    compute_indents_fn: impl Fn(&mut V, Range<usize>, &mut Window, &mut Context<V>) -> SmallVec<[usize; 64]>
-        + 'static,
+    compute_indents_fn: impl Fn(
+        &mut V,
+        Range<usize>,
+        &mut Window,
+        &mut Context<V>,
+    ) -> SmallVec<[usize; 64]>
+    + 'static,
 ) -> IndentGuides {
     let compute_indents_fn = Box::new(move |range, window: &mut Window, cx: &mut App| {
         entity.update(cx, |this, cx| compute_indents_fn(this, range, window, cx))
@@ -80,12 +84,12 @@ impl IndentGuides {
         mut self,
         entity: Entity<V>,
         render_fn: impl Fn(
-                &mut V,
-                RenderIndentGuideParams,
-                &mut Window,
-                &mut App,
-            ) -> SmallVec<[RenderedIndentGuide; 12]>
-            + 'static,
+            &mut V,
+            RenderIndentGuideParams,
+            &mut Window,
+            &mut App,
+        ) -> SmallVec<[RenderedIndentGuide; 12]>
+        + 'static,
     ) -> Self {
         let render_fn = move |params, window: &mut Window, cx: &mut App| {
             entity.update(cx, |this, cx| render_fn(this, params, window, cx))
@@ -132,7 +136,9 @@ pub struct IndentGuideLayout {
 
 /// Implements the necessary functionality for rendering indent guides inside a uniform list.
 mod uniform_list {
-    use gpui::{DispatchPhase, Hitbox, MouseButton, MouseDownEvent, MouseMoveEvent};
+    use gpui::{
+        DispatchPhase, Hitbox, HitboxBehavior, MouseButton, MouseDownEvent, MouseMoveEvent,
+    };
 
     use super::*;
 
@@ -173,10 +179,10 @@ mod uniform_list {
                     .map(|layout| RenderedIndentGuide {
                         bounds: Bounds::new(
                             point(
-                                px(layout.offset.x as f32) * self.indent_size,
-                                px(layout.offset.y as f32) * item_height,
+                                layout.offset.x * self.indent_size,
+                                layout.offset.y * item_height,
                             ),
-                            size(px(1.), px(layout.length as f32) * item_height),
+                            size(px(1.), layout.length * item_height),
                         ),
                         layout,
                         is_active: false,
@@ -223,9 +229,14 @@ mod uniform_list {
             None
         }
 
+        fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+            None
+        }
+
         fn request_layout(
             &mut self,
             _id: Option<&gpui::GlobalElementId>,
+            _inspector_id: Option<&gpui::InspectorElementId>,
             window: &mut Window,
             cx: &mut App,
         ) -> (gpui::LayoutId, Self::RequestLayoutState) {
@@ -235,6 +246,7 @@ mod uniform_list {
         fn prepaint(
             &mut self,
             _id: Option<&gpui::GlobalElementId>,
+            _inspector_id: Option<&gpui::InspectorElementId>,
             _bounds: Bounds<Pixels>,
             _request_layout: &mut Self::RequestLayoutState,
             window: &mut Window,
@@ -246,7 +258,12 @@ mod uniform_list {
                     .indent_guides
                     .as_ref()
                     .iter()
-                    .map(|guide| window.insert_hitbox(guide.hitbox.unwrap_or(guide.bounds), false))
+                    .map(|guide| {
+                        window.insert_hitbox(
+                            guide.hitbox.unwrap_or(guide.bounds),
+                            HitboxBehavior::Normal,
+                        )
+                    })
                     .collect();
                 Self::PrepaintState::Interactive {
                     hitboxes: Rc::new(hitboxes),
@@ -260,12 +277,15 @@ mod uniform_list {
         fn paint(
             &mut self,
             _id: Option<&gpui::GlobalElementId>,
+            _inspector_id: Option<&gpui::InspectorElementId>,
             _bounds: Bounds<Pixels>,
             _request_layout: &mut Self::RequestLayoutState,
             prepaint: &mut Self::PrepaintState,
             window: &mut Window,
             _cx: &mut App,
         ) {
+            let current_view = window.current_view();
+
             match prepaint {
                 IndentGuidesElementPrepaintState::Static => {
                     for indent_guide in self.indent_guides.as_ref() {
@@ -327,7 +347,7 @@ mod uniform_list {
                     window.on_mouse_event({
                         let prev_hovered_hitbox_id = hovered_hitbox_id;
                         let hitboxes = hitboxes.clone();
-                        move |_: &MouseMoveEvent, phase, window, _cx| {
+                        move |_: &MouseMoveEvent, phase, window, cx| {
                             let mut hovered_hitbox_id = None;
                             for hitbox in hitboxes.as_ref() {
                                 if hitbox.is_hovered(window) {
@@ -340,15 +360,11 @@ mod uniform_list {
                                 match (prev_hovered_hitbox_id, hovered_hitbox_id) {
                                     (Some(prev_id), Some(id)) => {
                                         if prev_id != id {
-                                            window.refresh();
+                                            cx.notify(current_view)
                                         }
                                     }
-                                    (None, Some(_)) => {
-                                        window.refresh();
-                                    }
-                                    (Some(_), None) => {
-                                        window.refresh();
-                                    }
+                                    (None, Some(_)) => cx.notify(current_view),
+                                    (Some(_), None) => cx.notify(current_view),
                                     (None, None) => {}
                                 }
                             }

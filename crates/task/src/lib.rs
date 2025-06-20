@@ -1,11 +1,14 @@
 //! Baseline interface of Tasks in Zed: all tasks in Zed are intended to use those for implementing their own logic.
-#![deny(missing_docs)]
 
+mod adapter_schema;
+mod debug_format;
+mod serde_helpers;
 pub mod static_source;
 mod task_template;
+mod vscode_debug_format;
 mod vscode_format;
 
-use collections::{hash_map, HashMap, HashSet};
+use collections::{HashMap, HashSet, hash_map};
 use gpui::SharedString;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,17 +16,26 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-pub use task_template::{HideStrategy, RevealStrategy, TaskTemplate, TaskTemplates};
+pub use adapter_schema::{AdapterSchema, AdapterSchemas};
+pub use debug_format::{
+    AttachRequest, BuildTaskDefinition, DebugRequest, DebugScenario, DebugTaskFile, LaunchRequest,
+    Request, TcpArgumentsTemplate, ZedDebugConfig,
+};
+pub use task_template::{
+    DebugArgsRequest, HideStrategy, RevealStrategy, TaskTemplate, TaskTemplates,
+    substitute_variables_in_map, substitute_variables_in_str,
+};
+pub use vscode_debug_format::VsCodeDebugTaskFile;
 pub use vscode_format::VsCodeTaskFile;
 pub use zed_actions::RevealTarget;
 
 /// Task identifier, unique within the application.
 /// Based on it, task reruns and terminal tabs are managed.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize)]
 pub struct TaskId(pub String);
 
 /// Contains all information needed by Zed to spawn a new terminal tab for the given task.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct SpawnInTerminal {
     /// Id of the task to use when determining task tab affinity.
     pub id: TaskId,
@@ -58,6 +70,38 @@ pub struct SpawnInTerminal {
     pub show_summary: bool,
     /// Whether to show the command line in the task output.
     pub show_command: bool,
+    /// Whether to show the rerun button in the terminal tab.
+    pub show_rerun: bool,
+}
+
+impl SpawnInTerminal {
+    pub fn to_proto(&self) -> proto::SpawnInTerminal {
+        proto::SpawnInTerminal {
+            label: self.label.clone(),
+            command: self.command.clone(),
+            args: self.args.clone(),
+            env: self
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            cwd: self
+                .cwd
+                .clone()
+                .map(|cwd| cwd.to_string_lossy().into_owned()),
+        }
+    }
+
+    pub fn from_proto(proto: proto::SpawnInTerminal) -> Self {
+        Self {
+            label: proto.label.clone(),
+            command: proto.command.clone(),
+            args: proto.args.clone(),
+            env: proto.env.into_iter().collect(),
+            cwd: proto.cwd.map(PathBuf::from).clone(),
+            ..Default::default()
+        }
+    }
 }
 
 /// A final form of the [`TaskTemplate`], that got resolved with a particular [`TaskContext`] and now is ready to spawn the actual task.
@@ -77,7 +121,7 @@ pub struct ResolvedTask {
     substituted_variables: HashSet<VariableName>,
     /// Further actions that need to take place after the resolved task is spawned,
     /// with all task variables resolved.
-    pub resolved: Option<SpawnInTerminal>,
+    pub resolved: SpawnInTerminal,
 }
 
 impl ResolvedTask {
@@ -93,10 +137,7 @@ impl ResolvedTask {
 
     /// A human-readable label to display in the UI.
     pub fn display_label(&self) -> &str {
-        self.resolved
-            .as_ref()
-            .map(|resolved| resolved.label.as_str())
-            .unwrap_or_else(|| self.resolved_label.as_str())
+        self.resolved.label.as_str()
     }
 }
 
@@ -110,6 +151,8 @@ pub enum VariableName {
     File,
     /// A path of the currently opened file (relative to worktree root).
     RelativeFile,
+    /// A path of the currently opened file's directory (relative to worktree root).
+    RelativeDir,
     /// The currently opened filename.
     Filename,
     /// The path to a parent directory of a currently opened file.
@@ -153,6 +196,7 @@ impl FromStr for VariableName {
             "FILE" => Self::File,
             "FILENAME" => Self::Filename,
             "RELATIVE_FILE" => Self::RelativeFile,
+            "RELATIVE_DIR" => Self::RelativeDir,
             "DIRNAME" => Self::Dirname,
             "STEM" => Self::Stem,
             "WORKTREE_ROOT" => Self::WorktreeRoot,
@@ -185,6 +229,7 @@ impl std::fmt::Display for VariableName {
             Self::File => write!(f, "{ZED_VARIABLE_NAME_PREFIX}FILE"),
             Self::Filename => write!(f, "{ZED_VARIABLE_NAME_PREFIX}FILENAME"),
             Self::RelativeFile => write!(f, "{ZED_VARIABLE_NAME_PREFIX}RELATIVE_FILE"),
+            Self::RelativeDir => write!(f, "{ZED_VARIABLE_NAME_PREFIX}RELATIVE_DIR"),
             Self::Dirname => write!(f, "{ZED_VARIABLE_NAME_PREFIX}DIRNAME"),
             Self::Stem => write!(f, "{ZED_VARIABLE_NAME_PREFIX}STEM"),
             Self::WorktreeRoot => write!(f, "{ZED_VARIABLE_NAME_PREFIX}WORKTREE_ROOT"),
@@ -228,6 +273,10 @@ impl TaskVariables {
                 true
             }
         })
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&VariableName, &String)> {
+        self.0.iter()
     }
 }
 
@@ -298,7 +347,10 @@ enum WindowsShellType {
 pub struct ShellBuilder {
     program: String,
     args: Vec<String>,
+    interactive: bool,
 }
+
+pub static DEFAULT_REMOTE_SHELL: &str = "\"${SHELL:-sh}\"";
 
 impl ShellBuilder {
     /// Create a new ShellBuilder as configured.
@@ -308,13 +360,21 @@ impl ShellBuilder {
                 if is_local {
                     (Self::system_shell(), Vec::new())
                 } else {
-                    ("\"${SHELL:-sh}\"".to_string(), Vec::new())
+                    (DEFAULT_REMOTE_SHELL.to_string(), Vec::new())
                 }
             }
             Shell::Program(shell) => (shell.clone(), Vec::new()),
             Shell::WithArguments { program, args, .. } => (program.clone(), args.clone()),
         };
-        Self { program, args }
+        Self {
+            program,
+            args,
+            interactive: true,
+        }
+    }
+    pub fn non_interactive(mut self) -> Self {
+        self.interactive = false;
+        self
     }
 }
 
@@ -322,7 +382,8 @@ impl ShellBuilder {
 impl ShellBuilder {
     /// Returns the label to show in the terminal tab
     pub fn command_label(&self, command_label: &str) -> String {
-        format!("{} -i -c '{}'", self.program, command_label)
+        let interactivity = self.interactive.then_some("-i ").unwrap_or_default();
+        format!("{} {interactivity}-c '{}'", self.program, command_label)
     }
 
     /// Returns the program and arguments to run this task in a shell.
@@ -334,8 +395,12 @@ impl ShellBuilder {
                 command.push_str(&arg);
                 command
             });
-        self.args
-            .extend(["-i".to_owned(), "-c".to_owned(), combined_command]);
+        self.args.extend(
+            self.interactive
+                .then(|| "-i".to_owned())
+                .into_iter()
+                .chain(["-c".to_owned(), combined_command]),
+        );
 
         (self.program, self.args)
     }
@@ -401,8 +466,10 @@ impl ShellBuilder {
 
     // `alacritty_terminal` uses this as default on Windows. See:
     // https://github.com/alacritty/alacritty/blob/0d4ab7bca43213d96ddfe40048fc0f922543c6f8/alacritty_terminal/src/tty/windows/mod.rs#L130
+    // We could use `util::get_windows_system_shell()` here, but we are running tasks here, so leave it to `powershell.exe`
+    // should be okay.
     fn system_shell() -> String {
-        "powershell".to_owned()
+        "powershell.exe".to_string()
     }
 
     fn to_windows_shell_variable(&self, input: String) -> String {
@@ -449,5 +516,67 @@ impl ShellBuilder {
             // If no prefix is found, return the input as is
             input
         }
+    }
+}
+
+type VsCodeEnvVariable = String;
+type ZedEnvVariable = String;
+
+struct EnvVariableReplacer {
+    variables: HashMap<VsCodeEnvVariable, ZedEnvVariable>,
+}
+
+impl EnvVariableReplacer {
+    fn new(variables: HashMap<VsCodeEnvVariable, ZedEnvVariable>) -> Self {
+        Self { variables }
+    }
+
+    fn replace_value(&self, input: serde_json::Value) -> serde_json::Value {
+        match input {
+            serde_json::Value::String(s) => serde_json::Value::String(self.replace(&s)),
+            serde_json::Value::Array(arr) => {
+                serde_json::Value::Array(arr.into_iter().map(|v| self.replace_value(v)).collect())
+            }
+            serde_json::Value::Object(obj) => serde_json::Value::Object(
+                obj.into_iter()
+                    .map(|(k, v)| (self.replace(&k), self.replace_value(v)))
+                    .collect(),
+            ),
+            _ => input,
+        }
+    }
+    // Replaces occurrences of VsCode-specific environment variables with Zed equivalents.
+    fn replace(&self, input: &str) -> String {
+        shellexpand::env_with_context_no_errors(&input, |var: &str| {
+            // Colons denote a default value in case the variable is not set. We want to preserve that default, as otherwise shellexpand will substitute it for us.
+            let colon_position = var.find(':').unwrap_or(var.len());
+            let (left, right) = var.split_at(colon_position);
+            if left == "env" && !right.is_empty() {
+                let variable_name = &right[1..];
+                return Some(format!("${{{variable_name}}}"));
+            }
+            let (variable_name, default) = (left, right);
+            let append_previous_default = |ret: &mut String| {
+                if !default.is_empty() {
+                    ret.push_str(default);
+                }
+            };
+            if let Some(substitution) = self.variables.get(variable_name) {
+                // Got a VSCode->Zed hit, perform a substitution
+                let mut name = format!("${{{substitution}");
+                append_previous_default(&mut name);
+                name.push('}');
+                return Some(name);
+            }
+            // This is an unknown variable.
+            // We should not error out, as they may come from user environment (e.g. $PATH). That means that the variable substitution might not be perfect.
+            // If there's a default, we need to return the string verbatim as otherwise shellexpand will apply that default for us.
+            if !default.is_empty() {
+                return Some(format!("${{{var}}}"));
+            }
+            // Else we can just return None and that variable will be left as is.
+            None
+        })
+        .into_owned()
     }
 }

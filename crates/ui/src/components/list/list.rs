@@ -1,9 +1,7 @@
-#![allow(missing_docs)]
-
 use gpui::AnyElement;
 use smallvec::SmallVec;
 
-use crate::{prelude::*, v_flex, Label, ListHeader};
+use crate::{Label, ListHeader, prelude::*, v_flex};
 
 pub enum EmptyMessage {
     Text(SharedString),

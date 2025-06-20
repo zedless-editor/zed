@@ -1,20 +1,23 @@
 use crate::{
-    self as gpui, px, relative, rems, AbsoluteLength, AlignItems, CursorStyle, DefiniteLength,
-    Fill, FlexDirection, FlexWrap, Font, FontStyle, FontWeight, Hsla, JustifyContent, Length,
-    SharedString, StrikethroughStyle, StyleRefinement, TextOverflow, WhiteSpace,
+    self as gpui, AbsoluteLength, AlignContent, AlignItems, BorderStyle, CursorStyle,
+    DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontStyle, FontWeight, Hsla,
+    JustifyContent, Length, SharedString, StrikethroughStyle, StyleRefinement, TextAlign,
+    TextOverflow, TextStyleRefinement, UnderlineStyle, WhiteSpace, px, relative, rems,
 };
-use crate::{TextAlign, TextStyleRefinement};
 pub use gpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
     overflow_style_methods, padding_style_methods, position_style_methods,
     visibility_style_methods,
 };
-use taffy::style::{AlignContent, Display};
 
-const ELLIPSIS: &str = "…";
+const ELLIPSIS: SharedString = SharedString::new_static("…");
 
 /// A trait for elements that can be styled.
 /// Use this to opt-in to a utility CSS-like styling API.
+#[cfg_attr(
+    any(feature = "inspector", debug_assertions),
+    gpui_macros::derive_inspector_reflection
+)]
 pub trait Styled: Sized {
     /// Returns a reference to the style memory of this element.
     fn style(&mut self) -> &mut StyleRefinement;
@@ -66,7 +69,7 @@ pub trait Styled: Sized {
     fn text_ellipsis(mut self) -> Self {
         self.text_style()
             .get_or_insert_with(Default::default)
-            .text_overflow = Some(TextOverflow::Ellipsis(ELLIPSIS));
+            .text_overflow = Some(TextOverflow::Truncate(ELLIPSIS));
         self
     }
 
@@ -361,6 +364,12 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets the border style of the element.
+    fn border_dashed(mut self) -> Self {
+        self.style().border_style = Some(BorderStyle::Dashed);
+        self
+    }
+
     /// Returns a mutable reference to the text style that has been configured on this element.
     fn text_style(&mut self) -> &mut Option<TextStyleRefinement> {
         let style: &mut StyleRefinement = self.style();
@@ -478,7 +487,7 @@ pub trait Styled: Sized {
     }
 
     /// Sets the font style of the element to normal (not italic).
-    /// [Docs](https://tailwindcss.com/docs/font-style#italicizing-text)
+    /// [Docs](https://tailwindcss.com/docs/font-style#displaying-text-normally)
     fn not_italic(mut self) -> Self {
         self.text_style()
             .get_or_insert_with(Default::default)
@@ -486,8 +495,19 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets the text decoration to underline.
+    /// [Docs](https://tailwindcss.com/docs/text-decoration-line#underling-text)
+    fn underline(mut self) -> Self {
+        let style = self.text_style().get_or_insert_with(Default::default);
+        style.underline = Some(UnderlineStyle {
+            thickness: px(1.),
+            ..Default::default()
+        });
+        self
+    }
+
     /// Sets the decoration of the text to have a line through it.
-    /// [Docs](https://tailwindcss.com/docs/text-decoration#setting-the-text-decoration)
+    /// [Docs](https://tailwindcss.com/docs/text-decoration-line#adding-a-line-through-text)
     fn line_through(mut self) -> Self {
         let style = self.text_style().get_or_insert_with(Default::default);
         style.strikethrough = Some(StrikethroughStyle {

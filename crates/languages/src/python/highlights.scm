@@ -1,4 +1,6 @@
 ; Identifier naming conventions; these "soft conventions" should stay at the top of the file as they're often overridden
+(identifier) @variable
+(attribute attribute: (identifier) @property)
 
 ; CamelCase for classes
 ((identifier) @type.class
@@ -8,7 +10,6 @@
 ((identifier) @constant
   (#match? @constant "^_*[A-Z][A-Z0-9_]*$"))
 
-(attribute attribute: (identifier) @property)
 (type (identifier) @type)
 (generic_type (identifier) @type)
 (comment) @comment
@@ -51,15 +52,31 @@
 (function_definition
   name: (identifier) @function.definition)
 
+((call
+  function: (identifier) @_isinstance
+  arguments: (argument_list
+    (_)
+    (identifier) @type))
+  (#eq? @_isinstance "isinstance"))
+
+((call
+  function: (identifier) @_issubclass
+  arguments: (argument_list
+    (identifier) @type
+    (identifier) @type))
+  (#eq? @_issubclass "issubclass"))
+
 ; Function arguments
 (function_definition
   parameters: (parameters
   [
-      (identifier) @function.arguments ; Simple parameters
+      (identifier) @variable.parameter; Simple parameters
       (typed_parameter
-        (identifier) @function.arguments) ; Typed parameters
+        (identifier) @variable.parameter) ; Typed parameters
       (default_parameter
-        name: (identifier) @function.arguments) ; Default parameters
+        name: (identifier) @variable.parameter) ; Default parameters
+      (typed_default_parameter
+        name: (identifier) @variable.parameter) ; Typed default parameters
   ]))
 
 ; Keyword arguments
@@ -85,19 +102,19 @@
 
 ((call
   function: (identifier) @function.builtin)
- (#match?
+ (#any-of?
    @function.builtin
-   "^(abs|all|any|ascii|bin|bool|breakpoint|bytearray|bytes|callable|chr|classmethod|compile|complex|delattr|dict|dir|divmod|enumerate|eval|exec|filter|float|format|frozenset|getattr|globals|hasattr|hash|help|hex|id|input|int|isinstance|issubclass|iter|len|list|locals|map|max|memoryview|min|next|object|oct|open|ord|pow|print|property|range|repr|reversed|round|set|setattr|slice|sorted|staticmethod|str|sum|super|tuple|type|vars|zip|__import__)$"))
-
-((identifier) @type.builtin
-    (#any-of? @type.builtin "int" "float" "complex" "bool" "list" "tuple" "range" "str" "bytes" "bytearray" "memoryview" "set" "frozenset" "dict"))
+   "abs" "all" "any" "ascii" "bin" "bool" "breakpoint" "bytearray" "bytes" "callable" "chr" "classmethod" "compile" "complex" "delattr" "dict" "dir" "divmod" "enumerate" "eval" "exec" "filter" "float" "format" "frozenset" "getattr" "globals" "hasattr" "hash" "help" "hex" "id" "input" "int" "isinstance" "issubclass" "iter" "len" "list" "locals" "map" "max" "memoryview" "min" "next" "object" "oct" "open" "ord" "pow" "print" "property" "range" "repr" "reversed" "round" "set" "setattr" "slice" "sorted" "staticmethod" "str" "sum" "super" "tuple" "type" "vars" "zip" "__import__"))
 
 ; Literals
 
 [
-  (none)
   (true)
   (false)
+] @boolean
+
+[
+  (none)
   (ellipsis)
 ] @constant.builtin
 
@@ -111,8 +128,14 @@
 [
   (parameters (identifier) @variable.special)
   (attribute (identifier) @variable.special)
-  (#match? @variable.special "^self|cls$")
+  (#any-of? @variable.special "self" "cls")
 ]
+
+[
+  "."
+  ","
+  ":"
+] @punctuation.delimiter
 
 [
   "("
@@ -128,6 +151,12 @@
   "}" @punctuation.special) @embedded
 
 ; Docstrings.
+([
+  (expression_statement (assignment))
+  (type_alias_statement)
+]
+. (expression_statement (string) @string.doc)+)
+
 (module
   .(expression_statement (string) @string.doc)+)
 
@@ -148,13 +177,6 @@
 
 (module
   . (comment) @comment*
-  . (expression_statement (string) @string.doc)+)
-
-(module
-  [
-    (expression_statement (assignment))
-    (type_alias_statement)
-  ]
   . (expression_statement (string) @string.doc)+)
 
 (class_definition
@@ -187,6 +209,7 @@
   "&"
   "%"
   "%="
+  "@"
   "^"
   "+"
   "->"
@@ -258,24 +281,18 @@
   "lambda"
 ] @keyword.definition
 
-((identifier) @attribute.builtin
+(decorator (identifier) @attribute.builtin
   (#any-of? @attribute.builtin "classmethod" "staticmethod" "property"))
 
 ; Builtin types as identifiers
 [
   (call
     function: (identifier) @type.builtin)
-  (call
-    arguments: (argument_list
-    (identifier) @type.builtin))
-  (call
-    arguments: (argument_list
-      (keyword_argument
-        value: (identifier) @type.builtin)))
   (type (identifier) @type.builtin)
+  (generic_type (identifier) @type.builtin)
   ; also check if type binary operator left identifier for union types
   (type
     (binary_operator
       left: (identifier) @type.builtin))
   (#any-of? @type.builtin "bool" "bytearray" "bytes" "complex" "dict" "float" "frozenset" "int" "list" "memoryview" "object" "range" "set" "slice" "str" "tuple")
-] @type.builtin
+]

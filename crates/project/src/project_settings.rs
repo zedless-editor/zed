@@ -1,33 +1,42 @@
 use anyhow::Context as _;
 use collections::HashMap;
+use context_server::ContextServerCommand;
+use dap::adapters::DebugAdapterName;
 use fs::Fs;
-use gpui::{App, AsyncApp, BorrowAppContext, Context, Entity, EventEmitter};
+use futures::StreamExt as _;
+use gpui::{App, AsyncApp, BorrowAppContext, Context, Entity, EventEmitter, Task};
 use lsp::LanguageServerName;
 use paths::{
-    local_settings_file_relative_path, local_tasks_file_relative_path,
-    local_vscode_tasks_file_relative_path, EDITORCONFIG_NAME,
+    EDITORCONFIG_NAME, local_debug_file_relative_path, local_settings_file_relative_path,
+    local_tasks_file_relative_path, local_vscode_launch_file_relative_path,
+    local_vscode_tasks_file_relative_path, task_file_name,
 };
 use rpc::{
-    proto::{self, FromProto, ToProto},
     AnyProtoClient, TypedEnvelope,
+    proto::{self, FromProto, ToProto},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{
-    parse_json_with_comments, InvalidSettingsError, LocalSettingsKind, Settings, SettingsLocation,
-    SettingsSources, SettingsStore,
+    InvalidSettingsError, LocalSettingsKind, Settings, SettingsLocation, SettingsSources,
+    SettingsStore, parse_json_with_comments, watch_config_file,
 };
-use std::{path::Path, sync::Arc, time::Duration};
-use task::{TaskTemplates, VsCodeTaskFile};
-use util::ResultExt;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
+use task::{DebugTaskFile, TaskTemplates, VsCodeDebugTaskFile, VsCodeTaskFile};
+use util::{ResultExt, serde::default_true};
 use worktree::{PathChange, UpdatedEntriesSet, Worktree, WorktreeId};
 
 use crate::{
-    task_store::TaskStore,
+    task_store::{TaskSettingsLocation, TaskStore},
     worktree_store::{WorktreeStore, WorktreeStoreEvent},
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct ProjectSettings {
     /// Configuration for language servers.
     ///
@@ -39,6 +48,18 @@ pub struct ProjectSettings {
     /// Default: null
     #[serde(default)]
     pub lsp: HashMap<LanguageServerName, LspSettings>,
+
+    /// Configuration for Debugger-related features
+    #[serde(default)]
+    pub dap: HashMap<DebugAdapterName, DapSettings>,
+
+    /// Settings for context servers used for AI-related features.
+    #[serde(default)]
+    pub context_servers: HashMap<Arc<str>, ContextServerConfiguration>,
+
+    /// Configuration for Diagnostics-related features.
+    #[serde(default)]
+    pub diagnostics: DiagnosticsSettings,
 
     /// Configuration for Git-related features
     #[serde(default)]
@@ -58,14 +79,33 @@ pub struct ProjectSettings {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct DapSettings {
+    pub binary: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, JsonSchema, Debug, Default)]
+pub struct ContextServerConfiguration {
+    /// The command to run this context server.
+    ///
+    /// This will override the command set by an extension.
+    pub command: Option<ContextServerCommand>,
+    /// The settings for this context server.
+    ///
+    /// Consult the documentation for the context server to see what settings
+    /// are supported.
+    pub settings: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct NodeBinarySettings {
-    /// The path to the node binary
+    /// The path to the Node binary.
     pub path: Option<String>,
-    ///  The path to the npm binary Zed should use (defaults to .path/../npm)
+    /// The path to the npm binary Zed should use (defaults to `.path/../npm`).
     pub npm_path: Option<String>,
-    /// If disabled, zed will download its own copy of node.
+    /// If enabled, Zed will download its own copy of Node.
     #[serde(default)]
-    pub ignore_system_version: Option<bool>,
+    pub ignore_system_version: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
@@ -76,6 +116,158 @@ pub enum DirenvSettings {
     /// Load direnv configuration directly using `direnv export json`
     #[default]
     Direct,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct DiagnosticsSettings {
+    /// Whether to show the project diagnostics button in the status bar.
+    pub button: bool,
+
+    /// Whether or not to include warning diagnostics.
+    pub include_warnings: bool,
+
+    /// Settings for using LSP pull diagnostics mechanism in Zed.
+    pub lsp_pull_diagnostics: LspPullDiagnosticsSettings,
+
+    /// Settings for showing inline diagnostics.
+    pub inline: InlineDiagnosticsSettings,
+
+    /// Configuration, related to Rust language diagnostics.
+    pub cargo: Option<CargoDiagnosticsSettings>,
+}
+
+impl DiagnosticsSettings {
+    pub fn fetch_cargo_diagnostics(&self) -> bool {
+        self.cargo.as_ref().map_or(false, |cargo_diagnostics| {
+            cargo_diagnostics.fetch_cargo_diagnostics
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct LspPullDiagnosticsSettings {
+    /// Whether to pull for diagnostics or not.
+    ///
+    /// Default: true
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Minimum time to wait before pulling diagnostics from the language server(s).
+    /// 0 turns the debounce off.
+    ///
+    /// Default: 50
+    #[serde(default = "default_lsp_diagnostics_pull_debounce_ms")]
+    pub debounce_ms: u64,
+}
+
+fn default_lsp_diagnostics_pull_debounce_ms() -> u64 {
+    50
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct InlineDiagnosticsSettings {
+    /// Whether or not to show inline diagnostics
+    ///
+    /// Default: false
+    pub enabled: bool,
+    /// Whether to only show the inline diagnostics after a delay after the
+    /// last editor event.
+    ///
+    /// Default: 150
+    #[serde(default = "default_inline_diagnostics_update_debounce_ms")]
+    pub update_debounce_ms: u64,
+    /// The amount of padding between the end of the source line and the start
+    /// of the inline diagnostic in units of columns.
+    ///
+    /// Default: 4
+    #[serde(default = "default_inline_diagnostics_padding")]
+    pub padding: u32,
+    /// The minimum column to display inline diagnostics. This setting can be
+    /// used to horizontally align inline diagnostics at some position. Lines
+    /// longer than this value will still push diagnostics further to the right.
+    ///
+    /// Default: 0
+    pub min_column: u32,
+
+    pub max_severity: Option<DiagnosticSeverity>,
+}
+
+fn default_inline_diagnostics_update_debounce_ms() -> u64 {
+    150
+}
+
+fn default_inline_diagnostics_padding() -> u32 {
+    4
+}
+
+impl Default for DiagnosticsSettings {
+    fn default() -> Self {
+        Self {
+            button: true,
+            include_warnings: true,
+            lsp_pull_diagnostics: LspPullDiagnosticsSettings::default(),
+            inline: InlineDiagnosticsSettings::default(),
+            cargo: None,
+        }
+    }
+}
+
+impl Default for LspPullDiagnosticsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            debounce_ms: default_lsp_diagnostics_pull_debounce_ms(),
+        }
+    }
+}
+
+impl Default for InlineDiagnosticsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            update_debounce_ms: default_inline_diagnostics_update_debounce_ms(),
+            padding: default_inline_diagnostics_padding(),
+            min_column: 0,
+            max_severity: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub struct CargoDiagnosticsSettings {
+    /// When enabled, Zed disables rust-analyzer's check on save and starts to query
+    /// Cargo diagnostics separately.
+    ///
+    /// Default: false
+    #[serde(default)]
+    pub fetch_cargo_diagnostics: bool,
+}
+
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticSeverity {
+    // No diagnostics are shown.
+    Off,
+    Error,
+    Warning,
+    Info,
+    Hint,
+}
+
+impl DiagnosticSeverity {
+    pub fn into_lsp(self) -> Option<lsp::DiagnosticSeverity> {
+        match self {
+            DiagnosticSeverity::Off => None,
+            DiagnosticSeverity::Error => Some(lsp::DiagnosticSeverity::ERROR),
+            DiagnosticSeverity::Warning => Some(lsp::DiagnosticSeverity::WARNING),
+            DiagnosticSeverity::Info => Some(lsp::DiagnosticSeverity::INFORMATION),
+            DiagnosticSeverity::Hint => Some(lsp::DiagnosticSeverity::HINT),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
@@ -93,6 +285,10 @@ pub struct GitSettings {
     ///
     /// Default: on
     pub inline_blame: Option<InlineBlameSettings>,
+    /// How hunks are displayed visually in the editor.
+    ///
+    /// Default: staged_hollow
+    pub hunk_style: Option<GitHunkStyleSetting>,
 }
 
 impl GitSettings {
@@ -127,6 +323,16 @@ impl GitSettings {
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum GitHunkStyleSetting {
+    /// Show unstaged hunks with a filled background and staged hunks hollow.
+    #[default]
+    StagedHollow,
+    /// Show unstaged hunks hollow and staged hunks with a filled background.
+    UnstagedHollow,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum GitGutterSetting {
     /// Show git gutter in tracked files.
     #[default]
@@ -142,7 +348,7 @@ pub struct InlineBlameSettings {
     /// the currently focused line.
     ///
     /// Default: true
-    #[serde(default = "true_value")]
+    #[serde(default = "default_true")]
     pub enabled: bool,
     /// Whether to only show the inline blame information
     /// after a delay once the cursor stops moving.
@@ -156,31 +362,41 @@ pub struct InlineBlameSettings {
     /// Whether to show commit summary as part of the inline blame.
     ///
     /// Default: false
-    #[serde(default = "false_value")]
+    #[serde(default)]
     pub show_commit_summary: bool,
-}
-
-const fn true_value() -> bool {
-    true
-}
-
-const fn false_value() -> bool {
-    false
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct BinarySettings {
     pub path: Option<String>,
     pub arguments: Option<Vec<String>>,
+    // this can't be an FxHashMap because the extension APIs require the default SipHash
+    pub env: Option<std::collections::HashMap<String, String>>,
     pub ignore_system_version: Option<bool>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct LspSettings {
     pub binary: Option<BinarySettings>,
     pub initialization_options: Option<serde_json::Value>,
     pub settings: Option<serde_json::Value>,
+    /// If the server supports sending tasks over LSP extensions,
+    /// this setting can be used to enable or disable them in Zed.
+    /// Default: true
+    #[serde(default = "default_true")]
+    pub enable_lsp_tasks: bool,
+}
+
+impl Default for LspSettings {
+    fn default() -> Self {
+        Self {
+            binary: None,
+            initialization_options: None,
+            settings: None,
+            enable_lsp_tasks: true,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -210,6 +426,66 @@ impl Settings for ProjectSettings {
     fn load(sources: SettingsSources<Self::FileContent>, _: &mut App) -> anyhow::Result<Self> {
         sources.json_merge()
     }
+
+    fn import_from_vscode(vscode: &settings::VsCodeSettings, current: &mut Self::FileContent) {
+        // this just sets the binary name instead of a full path so it relies on path lookup
+        // resolving to the one you want
+        vscode.enum_setting(
+            "npm.packageManager",
+            &mut current.node.npm_path,
+            |s| match s {
+                v @ ("npm" | "yarn" | "bun" | "pnpm") => Some(v.to_owned()),
+                _ => None,
+            },
+        );
+
+        if let Some(b) = vscode.read_bool("git.blame.editorDecoration.enabled") {
+            if let Some(blame) = current.git.inline_blame.as_mut() {
+                blame.enabled = b
+            } else {
+                current.git.inline_blame = Some(InlineBlameSettings {
+                    enabled: b,
+                    ..Default::default()
+                })
+            }
+        }
+
+        #[derive(Deserialize)]
+        struct VsCodeContextServerCommand {
+            command: String,
+            args: Option<Vec<String>>,
+            env: Option<HashMap<String, String>>,
+            // note: we don't support envFile and type
+        }
+        impl From<VsCodeContextServerCommand> for ContextServerCommand {
+            fn from(cmd: VsCodeContextServerCommand) -> Self {
+                Self {
+                    path: cmd.command,
+                    args: cmd.args.unwrap_or_default(),
+                    env: cmd.env,
+                }
+            }
+        }
+        if let Some(mcp) = vscode.read_value("mcp").and_then(|v| v.as_object()) {
+            current
+                .context_servers
+                .extend(mcp.iter().filter_map(|(k, v)| {
+                    Some((
+                        k.clone().into(),
+                        ContextServerConfiguration {
+                            command: Some(
+                                serde_json::from_value::<VsCodeContextServerCommand>(v.clone())
+                                    .ok()?
+                                    .into(),
+                            ),
+                            settings: None,
+                        },
+                    ))
+                }));
+        }
+
+        // TODO: translate lsp settings for rust-analyzer and other popular ones to old.lsp
+    }
 }
 
 pub enum SettingsObserverMode {
@@ -219,7 +495,8 @@ pub enum SettingsObserverMode {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SettingsObserverEvent {
-    LocalSettingsUpdated(Result<(), InvalidSettingsError>),
+    LocalSettingsUpdated(Result<PathBuf, InvalidSettingsError>),
+    LocalTasksUpdated(Result<PathBuf, InvalidSettingsError>),
 }
 
 impl EventEmitter<SettingsObserverEvent> for SettingsObserver {}
@@ -230,6 +507,7 @@ pub struct SettingsObserver {
     worktree_store: Entity<WorktreeStore>,
     project_id: u64,
     task_store: Entity<TaskStore>,
+    _global_task_config_watcher: Task<()>,
 }
 
 /// SettingsObserver observers changes to .zed/{settings, task}.json files in local worktrees
@@ -254,16 +532,22 @@ impl SettingsObserver {
         Self {
             worktree_store,
             task_store,
-            mode: SettingsObserverMode::Local(fs),
+            mode: SettingsObserverMode::Local(fs.clone()),
             downstream_client: None,
             project_id: 0,
+            _global_task_config_watcher: Self::subscribe_to_global_task_file_changes(
+                fs.clone(),
+                paths::tasks_file().clone(),
+                cx,
+            ),
         }
     }
 
     pub fn new_remote(
+        fs: Arc<dyn Fs>,
         worktree_store: Entity<WorktreeStore>,
         task_store: Entity<TaskStore>,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Self {
         Self {
             worktree_store,
@@ -271,6 +555,11 @@ impl SettingsObserver {
             mode: SettingsObserverMode::Remote,
             downstream_client: None,
             project_id: 0,
+            _global_task_config_watcher: Self::subscribe_to_global_task_file_changes(
+                fs.clone(),
+                paths::tasks_file().clone(),
+                cx,
+            ),
         }
     }
 
@@ -411,6 +700,30 @@ impl SettingsObserver {
                         .unwrap(),
                 );
                 (settings_dir, LocalSettingsKind::Tasks)
+            } else if path.ends_with(local_debug_file_relative_path()) {
+                let settings_dir = Arc::<Path>::from(
+                    path.ancestors()
+                        .nth(
+                            local_debug_file_relative_path()
+                                .components()
+                                .count()
+                                .saturating_sub(1),
+                        )
+                        .unwrap(),
+                );
+                (settings_dir, LocalSettingsKind::Debug)
+            } else if path.ends_with(local_vscode_launch_file_relative_path()) {
+                let settings_dir = Arc::<Path>::from(
+                    path.ancestors()
+                        .nth(
+                            local_vscode_tasks_file_relative_path()
+                                .components()
+                                .count()
+                                .saturating_sub(1),
+                        )
+                        .unwrap(),
+                );
+                (settings_dir, LocalSettingsKind::Debug)
             } else if path.ends_with(EDITORCONFIG_NAME) {
                 let Some(settings_dir) = path.parent().map(Arc::from) else {
                     continue;
@@ -456,6 +769,23 @@ impl SettingsObserver {
                                             "serializing Zed tasks into JSON, file {abs_path:?}"
                                         )
                                     })
+                                } else if abs_path.ends_with(local_vscode_launch_file_relative_path()) {
+                                    let vscode_tasks =
+                                        parse_json_with_comments::<VsCodeDebugTaskFile>(&content)
+                                            .with_context(|| {
+                                                format!("parsing VSCode debug tasks, file {abs_path:?}")
+                                            })?;
+                                    let zed_tasks = DebugTaskFile::try_from(vscode_tasks)
+                                        .with_context(|| {
+                                            format!(
+                                        "converting VSCode debug tasks into Zed ones, file {abs_path:?}"
+                                    )
+                                        })?;
+                                    serde_json::to_string(&zed_tasks).with_context(|| {
+                                        format!(
+                                            "serializing Zed tasks into JSON, file {abs_path:?}"
+                                        )
+                                    })
                                 } else {
                                     Ok(content)
                                 }
@@ -472,7 +802,7 @@ impl SettingsObserver {
         }
 
         let worktree = worktree.clone();
-        cx.spawn(move |this, cx| async move {
+        cx.spawn(async move |this, cx| {
             let settings_contents: Vec<(Arc<Path>, _, _)> =
                 futures::future::join_all(settings_contents).await;
             cx.update(|cx| {
@@ -514,11 +844,7 @@ impl SettingsObserver {
 
                         match result {
                             Err(InvalidSettingsError::LocalSettings { path, message }) => {
-                                log::error!(
-                                    "Failed to set local settings in {:?}: {:?}",
-                                    path,
-                                    message
-                                );
+                                log::error!("Failed to set local settings in {path:?}: {message}");
                                 cx.emit(SettingsObserverEvent::LocalSettingsUpdated(Err(
                                     InvalidSettingsError::LocalSettings { path, message },
                                 )));
@@ -526,23 +852,73 @@ impl SettingsObserver {
                             Err(e) => {
                                 log::error!("Failed to set local settings: {e}");
                             }
-                            Ok(_) => {
-                                cx.emit(SettingsObserverEvent::LocalSettingsUpdated(Ok(())));
+                            Ok(()) => {
+                                cx.emit(SettingsObserverEvent::LocalSettingsUpdated(Ok(
+                                    directory.join(local_settings_file_relative_path())
+                                )));
                             }
                         }
                     }),
-                LocalSettingsKind::Tasks => task_store.update(cx, |task_store, cx| {
-                    task_store
-                        .update_user_tasks(
-                            Some(SettingsLocation {
+                LocalSettingsKind::Tasks => {
+                    let result = task_store.update(cx, |task_store, cx| {
+                        task_store.update_user_tasks(
+                            TaskSettingsLocation::Worktree(SettingsLocation {
                                 worktree_id,
                                 path: directory.as_ref(),
                             }),
                             file_content.as_deref(),
                             cx,
                         )
-                        .log_err();
-                }),
+                    });
+
+                    match result {
+                        Err(InvalidSettingsError::Tasks { path, message }) => {
+                            log::error!("Failed to set local tasks in {path:?}: {message:?}");
+                            cx.emit(SettingsObserverEvent::LocalTasksUpdated(Err(
+                                InvalidSettingsError::Tasks { path, message },
+                            )));
+                        }
+                        Err(e) => {
+                            log::error!("Failed to set local tasks: {e}");
+                        }
+                        Ok(()) => {
+                            cx.emit(SettingsObserverEvent::LocalTasksUpdated(Ok(
+                                directory.join(task_file_name())
+                            )));
+                        }
+                    }
+                }
+                LocalSettingsKind::Debug => {
+                    let result = task_store.update(cx, |task_store, cx| {
+                        task_store.update_user_debug_scenarios(
+                            TaskSettingsLocation::Worktree(SettingsLocation {
+                                worktree_id,
+                                path: directory.as_ref(),
+                            }),
+                            file_content.as_deref(),
+                            cx,
+                        )
+                    });
+
+                    match result {
+                        Err(InvalidSettingsError::Debug { path, message }) => {
+                            log::error!(
+                                "Failed to set local debug scenarios in {path:?}: {message:?}"
+                            );
+                            cx.emit(SettingsObserverEvent::LocalTasksUpdated(Err(
+                                InvalidSettingsError::Debug { path, message },
+                            )));
+                        }
+                        Err(e) => {
+                            log::error!("Failed to set local tasks: {e}");
+                        }
+                        Ok(()) => {
+                            cx.emit(SettingsObserverEvent::LocalTasksUpdated(Ok(
+                                directory.join(task_file_name())
+                            )));
+                        }
+                    }
+                }
             };
 
             if let Some(downstream_client) = &self.downstream_client {
@@ -558,6 +934,62 @@ impl SettingsObserver {
             }
         }
     }
+
+    fn subscribe_to_global_task_file_changes(
+        fs: Arc<dyn Fs>,
+        file_path: PathBuf,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        let mut user_tasks_file_rx =
+            watch_config_file(&cx.background_executor(), fs, file_path.clone());
+        let user_tasks_content = cx.background_executor().block(user_tasks_file_rx.next());
+        let weak_entry = cx.weak_entity();
+        cx.spawn(async move |settings_observer, cx| {
+            let Ok(task_store) = settings_observer.read_with(cx, |settings_observer, _| {
+                settings_observer.task_store.clone()
+            }) else {
+                return;
+            };
+            if let Some(user_tasks_content) = user_tasks_content {
+                let Ok(()) = task_store.update(cx, |task_store, cx| {
+                    task_store
+                        .update_user_tasks(
+                            TaskSettingsLocation::Global(&file_path),
+                            Some(&user_tasks_content),
+                            cx,
+                        )
+                        .log_err();
+                }) else {
+                    return;
+                };
+            }
+            while let Some(user_tasks_content) = user_tasks_file_rx.next().await {
+                let Ok(result) = task_store.update(cx, |task_store, cx| {
+                    task_store.update_user_tasks(
+                        TaskSettingsLocation::Global(&file_path),
+                        Some(&user_tasks_content),
+                        cx,
+                    )
+                }) else {
+                    break;
+                };
+
+                weak_entry
+                    .update(cx, |_, cx| match result {
+                        Ok(()) => cx.emit(SettingsObserverEvent::LocalTasksUpdated(Ok(
+                            file_path.clone()
+                        ))),
+                        Err(err) => cx.emit(SettingsObserverEvent::LocalTasksUpdated(Err(
+                            InvalidSettingsError::Tasks {
+                                path: file_path.clone(),
+                                message: err.to_string(),
+                            },
+                        ))),
+                    })
+                    .ok();
+            }
+        })
+    }
 }
 
 pub fn local_settings_kind_from_proto(kind: proto::LocalSettingsKind) -> LocalSettingsKind {
@@ -565,6 +997,7 @@ pub fn local_settings_kind_from_proto(kind: proto::LocalSettingsKind) -> LocalSe
         proto::LocalSettingsKind::Settings => LocalSettingsKind::Settings,
         proto::LocalSettingsKind::Tasks => LocalSettingsKind::Tasks,
         proto::LocalSettingsKind::Editorconfig => LocalSettingsKind::Editorconfig,
+        proto::LocalSettingsKind::Debug => LocalSettingsKind::Debug,
     }
 }
 
@@ -573,5 +1006,6 @@ pub fn local_settings_kind_to_proto(kind: LocalSettingsKind) -> proto::LocalSett
         LocalSettingsKind::Settings => proto::LocalSettingsKind::Settings,
         LocalSettingsKind::Tasks => proto::LocalSettingsKind::Tasks,
         LocalSettingsKind::Editorconfig => proto::LocalSettingsKind::Editorconfig,
+        LocalSettingsKind::Debug => proto::LocalSettingsKind::Debug,
     }
 }

@@ -60,8 +60,8 @@ use runtimelib::media::datatable::TabularDataResource;
 use serde_json::Value;
 use settings::Settings;
 use theme::ThemeSettings;
-use ui::{div, prelude::*, v_flex, IntoElement, Styled};
-use util::markdown::MarkdownString;
+use ui::{IntoElement, Styled, div, prelude::*, v_flex};
+use util::markdown::MarkdownEscaped;
 
 use crate::outputs::OutputContent;
 
@@ -94,7 +94,7 @@ impl TableView {
         let text_system = window.text_system();
         let text_style = window.text_style();
         let text_font = ThemeSettings::get_global(cx).buffer_font.clone();
-        let font_size = ThemeSettings::get_global(cx).buffer_font_size;
+        let font_size = ThemeSettings::get_global(cx).buffer_font_size(cx);
         let mut runs = [TextRun {
             len: 0,
             font: text_font,
@@ -106,10 +106,7 @@ impl TableView {
 
         for field in table.schema.fields.iter() {
             runs[0].len = field.name.len();
-            let mut width = text_system
-                .layout_line(&field.name, font_size, &runs)
-                .map(|layout| layout.width)
-                .unwrap_or(px(0.));
+            let mut width = text_system.layout_line(&field.name, font_size, &runs).width;
 
             let Some(data) = table.data.as_ref() else {
                 widths.push(width);
@@ -122,8 +119,7 @@ impl TableView {
                 let cell_width = window
                     .text_system()
                     .layout_line(&content, font_size, &runs)
-                    .map(|layout| layout.width)
-                    .unwrap_or(px(0.));
+                    .width;
 
                 width = width.max(cell_width)
             }
@@ -170,7 +166,7 @@ impl TableView {
                 let row_content = schema
                     .fields
                     .iter()
-                    .map(|field| MarkdownString::escape(&cell_content(record, &field.name)).0)
+                    .map(|field| MarkdownEscaped(&cell_content(record, &field.name)).to_string())
                     .collect::<Vec<_>>();
 
                 row_content.join(" | ")

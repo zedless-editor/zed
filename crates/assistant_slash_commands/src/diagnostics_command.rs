@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Context as _, Result, anyhow};
 use assistant_slash_command::{
     ArgumentCompletion, SlashCommand, SlashCommandOutput, SlashCommandOutputSection,
     SlashCommandResult,
@@ -14,11 +14,11 @@ use rope::Point;
 use std::{
     fmt::Write,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
 };
 use ui::prelude::*;
-use util::paths::PathMatcher;
 use util::ResultExt;
+use util::paths::PathMatcher;
 use workspace::Workspace;
 
 use crate::create_label_for_command;
@@ -129,7 +129,7 @@ impl SlashCommand for DiagnosticsSlashCommand {
 
         let paths = self.search_paths(query.clone(), cancellation_flag.clone(), &workspace, cx);
         let executor = cx.background_executor().clone();
-        cx.background_executor().spawn(async move {
+        cx.background_spawn(async move {
             let mut matches: Vec<String> = paths
                 .await
                 .into_iter()
@@ -186,10 +186,10 @@ impl SlashCommand for DiagnosticsSlashCommand {
 
         let task = collect_diagnostics(workspace.read(cx).project().clone(), options, cx);
 
-        window.spawn(cx, move |_| async move {
+        window.spawn(cx, async move |_| {
             task.await?
                 .map(|output| output.to_event_stream())
-                .ok_or_else(|| anyhow!("No diagnostics found"))
+                .context("No diagnostics found")
         })
     }
 }
@@ -268,7 +268,7 @@ fn collect_diagnostics(
         })
         .collect();
 
-    cx.spawn(|mut cx| async move {
+    cx.spawn(async move |cx| {
         let mut output = SlashCommandOutput::default();
 
         if let Some(error_source) = error_source.as_ref() {
@@ -299,7 +299,7 @@ fn collect_diagnostics(
             }
 
             if let Some(buffer) = project_handle
-                .update(&mut cx, |project, cx| project.open_buffer(project_path, cx))?
+                .update(cx, |project, cx| project.open_buffer(project_path, cx))?
                 .await
                 .log_err()
             {

@@ -74,19 +74,6 @@ in
   rustPlatform.buildRustPackage {
     inherit pname version src;
 
-    patches = [
-      # Zed uses cargo-install to install cargo-about during the script execution.
-      # We provide cargo-about ourselves and can skip this step.
-      # Until https://github.com/zed-industries/zed/issues/19971 is fixed,
-      # we also skip any crate for which the license cannot be determined.
-      (fetchpatch {
-        url = "https://raw.githubusercontent.com/NixOS/nixpkgs/1fd02d90c6c097f91349df35da62d36c19359ba7/pkgs/by-name/ze/zed-editor/0001-generate-licenses.patch";
-        hash = "sha256-cLgqLDXW1JtQ2OQFLd5UolAjfy7bMoTw40lEx2jA2pk=";
-      })
-      # See https://github.com/zed-industries/zed/pull/21661#issuecomment-2524161840
-      "script/patches/use-cross-platform-livekit.patch"
-    ];
-
     outputs = ["out"] ++ lib.optional buildRemoteServer "remote_server";
 
     # Dynamically link WebRTC instead of static
@@ -96,7 +83,7 @@ in
     '';
 
     useFetchCargoVendor = true;
-    cargoHash = "sha256-yH9OVEAxAzP5tWWzmXoiouqJ6fukfmG6dKK0Y1Cka8s=";
+    cargoHash = "sha256-E6Sk3R8IjUMX72Jmbop5C39DnEtWX54/GqgGfVeBJMk=";
 
     nativeBuildInputs =
       [
@@ -154,6 +141,10 @@ in
     buildFeatures = lib.optionals stdenv.hostPlatform.isDarwin ["gpui/runtime_shaders"];
 
     env = {
+      RUSTFLAGS = lib.concatStringsSep " " ([
+        "-C link-arg=-Wl,-rpath,${lib.makeLibraryPath [ wayland gpu-lib ]}"
+      ] ++ lib.optional withGLES "--cfg gles");
+      ALLOW_MISSING_LICENSES = true;
       ZSTD_SYS_USE_PKG_CONFIG = true;
       FONTCONFIG_FILE = makeFontsConf {
         fontDirectories = [
@@ -168,11 +159,6 @@ in
       RELEASE_VERSION = version;
       LK_CUSTOM_WEBRTC = livekit-libwebrtc;
     };
-
-    RUSTFLAGS =
-      if withGLES
-      then "--cfg gles"
-      else "";
 
     preBuild = ''
       bash script/generate-licenses

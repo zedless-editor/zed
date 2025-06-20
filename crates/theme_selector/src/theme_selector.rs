@@ -1,33 +1,37 @@
 mod icon_theme_selector;
 
 use fs::Fs;
-use fuzzy::{match_strings, StringMatch, StringMatchCandidate};
+use fuzzy::{StringMatch, StringMatchCandidate, match_strings};
 use gpui::{
-    actions, App, Context, DismissEvent, Entity, EventEmitter, Focusable, Render, UpdateGlobal,
-    WeakEntity, Window,
+    App, Context, DismissEvent, Entity, EventEmitter, Focusable, Render, UpdateGlobal, WeakEntity,
+    Window, actions,
 };
 use picker::{Picker, PickerDelegate};
-use settings::{update_settings_file, SettingsStore};
+use settings::{SettingsStore, update_settings_file};
 use std::sync::Arc;
 use theme::{Appearance, Theme, ThemeMeta, ThemeRegistry, ThemeSettings};
-use ui::{prelude::*, v_flex, ListItem, ListItemSpacing};
+use ui::{ListItem, ListItemSpacing, prelude::*, v_flex};
 use util::ResultExt;
-use workspace::{ui::HighlightedLabel, ModalView, Workspace};
-use zed_actions::Extensions;
+use workspace::{ModalView, Workspace, ui::HighlightedLabel, with_active_or_new_workspace};
+use zed_actions::{ExtensionCategoryFilter, Extensions};
 
 use crate::icon_theme_selector::{IconThemeSelector, IconThemeSelectorDelegate};
 
 actions!(theme_selector, [Reload]);
 
 pub fn init(cx: &mut App) {
-    cx.observe_new(
-        |workspace: &mut Workspace, _window, _cx: &mut Context<Workspace>| {
-            workspace
-                .register_action(toggle_theme_selector)
-                .register_action(toggle_icon_theme_selector);
-        },
-    )
-    .detach();
+    cx.on_action(|action: &zed_actions::theme_selector::Toggle, cx| {
+        let action = action.clone();
+        with_active_or_new_workspace(cx, move |workspace, window, cx| {
+            toggle_theme_selector(workspace, &action, window, cx);
+        });
+    });
+    cx.on_action(|action: &zed_actions::icon_theme_selector::Toggle, cx| {
+        let action = action.clone();
+        with_active_or_new_workspace(cx, move |workspace, window, cx| {
+            toggle_icon_theme_selector(workspace, &action, window, cx);
+        });
+    });
 }
 
 fn toggle_theme_selector(
@@ -103,6 +107,7 @@ struct ThemeSelectorDelegate {
     matches: Vec<StringMatch>,
     original_theme: Arc<Theme>,
     selection_completed: bool,
+    selected_theme: Option<Arc<Theme>>,
     selected_index: usize,
     selector: WeakEntity<ThemeSelector>,
 }
@@ -151,6 +156,7 @@ impl ThemeSelectorDelegate {
             original_theme: original_theme.clone(),
             selected_index: 0,
             selection_completed: false,
+            selected_theme: None,
             selector,
         };
 
@@ -158,17 +164,24 @@ impl ThemeSelectorDelegate {
         this
     }
 
-    fn show_selected_theme(&mut self, cx: &mut Context<Picker<ThemeSelectorDelegate>>) {
+    fn show_selected_theme(
+        &mut self,
+        cx: &mut Context<Picker<ThemeSelectorDelegate>>,
+    ) -> Option<Arc<Theme>> {
         if let Some(mat) = self.matches.get(self.selected_index) {
             let registry = ThemeRegistry::global(cx);
             match registry.get(&mat.string) {
                 Ok(theme) => {
-                    Self::set_theme(theme, cx);
+                    Self::set_theme(theme.clone(), cx);
+                    Some(theme)
                 }
                 Err(error) => {
-                    log::error!("error loading theme {}: {}", mat.string, error)
+                    log::error!("error loading theme {}: {}", mat.string, error);
+                    None
                 }
             }
+        } else {
+            None
         }
     }
 
@@ -249,7 +262,7 @@ impl PickerDelegate for ThemeSelectorDelegate {
         cx: &mut Context<Picker<ThemeSelectorDelegate>>,
     ) {
         self.selected_index = ix;
-        self.show_selected_theme(cx);
+        self.selected_theme = self.show_selected_theme(cx);
     }
 
     fn update_matches(
@@ -266,7 +279,7 @@ impl PickerDelegate for ThemeSelectorDelegate {
             .map(|(id, meta)| StringMatchCandidate::new(id, &meta.name))
             .collect::<Vec<_>>();
 
-        cx.spawn_in(window, |this, mut cx| async move {
+        cx.spawn_in(window, async move |this, cx| {
             let matches = if query.is_empty() {
                 candidates
                     .into_iter()
@@ -290,13 +303,26 @@ impl PickerDelegate for ThemeSelectorDelegate {
                 .await
             };
 
-            this.update(&mut cx, |this, cx| {
+            this.update(cx, |this, cx| {
                 this.delegate.matches = matches;
-                this.delegate.selected_index = this
-                    .delegate
-                    .selected_index
-                    .min(this.delegate.matches.len().saturating_sub(1));
-                this.delegate.show_selected_theme(cx);
+                if query.is_empty() && this.delegate.selected_theme.is_none() {
+                    this.delegate.selected_index = this
+                        .delegate
+                        .selected_index
+                        .min(this.delegate.matches.len().saturating_sub(1));
+                } else if let Some(selected) = this.delegate.selected_theme.as_ref() {
+                    this.delegate.selected_index = this
+                        .delegate
+                        .matches
+                        .iter()
+                        .enumerate()
+                        .find(|(_, mtch)| mtch.string == selected.name)
+                        .map(|(ix, _)| ix)
+                        .unwrap_or_default();
+                } else {
+                    this.delegate.selected_index = 0;
+                }
+                this.delegate.selected_theme = this.delegate.show_selected_theme(cx);
             })
             .log_err();
         })
@@ -330,21 +356,31 @@ impl PickerDelegate for ThemeSelectorDelegate {
     ) -> Option<gpui::AnyElement> {
         Some(
             h_flex()
-                .w_full()
                 .p_2()
+                .w_full()
+                .justify_between()
                 .gap_2()
                 .border_t_1()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
-                    Button::new("docs", "Theme Docs").on_click(cx.listener(|_, _, _, cx| {
-                        cx.open_url("https://zed.dev/docs/themes");
-                    })),
+                    Button::new("docs", "View Theme Docs")
+                        .icon(IconName::ArrowUpRight)
+                        .icon_position(IconPosition::End)
+                        .icon_size(IconSize::XSmall)
+                        .icon_color(Color::Muted)
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.open_url("https://zed.dev/docs/themes");
+                        })),
                 )
-                .child(div().flex_grow())
                 .child(
                     Button::new("more-themes", "Install Themes").on_click(cx.listener({
                         move |_, _, window, cx| {
-                            window.dispatch_action(Box::new(Extensions), cx);
+                            window.dispatch_action(
+                                Box::new(Extensions {
+                                    category_filter: Some(ExtensionCategoryFilter::Themes),
+                                }),
+                                cx,
+                            );
                         }
                     })),
                 )

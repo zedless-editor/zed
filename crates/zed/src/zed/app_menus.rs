@@ -35,7 +35,7 @@ pub fn app_menus() -> Vec<Menu> {
                     items: vec![],
                 }),
                 MenuItem::separator(),
-                MenuItem::action("Extensions", zed_actions::Extensions),
+                MenuItem::action("Extensions", zed_actions::Extensions::default()),
                 MenuItem::action("Install CLI", install_cli::Install),
                 MenuItem::separator(),
                 #[cfg(target_os = "macos")]
@@ -44,7 +44,8 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Hide Others", super::HideOthers),
                 #[cfg(target_os = "macos")]
                 MenuItem::action("Show All", super::ShowAll),
-                MenuItem::action("Quit", Quit),
+                MenuItem::separator(),
+                MenuItem::action("Quit Zed", Quit),
             ],
         },
         Menu {
@@ -66,14 +67,23 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::action(
                     "Open Recent...",
                     zed_actions::OpenRecent {
-                        create_new_window: true,
+                        create_new_window: false,
+                    },
+                ),
+                MenuItem::action(
+                    "Open Remote...",
+                    zed_actions::OpenRemote {
+                        create_new_window: false,
+                        from_existing_connection: false,
                     },
                 ),
                 MenuItem::separator(),
                 MenuItem::action("Add Folder to Project…", workspace::AddFolderToProject),
+                MenuItem::separator(),
                 MenuItem::action("Save", workspace::Save { save_intent: None }),
                 MenuItem::action("Save As…", workspace::SaveAs),
                 MenuItem::action("Save All", workspace::SaveAll { save_intent: None }),
+                MenuItem::separator(),
                 MenuItem::action(
                     "Close Editor",
                     workspace::CloseActiveItem {
@@ -92,6 +102,7 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::os_action("Cut", editor::actions::Cut, OsAction::Cut),
                 MenuItem::os_action("Copy", editor::actions::Copy, OsAction::Copy),
+                MenuItem::action("Copy and Trim", editor::actions::CopyAndTrim),
                 MenuItem::os_action("Paste", editor::actions::Paste, OsAction::Paste),
                 MenuItem::separator(),
                 MenuItem::action("Find", search::buffer_search::Deploy::find()),
@@ -131,9 +142,18 @@ pub fn app_menus() -> Vec<Menu> {
         Menu {
             name: "View".into(),
             items: vec![
-                MenuItem::action("Zoom In", zed_actions::IncreaseBufferFontSize),
-                MenuItem::action("Zoom Out", zed_actions::DecreaseBufferFontSize),
-                MenuItem::action("Reset Zoom", zed_actions::ResetBufferFontSize),
+                MenuItem::action(
+                    "Zoom In",
+                    zed_actions::IncreaseBufferFontSize { persist: true },
+                ),
+                MenuItem::action(
+                    "Zoom Out",
+                    zed_actions::DecreaseBufferFontSize { persist: true },
+                ),
+                MenuItem::action(
+                    "Reset Zoom",
+                    zed_actions::ResetBufferFontSize { persist: true },
+                ),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Left Dock", workspace::ToggleLeftDock),
                 MenuItem::action("Toggle Right Dock", workspace::ToggleRightDock),
@@ -180,7 +200,31 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Find All References", editor::actions::FindAllReferences),
                 MenuItem::separator(),
                 MenuItem::action("Next Problem", editor::actions::GoToDiagnostic),
-                MenuItem::action("Previous Problem", editor::actions::GoToPrevDiagnostic),
+                MenuItem::action("Previous Problem", editor::actions::GoToPreviousDiagnostic),
+            ],
+        },
+        Menu {
+            name: "Run".into(),
+            items: vec![
+                MenuItem::action(
+                    "Spawn Task",
+                    zed_actions::Spawn::ViaModal {
+                        reveal_target: None,
+                    },
+                ),
+                MenuItem::action("Start Debugger", debugger_ui::Start),
+                MenuItem::separator(),
+                MenuItem::action("Edit tasks.json...", crate::zed::OpenProjectTasks),
+                MenuItem::action("Edit debug.json...", crate::zed::OpenProjectDebugTasks),
+                MenuItem::separator(),
+                MenuItem::action("Continue", debugger_ui::Continue),
+                MenuItem::action("Step Over", debugger_ui::StepOver),
+                MenuItem::action("Step Into", debugger_ui::StepInto),
+                MenuItem::action("Step Out", debugger_ui::StepOut),
+                MenuItem::separator(),
+                MenuItem::action("Toggle Breakpoint", editor::actions::ToggleBreakpoint),
+                MenuItem::action("Edit Breakpoint", editor::actions::EditLogBreakpoint),
+                MenuItem::action("Clear all Breakpoints", debugger_ui::ClearAllBreakpoints),
             ],
         },
         Menu {
@@ -194,6 +238,10 @@ pub fn app_menus() -> Vec<Menu> {
         Menu {
             name: "Help".into(),
             items: vec![
+                MenuItem::action(
+                    "View Release Notes",
+                    auto_update_ui::ViewReleaseNotesLocally,
+                ),
                 MenuItem::action("View Telemetry", zed_actions::OpenTelemetryLog),
                 MenuItem::action("View Dependency Licenses", zed_actions::OpenLicenses),
                 MenuItem::action("Show Welcome", workspace::Welcome),

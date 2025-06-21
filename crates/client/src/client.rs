@@ -2,7 +2,6 @@
 pub mod test;
 
 mod proxy;
-pub mod telemetry;
 pub mod user;
 pub mod zed_urls;
 
@@ -45,14 +44,12 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use telemetry::Telemetry;
 use thiserror::Error;
 use tokio::net::TcpStream;
 use url::Url;
 use util::{ConnectionResult, ResultExt};
 
 pub use rpc::*;
-pub use telemetry_events::Event;
 pub use user::*;
 
 static ZED_SERVER_URL: LazyLock<Option<String>> =
@@ -202,7 +199,6 @@ pub struct Client {
     id: AtomicU64,
     peer: Arc<Peer>,
     http: Arc<HttpClientWithUrl>,
-    telemetry: Arc<Telemetry>,
     credentials_provider: ClientCredentialsProvider,
     state: RwLock<ClientState>,
     handler_set: parking_lot::Mutex<ProtoMessageHandlerSet>,
@@ -540,7 +536,6 @@ impl Client {
         Arc::new(Self {
             id: AtomicU64::new(0),
             peer: Peer::new(0),
-            telemetry: Telemetry::new(clock, http.clone(), cx),
             http,
             credentials_provider: ClientCredentialsProvider::new(cx),
             state: Default::default(),
@@ -694,7 +689,6 @@ impl Client {
                 }));
             }
             Status::SignedOut | Status::UpgradeRequired => {
-                self.telemetry.set_authenticated_user_info(None, false);
                 state._reconnect_task.take();
             }
             _ => {}
@@ -1115,8 +1109,6 @@ impl Client {
         let proxy = http.proxy().cloned();
         let credentials = credentials.clone();
         let rpc_url = self.rpc_url(http, release_channel);
-        let system_id = self.telemetry.system_id();
-        let metrics_id = self.telemetry.metrics_id();
         cx.spawn(async move |cx| {
             use HttpOrHttps::*;
 
@@ -1176,12 +1168,6 @@ impl Client {
                 "x-zed-release-channel",
                 HeaderValue::from_str(release_channel.map(|r| r.dev_name()).unwrap_or("unknown"))?,
             );
-            if let Some(system_id) = system_id {
-                request_headers.insert("x-zed-system-id", HeaderValue::from_str(&system_id)?);
-            }
-            if let Some(metrics_id) = metrics_id {
-                request_headers.insert("x-zed-metrics-id", HeaderValue::from_str(&metrics_id)?);
-            }
 
             let (stream, _) = async_tungstenite::tokio::client_async_tls_with_connector_and_config(
                 request,
@@ -1591,10 +1577,6 @@ impl Client {
                 .respond_with_unhandled_message(sender_id.into(), request_id, type_name)
                 .log_err();
         }
-    }
-
-    pub fn telemetry(&self) -> &Arc<Telemetry> {
-        &self.telemetry
     }
 }
 

@@ -27,7 +27,6 @@ paths.workspace = true
 regex.workspace = true
 settings.workspace = true
 supermaven.workspace = true
-telemetry.workspace = true
 ui.workspace = true
 workspace-hack.workspace = true
 workspace.workspace = true

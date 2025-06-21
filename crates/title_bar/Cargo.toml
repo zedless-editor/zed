@@ -42,7 +42,6 @@ serde.workspace = true
 settings.workspace = true
 smallvec.workspace = true
 story = { workspace = true, optional = true }
-telemetry.workspace = true
 theme.workspace = true
 ui.workspace = true
 util.workspace = true

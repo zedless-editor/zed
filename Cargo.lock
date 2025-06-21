@@ -117,8 +117,6 @@ dependencies = [
  "smol",
  "sqlez",
  "streaming_diff",
- "telemetry",
- "telemetry_events",
  "terminal",
  "terminal_view",
  "text",
@@ -552,7 +550,6 @@ dependencies = [
  "settings",
  "smallvec",
  "smol",
- "telemetry_events",
  "text",
  "theme",
  "tree-sitter-md",
@@ -2334,7 +2331,6 @@ dependencies = [
  "serde",
  "serde_derive",
  "settings",
- "telemetry",
  "util",
  "workspace-hack",
 ]
@@ -2789,8 +2785,6 @@ dependencies = [
  "settings",
  "sha2",
  "smol",
- "telemetry",
- "telemetry_events",
  "text",
  "thiserror 2.0.12",
  "time",
@@ -3009,7 +3003,6 @@ dependencies = [
  "subtle",
  "supermaven_api",
  "task",
- "telemetry_events",
  "text",
  "theme",
  "thiserror 2.0.12",
@@ -3064,7 +3057,6 @@ dependencies = [
  "settings",
  "smallvec",
  "story",
- "telemetry",
  "theme",
  "time",
  "time_format",
@@ -3141,7 +3133,6 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
- "telemetry",
  "theme",
  "time",
  "ui",
@@ -4027,7 +4018,6 @@ dependencies = [
  "smallvec",
  "smol",
  "task",
- "telemetry",
  "tree-sitter",
  "tree-sitter-go",
  "util",
@@ -4723,7 +4713,6 @@ dependencies = [
  "snippet",
  "sum_tree",
  "task",
- "telemetry",
  "tempfile",
  "text",
  "theme",
@@ -5051,7 +5040,6 @@ dependencies = [
  "settings",
  "shellexpand 2.1.2",
  "smol",
- "telemetry",
  "terminal_view",
  "toml 0.8.20",
  "unindent",
@@ -5206,7 +5194,6 @@ dependencies = [
  "serde_json_lenient",
  "settings",
  "task",
- "telemetry",
  "tempfile",
  "theme",
  "theme_extension",
@@ -5245,7 +5232,6 @@ dependencies = [
  "settings",
  "smallvec",
  "strum 0.27.1",
- "telemetry",
  "theme",
  "ui",
  "util",
@@ -6152,7 +6138,6 @@ dependencies = [
  "serde_json",
  "settings",
  "strum 0.27.1",
- "telemetry",
  "theme",
  "time",
  "time_format",
@@ -8188,7 +8173,6 @@ dependencies = [
  "serde_json",
  "settings",
  "supermaven",
- "telemetry",
  "theme",
  "ui",
  "workspace",
@@ -8907,7 +8891,6 @@ dependencies = [
  "serde",
  "serde_json",
  "smol",
- "telemetry_events",
  "thiserror 2.0.12",
  "util",
  "workspace-hack",
@@ -12963,7 +12946,6 @@ dependencies = [
  "settings",
  "smol",
  "task",
- "telemetry",
  "theme",
  "ui",
  "util",
@@ -13207,7 +13189,6 @@ dependencies = [
  "shellexpand 2.1.2",
  "smol",
  "sysinfo",
- "telemetry_events",
  "toml 0.8.20",
  "unindent",
  "util",
@@ -13263,7 +13244,6 @@ dependencies = [
  "serde_json",
  "settings",
  "smol",
- "telemetry",
  "terminal",
  "terminal_view",
  "theme",
@@ -15822,27 +15802,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "telemetry"
-version = "0.1.0"
-dependencies = [
- "futures 0.3.31",
- "serde",
- "serde_json",
- "telemetry_events",
- "workspace-hack",
-]
-
-[[package]]
-name = "telemetry_events"
-version = "0.1.0"
-dependencies = [
- "semantic_version",
- "serde",
- "serde_json",
- "workspace-hack",
-]
-
-[[package]]
 name = "tempfile"
 version = "3.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -16048,7 +16007,6 @@ dependencies = [
  "picker",
  "serde",
  "settings",
- "telemetry",
  "theme",
  "ui",
  "util",
@@ -16282,7 +16240,6 @@ dependencies = [
  "settings",
  "smallvec",
  "story",
- "telemetry",
  "theme",
  "tree-sitter-md",
  "ui",
@@ -18327,7 +18284,6 @@ dependencies = [
  "schemars",
  "serde",
  "settings",
- "telemetry",
  "theme",
  "ui",
  "util",
@@ -19381,7 +19337,6 @@ dependencies = [
  "sqlez",
  "strum 0.27.1",
  "task",
- "telemetry",
  "tempfile",
  "theme",
  "ui",
@@ -20026,8 +19981,6 @@ dependencies = [
  "tab_switcher",
  "task",
  "tasks_ui",
- "telemetry",
- "telemetry_events",
  "terminal_view",
  "theme",
  "theme_extension",
@@ -20331,8 +20284,6 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
- "telemetry",
- "telemetry_events",
  "theme",
  "thiserror 2.0.12",
  "tree-sitter-go",

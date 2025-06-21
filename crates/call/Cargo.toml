@@ -38,7 +38,6 @@ schemars.workspace = true
 serde.workspace = true
 serde_derive.workspace = true
 settings.workspace = true
-telemetry.workspace = true
 util.workspace = true
 gpui_tokio.workspace = true
 livekit_client.workspace = true

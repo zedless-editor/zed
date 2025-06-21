@@ -47,7 +47,7 @@ use crate::thread_store::{
     SerializedCrease, SerializedLanguageModel, SerializedMessage, SerializedMessageSegment,
     SerializedThread, SerializedToolResult, SerializedToolUse, SharedProjectContext,
 };
-use crate::tool_use::{PendingToolUse, ToolUse, ToolUseMetadata, ToolUseState};
+use crate::tool_use::{PendingToolUse, ToolUse, ToolUseState};
 
 #[derive(
     Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize, JsonSchema,
@@ -222,12 +222,6 @@ pub struct ThreadCheckpoint {
     git_checkpoint: GitStoreCheckpoint,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ThreadFeedback {
-    Positive,
-    Negative,
-}
-
 pub enum LastRestoreCheckpoint {
     Pending {
         message_id: MessageId,
@@ -352,8 +346,6 @@ pub struct Thread {
     exceeded_window_error: Option<ExceededWindowError>,
     last_usage: Option<RequestUsage>,
     tool_use_limit_reached: bool,
-    feedback: Option<ThreadFeedback>,
-    message_feedback: HashMap<MessageId, ThreadFeedback>,
     last_auto_capture_at: Option<Instant>,
     last_received_chunk_at: Option<Instant>,
     request_callback: Option<
@@ -445,8 +437,6 @@ impl Thread {
             exceeded_window_error: None,
             last_usage: None,
             tool_use_limit_reached: false,
-            feedback: None,
-            message_feedback: HashMap::default(),
             last_auto_capture_at: None,
             last_received_chunk_at: None,
             request_callback: None,
@@ -570,8 +560,6 @@ impl Thread {
             exceeded_window_error: None,
             last_usage: None,
             tool_use_limit_reached: serialized.tool_use_limit_reached,
-            feedback: None,
-            message_feedback: HashMap::default(),
             last_auto_capture_at: None,
             last_received_chunk_at: None,
             request_callback: None,
@@ -1508,19 +1496,11 @@ impl Thread {
         } else {
             None
         };
-        let prompt_id = self.last_prompt_id.clone();
-        let tool_use_metadata = ToolUseMetadata {
-            model: model.clone(),
-            thread_id: self.id.clone(),
-            prompt_id: prompt_id.clone(),
-        };
 
         self.last_received_chunk_at = Some(Instant::now());
 
         let task = cx.spawn(async move |thread, cx| {
             let stream_completion_future = model.stream_completion(request, &cx);
-            let initial_token_usage =
-                thread.read_with(cx, |thread, _cx| thread.cumulative_token_usage);
             let stream_completion = async {
                 let mut events = stream_completion_future.await?;
 
@@ -1665,7 +1645,6 @@ impl Thread {
                                 let ui_text = thread.tool_use.request_tool_use(
                                     last_assistant_message_id,
                                     tool_use,
-                                    tool_use_metadata.clone(),
                                     cx,
                                 );
 
@@ -2569,15 +2548,6 @@ impl Thread {
         }
 
         self.last_auto_capture_at = Some(now);
-
-        let thread_id = self.id().clone();
-        let github_login = self
-            .project
-            .read(cx)
-            .user_store()
-            .read(cx)
-            .current_user()
-            .map(|user| user.github_login.clone());
     }
 
     pub fn cumulative_token_usage(&self) -> TokenUsage {

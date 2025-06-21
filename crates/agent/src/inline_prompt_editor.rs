@@ -326,7 +326,7 @@ impl<T: 'static> PromptEditor<T> {
         &mut self,
         _: &Entity<Editor>,
         event: &EditorEvent,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {

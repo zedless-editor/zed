@@ -315,13 +315,6 @@ impl TerminalInlineAssistant {
                 })
                 .log_err();
 
-            if let Some(ConfiguredModel { model, .. }) =
-                LanguageModelRegistry::read_global(cx).inline_assistant_model()
-            {
-                let codegen = assist.codegen.read(cx);
-                let executor = cx.background_executor().clone();
-            }
-
             assist.codegen.update(cx, |codegen, cx| {
                 if undo {
                     codegen.undo(cx);

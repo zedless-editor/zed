@@ -368,9 +368,6 @@ impl CodegenAlternative {
 
         self.edit_position = Some(self.range.start.bias_right(&self.snapshot));
 
-        let api_key = model.api_key(cx);
-        let telemetry_id = model.telemetry_id();
-        let provider_id = model.provider_id();
         let stream: LocalBoxFuture<Result<LanguageModelTextStream>> =
             if user_prompt.trim().to_lowercase() == "delete" {
                 async { Ok(LanguageModelTextStream::default()) }.boxed_local()
@@ -381,7 +378,7 @@ impl CodegenAlternative {
                 })
                 .boxed_local()
             };
-        self.handle_stream(telemetry_id, provider_id.to_string(), api_key, stream, cx);
+        self.handle_stream(stream, cx);
         Ok(())
     }
 
@@ -470,9 +467,6 @@ impl CodegenAlternative {
 
     pub fn handle_stream(
         &mut self,
-        model_telemetry_id: String,
-        model_provider_id: String,
-        model_api_key: Option<String>,
         stream: impl 'static + Future<Output = Result<LanguageModelTextStream>>,
         cx: &mut Context<Self>,
     ) {
@@ -1423,9 +1417,6 @@ mod tests {
         let (chunks_tx, chunks_rx) = mpsc::unbounded();
         codegen.update(cx, |codegen, cx| {
             codegen.handle_stream(
-                String::new(),
-                String::new(),
-                None,
                 future::ready(Ok(LanguageModelTextStream {
                     message_id: None,
                     stream: chunks_rx.map(Ok).boxed(),

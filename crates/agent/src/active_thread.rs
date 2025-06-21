@@ -1648,12 +1648,7 @@ impl ActiveThread {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let report = self.thread.update(cx, |thread, cx| {
-            thread.report_message_feedback(message_id, feedback, cx)
-        });
-
         cx.spawn(async move |this, cx| {
-            report.await?;
             this.update(cx, |_this, cx| cx.notify())
         })
         .detach_and_log_err(cx);
@@ -1697,45 +1692,6 @@ impl ActiveThread {
         editor.read(cx).focus_handle(cx).focus(window);
         self.open_feedback_editors.insert(message_id, editor);
         cx.notify();
-    }
-
-    fn submit_feedback_message(&mut self, message_id: MessageId, cx: &mut Context<Self>) {
-        let Some(editor) = self.open_feedback_editors.get(&message_id) else {
-            return;
-        };
-
-        let report_task = self.thread.update(cx, |thread, cx| {
-            thread.report_message_feedback(message_id, ThreadFeedback::Negative, cx)
-        });
-
-        let comments = editor.read(cx).text(cx);
-        if !comments.is_empty() {
-            let thread_id = self.thread.read(cx).id().clone();
-            let comments_value = String::from(comments.as_str());
-
-            let message_content = self
-                .thread
-                .read(cx)
-                .message(message_id)
-                .map(|msg| msg.to_string())
-                .unwrap_or_default();
-
-            telemetry::event!(
-                "Assistant Thread Feedback Comments",
-                thread_id,
-                message_id = message_id.0,
-                message_content,
-                comments = comments_value
-            );
-
-            self.open_feedback_editors.remove(&message_id);
-
-            cx.spawn(async move |this, cx| {
-                report_task.await?;
-                this.update(cx, |_this, cx| cx.notify())
-            })
-            .detach_and_log_err(cx);
-        }
     }
 
     fn render_edit_message_editor(
@@ -2260,10 +2216,6 @@ impl ActiveThread {
                                     this.open_feedback_editors.remove(&message_id);
                                     cx.notify();
                                 }))
-                                .on_action(cx.listener(move |this, _: &menu::Confirm, _, cx| {
-                                    this.submit_feedback_message(message_id, cx);
-                                    cx.notify();
-                                }))
                                 .on_action(cx.listener(Self::confirm_editing_message))
                                 .mb_2()
                                 .mx_4()
@@ -2312,12 +2264,6 @@ impl ActiveThread {
                                                     cx,
                                                 )
                                                 .map(|kb| kb.size(rems_from_px(10.))),
-                                            )
-                                            .on_click(
-                                                cx.listener(move |this, _, _window, cx| {
-                                                    this.submit_feedback_message(message_id, cx);
-                                                    cx.notify()
-                                                }),
                                             ),
                                         ),
                                 ),

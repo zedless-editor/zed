@@ -402,21 +402,6 @@ impl ToolUseState {
         output: Result<ToolResultOutput>,
         configured_model: Option<&ConfiguredModel>,
     ) -> Option<PendingToolUse> {
-        let metadata = self.tool_use_metadata_by_id.remove(&tool_use_id);
-
-        telemetry::event!(
-            "Agent Tool Finished",
-            model = metadata
-                .as_ref()
-                .map(|metadata| metadata.model.telemetry_id()),
-            model_provider = metadata
-                .as_ref()
-                .map(|metadata| metadata.model.provider_id().to_string()),
-            thread_id = metadata.as_ref().map(|metadata| metadata.thread_id.clone()),
-            prompt_id = metadata.as_ref().map(|metadata| metadata.prompt_id.clone()),
-            tool_name,
-            success = output.is_ok()
-        );
 
         match output {
             Ok(output) => {

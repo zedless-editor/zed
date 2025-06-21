@@ -8,7 +8,7 @@ use assistant_slash_command::{
     SlashCommandResult, SlashCommandWorkingSet,
 };
 use assistant_slash_commands::FileCommandMetadata;
-use client::{self, proto, telemetry::Telemetry};
+use client::{self, proto};
 use clock::ReplicaId;
 use collections::{HashMap, HashSet};
 use fs::{Fs, RenameOptions};
@@ -22,7 +22,6 @@ use language_model::{
     LanguageModel, LanguageModelCacheConfiguration, LanguageModelCompletionEvent,
     LanguageModelImage, LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage,
     LanguageModelToolUseId, MessageContent, PaymentRequiredError, Role, StopReason,
-    report_assistant_event,
 };
 use open_ai::Model as OpenAiModel;
 use paths::contexts_dir;
@@ -40,7 +39,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use telemetry_events::{AssistantEventData, AssistantKind, AssistantPhase};
 use text::{BufferSnapshot, ToPoint};
 use ui::IconName;
 use util::{ResultExt, TryFutureExt, post_inc};
@@ -684,7 +682,6 @@ pub struct AssistantContext {
     pending_cache_warming_task: Task<Option<()>>,
     path: Option<Arc<Path>>,
     _subscriptions: Vec<Subscription>,
-    telemetry: Option<Arc<Telemetry>>,
     language_registry: Arc<LanguageRegistry>,
     project: Option<Entity<Project>>,
     prompt_builder: Arc<PromptBuilder>,
@@ -707,7 +704,6 @@ impl AssistantContext {
     pub fn local(
         language_registry: Arc<LanguageRegistry>,
         project: Option<Entity<Project>>,
-        telemetry: Option<Arc<Telemetry>>,
         prompt_builder: Arc<PromptBuilder>,
         slash_commands: Arc<SlashCommandWorkingSet>,
         cx: &mut Context<Self>,
@@ -720,7 +716,6 @@ impl AssistantContext {
             prompt_builder,
             slash_commands,
             project,
-            telemetry,
             cx,
         )
     }
@@ -741,7 +736,6 @@ impl AssistantContext {
         prompt_builder: Arc<PromptBuilder>,
         slash_commands: Arc<SlashCommandWorkingSet>,
         project: Option<Entity<Project>>,
-        telemetry: Option<Arc<Telemetry>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let buffer = cx.new(|_cx| {
@@ -782,7 +776,6 @@ impl AssistantContext {
             completion_mode: AgentSettings::get_global(cx).preferred_completion_mode,
             path: None,
             buffer,
-            telemetry,
             project,
             language_registry,
             slash_commands,
@@ -872,7 +865,6 @@ impl AssistantContext {
         prompt_builder: Arc<PromptBuilder>,
         slash_commands: Arc<SlashCommandWorkingSet>,
         project: Option<Entity<Project>>,
-        telemetry: Option<Arc<Telemetry>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let id = saved_context.id.clone().unwrap_or_else(ContextId::new);
@@ -884,7 +876,6 @@ impl AssistantContext {
             prompt_builder,
             slash_commands,
             project,
-            telemetry,
             cx,
         );
         this.path = Some(path);
@@ -2162,7 +2153,7 @@ impl AssistantContext {
                 let result = stream_completion.await;
 
                 this.update(cx, |this, cx| {
-                    let error_message = if let Some(error) = result.as_ref().err() {
+                    if let Some(error) = result.as_ref().err() {
                         if error.is::<PaymentRequiredError>() {
                             cx.emit(ContextEvent::ShowPaymentRequiredError);
                             this.update_metadata(assistant_message_id, cx, |metadata| {
@@ -2190,29 +2181,6 @@ impl AssistantContext {
                         });
                         None
                     };
-
-                    let language_name = this
-                        .buffer
-                        .read(cx)
-                        .language()
-                        .map(|language| language.name());
-                    report_assistant_event(
-                        AssistantEventData {
-                            conversation_id: Some(this.id.0.clone()),
-                            kind: AssistantKind::Panel,
-                            phase: AssistantPhase::Response,
-                            message_id: None,
-                            model: model.telemetry_id(),
-                            model_provider: model.provider_id().to_string(),
-                            response_latency,
-                            error_message,
-                            language_name: language_name.map(|name| name.to_proto()),
-                        },
-                        this.telemetry.clone(),
-                        cx.http_client(),
-                        model.api_key(cx),
-                        cx.background_executor(),
-                    );
 
                     if let Ok(stop_reason) = result {
                         match stop_reason {

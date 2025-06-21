@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result};
-use auto_update::AutoUpdater;
 use editor::Editor;
 use extension_host::ExtensionStore;
 use futures::channel::oneshot;
@@ -476,25 +475,7 @@ impl remote::SshClientDelegate for SshClientDelegate {
         cx: &mut AsyncApp,
     ) -> Task<anyhow::Result<PathBuf>> {
         cx.spawn(async move |cx| {
-            let binary_path = AutoUpdater::download_remote_server_release(
-                platform.os,
-                platform.arch,
-                release_channel,
-                version,
-                cx,
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "Downloading remote server binary (version: {}, os: {}, arch: {})",
-                    version
-                        .map(|v| format!("{}", v))
-                        .unwrap_or("unknown".to_string()),
-                    platform.os,
-                    platform.arch,
-                )
-            })?;
-            Ok(binary_path)
+            Err(anyhow::anyhow!("zedless: downloads are disabled"))
         })
     }
 
@@ -506,14 +487,7 @@ impl remote::SshClientDelegate for SshClientDelegate {
         cx: &mut AsyncApp,
     ) -> Task<Result<Option<(String, String)>>> {
         cx.spawn(async move |cx| {
-            AutoUpdater::get_remote_server_release_url(
-                platform.os,
-                platform.arch,
-                release_channel,
-                version,
-                cx,
-            )
-            .await
+            Ok(None)
         })
     }
 }

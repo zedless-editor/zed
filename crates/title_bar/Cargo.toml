@@ -27,7 +27,6 @@ test-support = [
 ]
 
 [dependencies]
-auto_update.workspace = true
 call.workspace = true
 chrono.workspace = true
 client.workspace = true

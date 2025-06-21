@@ -13,9 +13,6 @@ members = [
     "crates/assistant_tool",
     "crates/assistant_tools",
     "crates/audio",
-    "crates/auto_update",
-    "crates/auto_update_helper",
-    "crates/auto_update_ui",
     "crates/breadcrumbs",
     "crates/buffer_diff",
     "crates/call",
@@ -220,9 +217,6 @@ assistant_slash_commands = { path = "crates/assistant_slash_commands" }
 assistant_tool = { path = "crates/assistant_tool" }
 assistant_tools = { path = "crates/assistant_tools" }
 audio = { path = "crates/audio" }
-auto_update = { path = "crates/auto_update" }
-auto_update_helper = { path = "crates/auto_update_helper" }
-auto_update_ui = { path = "crates/auto_update_ui" }
 breadcrumbs = { path = "crates/breadcrumbs" }
 buffer_diff = { path = "crates/buffer_diff" }
 call = { path = "crates/call" }

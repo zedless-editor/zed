@@ -7,7 +7,6 @@ name = "activity_indicator"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "auto_update",
  "editor",
  "extension_host",
  "futures 0.3.31",
@@ -1144,61 +1143,6 @@ dependencies = [
  "serde",
  "serde_json",
  "topological-sort",
-]
-
-[[package]]
-name = "auto_update"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "client",
- "db",
- "gpui",
- "http_client",
- "log",
- "paths",
- "release_channel",
- "schemars",
- "serde",
- "serde_json",
- "settings",
- "smol",
- "tempfile",
- "which 6.0.3",
- "workspace",
- "workspace-hack",
-]
-
-[[package]]
-name = "auto_update_helper"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "log",
- "simplelog",
- "windows 0.61.1",
- "winresource",
- "workspace-hack",
-]
-
-[[package]]
-name = "auto_update_ui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "auto_update",
- "client",
- "editor",
- "gpui",
- "http_client",
- "markdown_preview",
- "release_channel",
- "serde",
- "serde_json",
- "smol",
- "util",
- "workspace",
- "workspace-hack",
 ]
 
 [[package]]
@@ -12922,7 +12866,6 @@ name = "recent_projects"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "auto_update",
  "dap",
  "editor",
  "extension_host",
@@ -16222,7 +16165,6 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 name = "title_bar"
 version = "0.1.0"
 dependencies = [
- "auto_update",
  "call",
  "chrono",
  "client",
@@ -19886,8 +19828,6 @@ dependencies = [
  "assistant_tool",
  "assistant_tools",
  "audio",
- "auto_update",
- "auto_update_ui",
  "backtrace",
  "breadcrumbs",
  "call",

@@ -9,10 +9,8 @@ use crate::git_panel::GitPanel;
 
 macro_rules! git_onboarding_event {
     ($name:expr) => {
-        telemetry::event!($name, source = "Git Onboarding");
     };
     ($name:expr, $($key:ident $(= $value:expr)?),+ $(,)?) => {
-        telemetry::event!($name, source = "Git Onboarding", $($key $(= $value)?),+);
     };
 }
 

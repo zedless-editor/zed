@@ -1198,11 +1198,8 @@ impl InputHandler for TerminalInputHandler {
         });
 
         self.workspace
-            .update(cx, |this, cx| {
+            .update(cx, |_, _| {
                 window.invalidate_character_coordinates();
-                let project = this.project().read(cx);
-                let telemetry = project.client().telemetry().clone();
-                telemetry.log_edit_event("terminal", project.is_via_ssh());
             })
             .ok();
     }

@@ -9,7 +9,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use async_compression::futures::bufread::GzipDecoder;
 use async_tar::Archive;
 use client::ExtensionProvides;
-use client::{Client, ExtensionMetadata, GetExtensionsResponse, proto, telemetry::Telemetry};
+use client::{Client, ExtensionMetadata, GetExtensionsResponse, proto};
 use collections::{BTreeMap, BTreeSet, HashMap, HashSet, btree_map};
 pub use extension::ExtensionManifest;
 use extension::extension_builder::{CompileExtensionOptions, ExtensionBuilder};
@@ -106,7 +106,6 @@ pub struct ExtensionStore {
     pub extension_index: ExtensionIndex,
     pub fs: Arc<dyn Fs>,
     pub http_client: Arc<HttpClientWithUrl>,
-    pub telemetry: Option<Arc<Telemetry>>,
     pub reload_tx: UnboundedSender<Option<Arc<str>>>,
     pub reload_complete_senders: Vec<oneshot::Sender<()>>,
     pub installed_dir: PathBuf,
@@ -197,7 +196,6 @@ pub fn init(
             fs,
             client.http_client(),
             client.http_client(),
-            Some(client.telemetry().clone()),
             node_runtime,
             cx,
         )
@@ -228,7 +226,6 @@ impl ExtensionStore {
         fs: Arc<dyn Fs>,
         http_client: Arc<HttpClientWithUrl>,
         builder_client: Arc<dyn HttpClient>,
-        telemetry: Option<Arc<Telemetry>>,
         node_runtime: NodeRuntime,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -259,7 +256,6 @@ impl ExtensionStore {
             wasm_extensions: Vec::new(),
             fs,
             http_client,
-            telemetry,
             reload_tx,
             tasks: Vec::new(),
 
@@ -1090,15 +1086,6 @@ impl ExtensionStore {
             extensions_to_unload.len() - reload_count
         );
 
-        for extension_id in &extensions_to_load {
-            if let Some(extension) = new_index.extensions.get(extension_id) {
-                telemetry::event!(
-                    "Extension Loaded",
-                    extension_id,
-                    version = extension.manifest.version
-                );
-            }
-        }
 
         let themes_to_remove = old_index
             .themes

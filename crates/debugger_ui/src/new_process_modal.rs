@@ -10,7 +10,7 @@ use std::{
 use tasks_ui::{TaskOverrides, TasksModal};
 
 use dap::{
-    DapRegistry, DebugRequest, TelemetrySpawnLocation, adapters::DebugAdapterName, send_telemetry,
+    DapRegistry, DebugRequest, adapters::DebugAdapterName,
 };
 use editor::{Editor, EditorElement, EditorStyle};
 use fuzzy::{StringMatch, StringMatchCandidate};
@@ -369,7 +369,6 @@ impl NewProcessModal {
         let Some(task_contexts) = self.task_contexts(cx) else {
             return;
         };
-        send_telemetry(&config, TelemetrySpawnLocation::Custom, cx);
         let task_context = task_contexts.active_context().cloned().unwrap_or_default();
         let worktree_id = task_contexts.worktree();
         cx.spawn_in(window, async move |this, cx| {
@@ -1384,7 +1383,6 @@ impl PickerDelegate for DebugDelegate {
             };
 
             this.update_in(cx, |this, window, cx| {
-                send_telemetry(&debug_scenario, TelemetrySpawnLocation::ScenarioList, cx);
                 this.delegate
                     .debug_panel
                     .update(cx, |panel, cx| {
@@ -1426,7 +1424,6 @@ impl PickerDelegate for DebugDelegate {
             })
             .unwrap_or_default();
 
-        send_telemetry(&debug_scenario, TelemetrySpawnLocation::ScenarioList, cx);
         self.debug_panel
             .update(cx, |panel, cx| {
                 panel.start_session(debug_scenario, task_context, None, worktree_id, window, cx);

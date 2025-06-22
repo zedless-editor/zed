@@ -458,7 +458,6 @@ Error: Running Zed as root or via sudo is unsupported.
             cx.background_executor().clone(),
         );
         command_palette::init(cx);
-        supermaven::init(app_state.client.clone(), cx);
         language_model::init(app_state.client.clone(), cx);
         language_models::init(
             app_state.user_store.clone(),

@@ -37,7 +37,6 @@ actions!(
         About,
         OpenDocs,
         OpenLicenses,
-        OpenTelemetryLog,
     ]
 );
 

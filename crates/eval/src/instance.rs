@@ -113,10 +113,6 @@ impl ExampleInstance {
         self.thread.meta().url
     }
 
-    pub fn revision(&self) -> String {
-        self.thread.meta().revision
-    }
-
     pub fn worktree_name(&self) -> String {
         format!("{}-{}", self.name, self.repetition)
     }

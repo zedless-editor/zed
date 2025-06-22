@@ -128,8 +128,6 @@ members = [
     "crates/storybook",
     "crates/streaming_diff",
     "crates/sum_tree",
-    "crates/supermaven",
-    "crates/supermaven_api",
     "crates/tab_switcher",
     "crates/task",
     "crates/tasks_ui",
@@ -323,8 +321,6 @@ story = { path = "crates/story" }
 storybook = { path = "crates/storybook" }
 streaming_diff = { path = "crates/streaming_diff" }
 sum_tree = { path = "crates/sum_tree" }
-supermaven = { path = "crates/supermaven" }
-supermaven_api = { path = "crates/supermaven_api" }
 tab_switcher = { path = "crates/tab_switcher" }
 task = { path = "crates/task" }
 tasks_ui = { path = "crates/tasks_ui" }
@@ -709,7 +705,6 @@ snippet = { codegen-units = 1 }
 snippets_ui = { codegen-units = 1 }
 sqlez_macros = { codegen-units = 1 }
 story = { codegen-units = 1 }
-supermaven_api = { codegen-units = 1 }
 theme_selector = { codegen-units = 1 }
 time_format = { codegen-units = 1 }
 ui_input = { codegen-units = 1 }

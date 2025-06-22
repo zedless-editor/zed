@@ -265,10 +265,6 @@ impl Render for InlineCompletionButton {
                                 )
                             })
                             .on_click(cx.listener(move |_, _, window, cx| {
-                                telemetry::event!(
-                                    "Pending ToS Clicked",
-                                    source = "Edit Prediction Status Button"
-                                );
                                 window.dispatch_action(
                                     zed_actions::OpenZedPredictOnboarding.boxed_clone(),
                                     cx,
@@ -581,18 +577,6 @@ impl InlineCompletionButton {
                         })
                         .handler(move |_, cx| {
                             provider.toggle_data_collection(cx);
-
-                            if !enabled {
-                                telemetry::event!(
-                                    "Data Collection Enabled",
-                                    source = "Edit Prediction Status Menu"
-                                );
-                            } else {
-                                telemetry::event!(
-                                    "Data Collection Disabled",
-                                    source = "Edit Prediction Status Menu"
-                                );
-                            }
                         })
                 );
 

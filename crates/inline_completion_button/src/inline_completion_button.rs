@@ -29,18 +29,12 @@ use ui::{
     Indicator, PopoverMenu, PopoverMenuHandle, ProgressBar, Tooltip, prelude::*,
 };
 use workspace::{
-    StatusItemView, Toast, Workspace, create_and_open_local_file, item::ItemHandle,
-    notifications::NotificationId,
+    StatusItemView, Workspace, create_and_open_local_file, item::ItemHandle,
 };
-use zed_actions::OpenBrowser;
 use zed_llm_client::UsageLimit;
 use zeta::RateCompletions;
 
 actions!(edit_prediction, [ToggleMenu]);
-
-const COPILOT_SETTINGS_URL: &str = "https://github.com/settings/copilot";
-
-struct CopilotErrorToast;
 
 pub struct InlineCompletionButton {
     editor_subscription: Option<(Subscription, usize)>,
@@ -300,11 +294,10 @@ impl InlineCompletionButton {
     pub fn build_language_settings_menu(
         &self,
         mut menu: ContextMenu,
-        window: &Window,
+        _window: &Window,
         cx: &mut App,
     ) -> ContextMenu {
         let fs = self.fs.clone();
-        let line_height = window.line_height();
 
         menu = menu.header("Show Edit Predictions For");
 
@@ -396,90 +389,6 @@ impl InlineCompletionButton {
                             }
                         }),
                 );
-        }
-
-        menu = menu.separator().header("Privacy Settings");
-        if let Some(provider) = &self.edit_prediction_provider {
-            let data_collection = provider.data_collection_state(cx);
-            if data_collection.is_supported() {
-                let provider = provider.clone();
-                let enabled = data_collection.is_enabled();
-                let is_open_source = data_collection.is_project_open_source();
-                let is_collecting = data_collection.is_enabled();
-                let (icon_name, icon_color) = if is_open_source && is_collecting {
-                    (IconName::Check, Color::Success)
-                } else {
-                    (IconName::Check, Color::Accent)
-                };
-
-                menu = menu.item(
-                    ContextMenuEntry::new("Training Data Collection")
-                        .toggleable(IconPosition::Start, data_collection.is_enabled())
-                        .icon(icon_name)
-                        .icon_color(icon_color)
-                        .documentation_aside(DocumentationSide::Left, move |cx| {
-                            let (msg, label_color, icon_name, icon_color) = match (is_open_source, is_collecting) {
-                                (true, true) => (
-                                    "Project identified as open source, and you're sharing data.",
-                                    Color::Default,
-                                    IconName::Check,
-                                    Color::Success,
-                                ),
-                                (true, false) => (
-                                    "Project identified as open source, but you're not sharing data.",
-                                    Color::Muted,
-                                    IconName::Close,
-                                    Color::Muted,
-                                ),
-                                (false, true) => (
-                                    "Project not identified as open source. No data captured.",
-                                    Color::Muted,
-                                    IconName::Close,
-                                    Color::Muted,
-                                ),
-                                (false, false) => (
-                                    "Project not identified as open source, and setting turned off.",
-                                    Color::Muted,
-                                    IconName::Close,
-                                    Color::Muted,
-                                ),
-                            };
-                            v_flex()
-                                .gap_2()
-                                .child(
-                                    Label::new(indoc!{
-                                        "Help us improve our open dataset model by sharing data from open source repositories. \
-                                        Zed must detect a license file in your repo for this setting to take effect."
-                                    })
-                                )
-                                .child(
-                                    h_flex()
-                                        .items_start()
-                                        .pt_2()
-                                        .flex_1()
-                                        .gap_1p5()
-                                        .border_t_1()
-                                        .border_color(cx.theme().colors().border_variant)
-                                        .child(h_flex().flex_shrink_0().h(line_height).child(Icon::new(icon_name).size(IconSize::XSmall).color(icon_color)))
-                                        .child(div().child(msg).w_full().text_sm().text_color(label_color.color(cx)))
-                                )
-                                .into_any_element()
-                        })
-                        .handler(move |_, cx| {
-                            provider.toggle_data_collection(cx);
-                        })
-                );
-
-                if is_collecting && !is_open_source {
-                    menu = menu.item(
-                        ContextMenuEntry::new("No data captured.")
-                            .disabled(true)
-                            .icon(IconName::Close)
-                            .icon_color(Color::Error)
-                            .icon_size(IconSize::Small),
-                    );
-                }
-            }
         }
 
         menu = menu.item(
@@ -820,14 +729,6 @@ fn toggle_show_inline_completions_for_language(
             .entry(language.name())
             .or_default()
             .show_edit_predictions = Some(!show_edit_predictions);
-    });
-}
-
-fn hide_copilot(fs: Arc<dyn Fs>, cx: &mut App) {
-    update_settings_file::<AllLanguageSettings>(fs, cx, move |file, _| {
-        file.features
-            .get_or_insert(Default::default())
-            .edit_prediction_provider = Some(EditPredictionProvider::None);
     });
 }
 

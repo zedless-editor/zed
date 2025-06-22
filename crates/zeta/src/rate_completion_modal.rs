@@ -1,4 +1,4 @@
-use crate::{CompletionDiffElement, InlineCompletion, InlineCompletionRating, Zeta};
+use crate::{CompletionDiffElement, InlineCompletion, Zeta};
 use editor::Editor;
 use gpui::{App, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, actions, prelude::*};
 use language::language_settings;
@@ -51,8 +51,6 @@ impl RateCompletionModal {
     pub fn toggle(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
         if let Some(zeta) = Zeta::global(cx) {
             workspace.toggle_modal(window, cx, |_window, cx| RateCompletionModal::new(zeta, cx));
-
-            telemetry::event!("Rate Completion Modal Open", source = "Edit Prediction");
         }
     }
 
@@ -147,17 +145,6 @@ impl RateCompletionModal {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.zeta.update(cx, |zeta, cx| {
-            if let Some(active) = &self.active_completion {
-                zeta.rate_completion(
-                    &active.completion,
-                    InlineCompletionRating::Positive,
-                    active.feedback_editor.read(cx).text(cx),
-                    cx,
-                );
-            }
-        });
-
         let current_completion = self
             .active_completion
             .as_ref()
@@ -179,15 +166,6 @@ impl RateCompletionModal {
             if active.feedback_editor.read(cx).text(cx).is_empty() {
                 return;
             }
-
-            self.zeta.update(cx, |zeta, cx| {
-                zeta.rate_completion(
-                    &active.completion,
-                    InlineCompletionRating::Negative,
-                    active.feedback_editor.read(cx).text(cx),
-                    cx,
-                );
-            });
         }
 
         let current_completion = self

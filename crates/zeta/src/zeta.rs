@@ -3,7 +3,6 @@ mod init;
 mod input_excerpt;
 mod license_detection;
 mod onboarding_modal;
-mod onboarding_telemetry;
 mod rate_completion_modal;
 
 pub(crate) use completion_diff_element::*;
@@ -46,7 +45,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use telemetry_events::InlineCompletionRating;
 use thiserror::Error;
 use util::{ResultExt, maybe};
 use uuid::Uuid;
@@ -103,10 +101,8 @@ pub struct InlineCompletion {
     edits: Arc<[(Range<Anchor>, String)]>,
     snapshot: BufferSnapshot,
     edit_preview: EditPreview,
-    input_outline: Arc<str>,
     input_events: Arc<str>,
     input_excerpt: Arc<str>,
-    output_excerpt: Arc<str>,
     request_sent_at: Instant,
     response_received_at: Instant,
 }
@@ -545,7 +541,6 @@ impl Zeta {
                 values.editable_range,
                 cursor_offset,
                 path,
-                values.input_outline,
                 values.input_events,
                 values.input_excerpt,
                 request_sent_at,
@@ -898,7 +893,6 @@ and then another
         editable_range: Range<usize>,
         cursor_offset: usize,
         path: Arc<Path>,
-        input_outline: String,
         input_events: String,
         input_excerpt: String,
         request_sent_at: Instant,
@@ -943,10 +937,8 @@ and then another
                 edits,
                 edit_preview,
                 snapshot,
-                input_outline: input_outline.into(),
                 input_events: input_events.into(),
                 input_excerpt: input_excerpt.into(),
-                output_excerpt,
                 request_sent_at,
                 response_received_at: Instant::now(),
             }))
@@ -1056,27 +1048,6 @@ and then another
             let completion = self.shown_completions.pop_back().unwrap();
             self.rated_completions.remove(&completion.id);
         }
-        cx.notify();
-    }
-
-    pub fn rate_completion(
-        &mut self,
-        completion: &InlineCompletion,
-        rating: InlineCompletionRating,
-        feedback: String,
-        cx: &mut Context<Self>,
-    ) {
-        self.rated_completions.insert(completion.id);
-        telemetry::event!(
-            "Edit Prediction Rated",
-            rating,
-            input_events = completion.input_events,
-            input_excerpt = completion.input_excerpt,
-            input_outline = completion.input_outline,
-            output_excerpt = completion.output_excerpt,
-            feedback
-        );
-        self.client.telemetry().flush_events().detach();
         cx.notify();
     }
 
@@ -1830,10 +1801,8 @@ mod tests {
             id: InlineCompletionId(Uuid::new_v4()),
             excerpt_range: 0..0,
             cursor_offset: 0,
-            input_outline: "".into(),
             input_events: "".into(),
             input_excerpt: "".into(),
-            output_excerpt: "".into(),
             request_sent_at: Instant::now(),
             response_received_at: Instant::now(),
         };

@@ -213,7 +213,6 @@ impl LanguageSettings {
 pub enum EditPredictionProvider {
     #[default]
     None,
-    Supermaven,
     Zed,
 }
 
@@ -221,8 +220,7 @@ impl EditPredictionProvider {
     pub fn is_zed(&self) -> bool {
         match self {
             EditPredictionProvider::Zed => true,
-            EditPredictionProvider::None
-            | EditPredictionProvider::Supermaven => false,
+            EditPredictionProvider::None => false,
         }
     }
 }

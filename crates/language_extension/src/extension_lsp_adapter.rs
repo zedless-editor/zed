@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -118,7 +117,6 @@ impl LspAdapter for ExtensionLspAdapter {
         delegate: Arc<dyn LspAdapterDelegate>,
         _: Arc<dyn LanguageToolchainStore>,
         _: LanguageServerBinaryOptions,
-        _: futures::lock::MutexGuard<'a, Option<LanguageServerBinary>>,
         _: &'a mut AsyncApp,
     ) -> Pin<Box<dyn 'a + Future<Output = Result<LanguageServerBinary>>>> {
         async move {

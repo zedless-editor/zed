@@ -1,12 +1,9 @@
 use anyhow::{Context as _, Result};
-use async_compression::futures::bufread::GzipDecoder;
-use async_tar::Archive;
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
 use collections::HashMap;
 use futures::future::join_all;
 use gpui::{App, AppContext, AsyncApp, Task};
-use http_client::github::{AssetKind, GitHubLspBinaryVersion, build_asset_url};
 use language::{
     ContextLocation, ContextProvider, File, LanguageToolchainStore, LspAdapter, LspAdapterDelegate,
 };
@@ -14,7 +11,7 @@ use lsp::{CodeActionKind, LanguageServerBinary, LanguageServerName};
 use node_runtime::NodeRuntime;
 use project::{Fs, lsp_store::language_server_settings};
 use serde_json::{Value, json};
-use smol::{fs, io::BufReader, lock::RwLock, stream::StreamExt};
+use smol::lock::RwLock;
 use std::{
     any::Any,
     borrow::Cow,
@@ -24,9 +21,8 @@ use std::{
     sync::Arc,
 };
 use task::{TaskTemplate, TaskTemplates, VariableName};
-use util::archive::extract_zip;
 use util::merge_json_value_into;
-use util::{ResultExt, fs::remove_matching, maybe};
+use util::{ResultExt, maybe};
 
 #[derive(Debug)]
 pub(crate) struct TypeScriptContextProvider {
@@ -611,26 +607,12 @@ impl TypeScriptLspAdapter {
 
 struct TypeScriptVersions {
     typescript_version: String,
-    server_version: String,
 }
 
 #[async_trait(?Send)]
 impl LspAdapter for TypeScriptLspAdapter {
     fn name(&self) -> LanguageServerName {
         Self::SERVER_NAME.clone()
-    }
-
-    async fn fetch_latest_server_version(
-        &self,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<Box<dyn 'static + Send + Any>> {
-        Ok(Box::new(TypeScriptVersions {
-            typescript_version: self.node.npm_package_latest_version("typescript").await?,
-            server_version: self
-                .node
-                .npm_package_latest_version("typescript-language-server")
-                .await?,
-        }) as Box<_>)
     }
 
     async fn check_if_version_installed(
@@ -661,38 +643,6 @@ impl LspAdapter for TypeScriptLspAdapter {
                 arguments: typescript_server_binary_arguments(&server_path),
             })
         }
-    }
-
-    async fn fetch_server_binary(
-        &self,
-        latest_version: Box<dyn 'static + Send + Any>,
-        container_dir: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<LanguageServerBinary> {
-        let latest_version = latest_version.downcast::<TypeScriptVersions>().unwrap();
-        let server_path = container_dir.join(Self::NEW_SERVER_PATH);
-
-        self.node
-            .npm_install_packages(
-                &container_dir,
-                &[
-                    (
-                        Self::PACKAGE_NAME,
-                        latest_version.typescript_version.as_str(),
-                    ),
-                    (
-                        "typescript-language-server",
-                        latest_version.server_version.as_str(),
-                    ),
-                ],
-            )
-            .await?;
-
-        Ok(LanguageServerBinary {
-            path: self.node.binary_path().await?,
-            env: None,
-            arguments: typescript_server_binary_arguments(&server_path),
-        })
     }
 
     async fn cached_server_binary(
@@ -837,12 +787,6 @@ pub struct EsLintLspAdapter {
 
 impl EsLintLspAdapter {
     const CURRENT_VERSION: &'static str = "2.4.4";
-    const CURRENT_VERSION_TAG_NAME: &'static str = "release/2.4.4";
-
-    #[cfg(not(windows))]
-    const GITHUB_ASSET_KIND: AssetKind = AssetKind::TarGz;
-    #[cfg(windows)]
-    const GITHUB_ASSET_KIND: AssetKind = AssetKind::Zip;
 
     const SERVER_PATH: &'static str = "vscode-eslint/server/out/eslintServer.js";
     const SERVER_NAME: LanguageServerName = LanguageServerName::new_static("eslint");
@@ -936,108 +880,6 @@ impl LspAdapter for EsLintLspAdapter {
 
     fn name(&self) -> LanguageServerName {
         Self::SERVER_NAME.clone()
-    }
-
-    async fn fetch_latest_server_version(
-        &self,
-        _delegate: &dyn LspAdapterDelegate,
-    ) -> Result<Box<dyn 'static + Send + Any>> {
-        let url = build_asset_url(
-            "zed-industries/vscode-eslint",
-            Self::CURRENT_VERSION_TAG_NAME,
-            Self::GITHUB_ASSET_KIND,
-        )?;
-
-        Ok(Box::new(GitHubLspBinaryVersion {
-            name: Self::CURRENT_VERSION.into(),
-            url,
-        }))
-    }
-
-    async fn fetch_server_binary(
-        &self,
-        version: Box<dyn 'static + Send + Any>,
-        container_dir: PathBuf,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Result<LanguageServerBinary> {
-        let version = version.downcast::<GitHubLspBinaryVersion>().unwrap();
-        let destination_path = Self::build_destination_path(&container_dir);
-        let server_path = destination_path.join(Self::SERVER_PATH);
-
-        if fs::metadata(&server_path).await.is_err() {
-            remove_matching(&container_dir, |entry| entry != destination_path).await;
-
-            let mut response = delegate
-                .http_client()
-                .get(&version.url, Default::default(), true)
-                .await
-                .context("downloading release")?;
-            match Self::GITHUB_ASSET_KIND {
-                AssetKind::TarGz => {
-                    let decompressed_bytes = GzipDecoder::new(BufReader::new(response.body_mut()));
-                    let archive = Archive::new(decompressed_bytes);
-                    archive.unpack(&destination_path).await.with_context(|| {
-                        format!("extracting {} to {:?}", version.url, destination_path)
-                    })?;
-                }
-                AssetKind::Gz => {
-                    let mut decompressed_bytes =
-                        GzipDecoder::new(BufReader::new(response.body_mut()));
-                    let mut file =
-                        fs::File::create(&destination_path).await.with_context(|| {
-                            format!(
-                                "creating a file {:?} for a download from {}",
-                                destination_path, version.url,
-                            )
-                        })?;
-                    futures::io::copy(&mut decompressed_bytes, &mut file)
-                        .await
-                        .with_context(|| {
-                            format!("extracting {} to {:?}", version.url, destination_path)
-                        })?;
-                }
-                AssetKind::Zip => {
-                    extract_zip(&destination_path, response.body_mut())
-                        .await
-                        .with_context(|| {
-                            format!("unzipping {} to {:?}", version.url, destination_path)
-                        })?;
-                }
-            }
-
-            let mut dir = fs::read_dir(&destination_path).await?;
-            let first = dir.next().await.context("missing first file")??;
-            let repo_root = destination_path.join("vscode-eslint");
-            fs::rename(first.path(), &repo_root).await?;
-
-            #[cfg(target_os = "windows")]
-            {
-                handle_symlink(
-                    repo_root.join("$shared"),
-                    repo_root.join("client").join("src").join("shared"),
-                )
-                .await?;
-                handle_symlink(
-                    repo_root.join("$shared"),
-                    repo_root.join("server").join("src").join("shared"),
-                )
-                .await?;
-            }
-
-            self.node
-                .run_npm_subcommand(&repo_root, "install", &[])
-                .await?;
-
-            self.node
-                .run_npm_subcommand(&repo_root, "run-script", &["compile"])
-                .await?;
-        }
-
-        Ok(LanguageServerBinary {
-            path: self.node.binary_path().await?,
-            env: None,
-            arguments: eslint_server_binary_arguments(&server_path),
-        })
     }
 
     async fn cached_server_binary(

@@ -1,5 +1,5 @@
-use anyhow::{Context as _, ensure};
-use anyhow::{Result, anyhow};
+use anyhow::{Context as _};
+use anyhow::{Result};
 use async_trait::async_trait;
 use collections::HashMap;
 use gpui::{App, Task};
@@ -153,41 +153,6 @@ impl LspAdapter for PythonLspAdapter {
                 arguments: server_binary_arguments(&path),
             })
         }
-    }
-
-    async fn fetch_latest_server_version(
-        &self,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<Box<dyn 'static + Any + Send>> {
-        Ok(Box::new(
-            self.node
-                .npm_package_latest_version(Self::SERVER_NAME.as_ref())
-                .await?,
-        ) as Box<_>)
-    }
-
-    async fn fetch_server_binary(
-        &self,
-        latest_version: Box<dyn 'static + Send + Any>,
-        container_dir: PathBuf,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Result<LanguageServerBinary> {
-        let latest_version = latest_version.downcast::<String>().unwrap();
-        let server_path = container_dir.join(SERVER_PATH);
-
-        self.node
-            .npm_install_packages(
-                &container_dir,
-                &[(Self::SERVER_NAME.as_ref(), latest_version.as_str())],
-            )
-            .await?;
-
-        let env = delegate.shell_env().await;
-        Ok(LanguageServerBinary {
-            path: self.node.binary_path().await?,
-            env: Some(env),
-            arguments: server_binary_arguments(&server_path),
-        })
     }
 
     async fn check_if_version_installed(
@@ -1064,62 +1029,6 @@ impl LspAdapter for PyLspAdapter {
                 env: None,
             })
         }
-    }
-
-    async fn fetch_latest_server_version(
-        &self,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<Box<dyn 'static + Any + Send>> {
-        Ok(Box::new(()) as Box<_>)
-    }
-
-    async fn fetch_server_binary(
-        &self,
-        _: Box<dyn 'static + Send + Any>,
-        _: PathBuf,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Result<LanguageServerBinary> {
-        let venv = self.base_venv(delegate).await.map_err(|e| anyhow!(e))?;
-        let pip_path = venv.join(BINARY_DIR).join("pip3");
-        ensure!(
-            util::command::new_smol_command(pip_path.as_path())
-                .arg("install")
-                .arg("python-lsp-server")
-                .arg("-U")
-                .output()
-                .await?
-                .status
-                .success(),
-            "python-lsp-server installation failed"
-        );
-        ensure!(
-            util::command::new_smol_command(pip_path.as_path())
-                .arg("install")
-                .arg("python-lsp-server[all]")
-                .arg("-U")
-                .output()
-                .await?
-                .status
-                .success(),
-            "python-lsp-server[all] installation failed"
-        );
-        ensure!(
-            util::command::new_smol_command(pip_path)
-                .arg("install")
-                .arg("pylsp-mypy")
-                .arg("-U")
-                .output()
-                .await?
-                .status
-                .success(),
-            "pylsp-mypy installation failed"
-        );
-        let pylsp = venv.join(BINARY_DIR).join("pylsp");
-        Ok(LanguageServerBinary {
-            path: pylsp,
-            env: None,
-            arguments: vec![],
-        })
     }
 
     async fn cached_server_binary(

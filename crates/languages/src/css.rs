@@ -58,40 +58,6 @@ impl LspAdapter for CssLspAdapter {
         })
     }
 
-    async fn fetch_latest_server_version(
-        &self,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<Box<dyn 'static + Any + Send>> {
-        Ok(Box::new(
-            self.node
-                .npm_package_latest_version("vscode-langservers-extracted")
-                .await?,
-        ) as Box<_>)
-    }
-
-    async fn fetch_server_binary(
-        &self,
-        latest_version: Box<dyn 'static + Send + Any>,
-        container_dir: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<LanguageServerBinary> {
-        let latest_version = latest_version.downcast::<String>().unwrap();
-        let server_path = container_dir.join(SERVER_PATH);
-
-        self.node
-            .npm_install_packages(
-                &container_dir,
-                &[(Self::PACKAGE_NAME, latest_version.as_str())],
-            )
-            .await?;
-
-        Ok(LanguageServerBinary {
-            path: self.node.binary_path().await?,
-            env: None,
-            arguments: server_binary_arguments(&server_path),
-        })
-    }
-
     async fn check_if_version_installed(
         &self,
         version: &(dyn 'static + Send + Any),

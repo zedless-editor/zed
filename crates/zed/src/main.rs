@@ -6,7 +6,7 @@ use cli::FORCE_CLI_MODE_ENV_VAR_NAME;
 use client::{Client, ProxySettings, UserStore, parse_zed_link};
 use collab_ui::channel_view::ChannelView;
 use collections::HashMap;
-use db::kvp::{GLOBAL_KEY_VALUE_STORE, KEY_VALUE_STORE};
+use db::kvp::{KEY_VALUE_STORE};
 use editor::Editor;
 use extension::ExtensionHostProxy;
 use feature_flags::FeatureFlagAppExt;
@@ -42,8 +42,7 @@ use theme::{
     ThemeSettings,
 };
 use util::{ConnectionResult, ResultExt, TryFutureExt, maybe};
-use uuid::Uuid;
-use welcome::{BaseKeymap, FIRST_OPEN, show_welcome_view};
+use welcome::{FIRST_OPEN, show_welcome_view};
 use workspace::{AppState, SerializedWorkspaceLocation, WorkspaceSettings, WorkspaceStore};
 use zed::{
     OpenListener, OpenRequest, app_menus, build_window_options, derive_paths_with_position,
@@ -242,9 +241,6 @@ Error: Running Zed as root or via sudo is unsupported.
 
     let app = Application::new().with_assets(Assets);
 
-    let system_id = app.background_executor().block(system_id()).ok();
-    let installation_id = app.background_executor().block(installation_id()).ok();
-    let session_id = Uuid::new_v4().to_string();
     let session = app.background_executor().block(Session::new());
 
     let (open_listener, mut open_rx) = OpenListener::new();
@@ -815,48 +811,6 @@ async fn authenticate(client: Arc<Client>, cx: &AsyncApp) -> ConnectionResult<()
     ConnectionResult::Result(Ok(()))
 }
 
-async fn system_id() -> Result<IdType> {
-    let key_name = "system_id".to_string();
-
-    if let Ok(Some(system_id)) = GLOBAL_KEY_VALUE_STORE.read_kvp(&key_name) {
-        return Ok(IdType::Existing(system_id));
-    }
-
-    let system_id = Uuid::new_v4().to_string();
-
-    GLOBAL_KEY_VALUE_STORE
-        .write_kvp(key_name, system_id.clone())
-        .await?;
-
-    Ok(IdType::New(system_id))
-}
-
-async fn installation_id() -> Result<IdType> {
-    let legacy_key_name = "device_id".to_string();
-    let key_name = "installation_id".to_string();
-
-    // Migrate legacy key to new key
-    if let Ok(Some(installation_id)) = KEY_VALUE_STORE.read_kvp(&legacy_key_name) {
-        KEY_VALUE_STORE
-            .write_kvp(key_name, installation_id.clone())
-            .await?;
-        KEY_VALUE_STORE.delete_kvp(legacy_key_name).await?;
-        return Ok(IdType::Existing(installation_id));
-    }
-
-    if let Ok(Some(installation_id)) = KEY_VALUE_STORE.read_kvp(&key_name) {
-        return Ok(IdType::Existing(installation_id));
-    }
-
-    let installation_id = Uuid::new_v4().to_string();
-
-    KEY_VALUE_STORE
-        .write_kvp(key_name, installation_id.clone())
-        .await?;
-
-    Ok(IdType::New(installation_id))
-}
-
 async fn restore_or_create_workspace(app_state: Arc<AppState>, cx: &mut AsyncApp) -> Result<()> {
     if let Some(locations) = restorable_workspace_locations(cx, &app_state).await {
         for location in locations {
@@ -1038,20 +992,6 @@ struct Args {
 
     #[arg(long, hide = true)]
     dump_all_actions: bool,
-}
-
-#[derive(Clone, Debug)]
-enum IdType {
-    New(String),
-    Existing(String),
-}
-
-impl ToString for IdType {
-    fn to_string(&self) -> String {
-        match self {
-            IdType::New(id) | IdType::Existing(id) => id.clone(),
-        }
-    }
 }
 
 fn parse_url_arg(arg: &str, cx: &App) -> Result<String> {

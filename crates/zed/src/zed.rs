@@ -70,13 +70,11 @@ use workspace::{
     create_and_open_local_file, notifications::simple_message_notification::MessageNotification,
     open_new,
 };
-use workspace::{CloseIntent, CloseWindow, RestoreBanner, with_active_or_new_workspace};
+use workspace::{CloseIntent, CloseWindow, with_active_or_new_workspace};
 use workspace::{Pane, notifications::DetachAndPromptErr};
 use zed_actions::{
     OpenAccountSettings, OpenBrowser, OpenDocs, OpenServerSettings, OpenSettings, OpenZedUrl, Quit,
 };
-
-use title_bar;
 
 actions!(
     zed,

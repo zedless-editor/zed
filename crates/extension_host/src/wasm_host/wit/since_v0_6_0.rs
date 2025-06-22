@@ -791,9 +791,9 @@ impl ExtensionImports for WasmState {
 
     async fn download_file(
         &mut self,
-        url: String,
-        path: String,
-        file_type: DownloadedFileType,
+        _url: String,
+        _path: String,
+        _file_type: DownloadedFileType,
     ) -> wasmtime::Result<Result<(), String>> {
         maybe!(async {
             return Err(anyhow!("zedless: downloads are disabled"));

@@ -1,5 +1,4 @@
 use anyhow::Result;
-use call::ActiveCall;
 use channel::{Channel, ChannelBuffer, ChannelBufferEvent, ChannelStore};
 use client::{
     ChannelId, Collaborator, ParticipantIndex,
@@ -67,14 +66,6 @@ impl ChannelView {
         window.spawn(cx, async move |cx| {
             let channel_view = channel_view.await?;
             pane.update_in(cx, |pane, window, cx| {
-                telemetry::event!(
-                    "Channel Notes Opened",
-                    channel_id,
-                    room_id = ActiveCall::global(cx)
-                        .read(cx)
-                        .room()
-                        .map(|r| r.read(cx).id())
-                );
                 pane.add_item(Box::new(channel_view.clone()), true, true, None, window, cx);
             })?;
             anyhow::Ok(channel_view)

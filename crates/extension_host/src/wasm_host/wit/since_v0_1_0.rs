@@ -2,20 +2,17 @@ use crate::wasm_host::{WasmState, wit::ToWasmtimeResult};
 use ::http_client::{AsyncBody, HttpRequestExt};
 use ::settings::{Settings, WorktreeId};
 use anyhow::{Context as _, Result, bail};
-use async_compression::futures::bufread::GzipDecoder;
-use async_tar::Archive;
 use extension::{ExtensionLanguageServerProxy, KeyValueStoreDelegate, WorktreeDelegate};
 use futures::{AsyncReadExt, lock::Mutex};
-use futures::{FutureExt as _, io::BufReader};
+use futures::{FutureExt as _};
 use language::LanguageName;
 use language::{BinaryStatus, language_settings::AllLanguageSettings};
 use project::project_settings::ProjectSettings;
 use semantic_version::SemanticVersion;
 use std::{
-    path::{Path, PathBuf},
+    path::{Path},
     sync::{Arc, OnceLock},
 };
-use util::archive::extract_zip;
 use util::maybe;
 use wasmtime::component::{Linker, Resource};
 use anyhow::anyhow;
@@ -497,62 +494,6 @@ impl ExtensionImports for WasmState {
     ) -> wasmtime::Result<Result<(), String>> {
         maybe!(async {
             return Err(anyhow!("zedless: downloads are disabled"));
-            let path = PathBuf::from(path);
-            let extension_work_dir = self.host.work_dir.join(self.manifest.id.as_ref());
-
-            self.host.fs.create_dir(&extension_work_dir).await?;
-
-            let destination_path = self
-                .host
-                .writeable_path_from_extension(&self.manifest.id, &path)?;
-
-            let mut response = self
-                .host
-                .http_client
-                .get(&url, Default::default(), true)
-                .await
-                .context("downloading release")?;
-
-            anyhow::ensure!(
-                response.status().is_success(),
-                "download failed with status {}",
-                response.status().to_string()
-            );
-            let body = BufReader::new(response.body_mut());
-
-            match file_type {
-                DownloadedFileType::Uncompressed => {
-                    futures::pin_mut!(body);
-                    self.host
-                        .fs
-                        .create_file_with(&destination_path, body)
-                        .await?;
-                }
-                DownloadedFileType::Gzip => {
-                    let body = GzipDecoder::new(body);
-                    futures::pin_mut!(body);
-                    self.host
-                        .fs
-                        .create_file_with(&destination_path, body)
-                        .await?;
-                }
-                DownloadedFileType::GzipTar => {
-                    let body = GzipDecoder::new(body);
-                    futures::pin_mut!(body);
-                    self.host
-                        .fs
-                        .extract_tar_file(&destination_path, Archive::new(body))
-                        .await?;
-                }
-                DownloadedFileType::Zip => {
-                    futures::pin_mut!(body);
-                    extract_zip(&destination_path, body)
-                        .await
-                        .with_context(|| format!("unzipping {path:?} archive"))?;
-                }
-            }
-
-            Ok(())
         })
         .await
         .to_wasmtime_result()

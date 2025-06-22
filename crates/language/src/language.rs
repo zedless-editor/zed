@@ -166,7 +166,6 @@ pub struct CachedLspAdapter {
     language_ids: HashMap<String, String>,
     pub adapter: Arc<dyn LspAdapter>,
     pub reinstall_attempt_count: AtomicU64,
-    cached_binary: futures::lock::Mutex<Option<LanguageServerBinary>>,
     manifest_name: OnceLock<Option<ManifestName>>,
     attach_kind: OnceLock<Attach>,
 }
@@ -202,7 +201,6 @@ impl CachedLspAdapter {
             disk_based_diagnostics_progress_token,
             language_ids,
             adapter,
-            cached_binary: Default::default(),
             reinstall_attempt_count: AtomicU64::new(0),
             attach_kind: Default::default(),
             manifest_name: Default::default(),
@@ -220,10 +218,9 @@ impl CachedLspAdapter {
         binary_options: LanguageServerBinaryOptions,
         cx: &mut AsyncApp,
     ) -> Result<LanguageServerBinary> {
-        let cached_binary = self.cached_binary.lock().await;
         self.adapter
             .clone()
-            .get_language_server_command(delegate, toolchains, binary_options, cached_binary, cx)
+            .get_language_server_command(delegate, toolchains, binary_options, cx)
             .await
     }
 
@@ -346,7 +343,6 @@ pub trait LspAdapter: 'static + Send + Sync {
         delegate: Arc<dyn LspAdapterDelegate>,
         toolchains: Arc<dyn LanguageToolchainStore>,
         binary_options: LanguageServerBinaryOptions,
-        mut cached_binary: futures::lock::MutexGuard<'a, Option<LanguageServerBinary>>,
         cx: &'a mut AsyncApp,
     ) -> Pin<Box<dyn 'a + Future<Output = Result<LanguageServerBinary>>>> {
         async move {
@@ -2013,7 +2009,6 @@ impl LspAdapter for FakeLspAdapter {
         _: Arc<dyn LspAdapterDelegate>,
         _: Arc<dyn LanguageToolchainStore>,
         _: LanguageServerBinaryOptions,
-        _: futures::lock::MutexGuard<'a, Option<LanguageServerBinary>>,
         _: &'a mut AsyncApp,
     ) -> Pin<Box<dyn 'a + Future<Output = Result<LanguageServerBinary>>>> {
         async move { Ok(self.language_server_binary.clone()) }.boxed_local()

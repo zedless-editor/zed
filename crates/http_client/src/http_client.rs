@@ -1,5 +1,4 @@
 mod async_body;
-pub mod github;
 
 pub use anyhow::{Result, anyhow};
 pub use async_body::{AsyncBody, Inner};

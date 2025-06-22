@@ -462,9 +462,7 @@ Error: Running Zed as root or via sudo is unsupported.
         });
         AppState::set_global(Arc::downgrade(&app_state), cx);
 
-        auto_update::init(client.http_client(), cx);
         dap_adapters::init(cx);
-        auto_update_ui::init(cx);
 
         SystemAppearance::init(cx);
         theme::init(theme::LoadThemes::All(Box::new(Assets)), cx);

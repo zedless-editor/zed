@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use client::{Client, UserStore};
+use client::{Client};
 use fs::Fs;
-use gpui::{App, Context, Entity};
+use gpui::{App, Context};
 use language_model::LanguageModelRegistry;
 
 pub mod provider;
@@ -13,17 +13,16 @@ use crate::provider::ollama::OllamaLanguageModelProvider;
 use crate::provider::open_ai::OpenAiLanguageModelProvider;
 pub use crate::settings::*;
 
-pub fn init(user_store: Entity<UserStore>, client: Arc<Client>, fs: Arc<dyn Fs>, cx: &mut App) {
+pub fn init(client: Arc<Client>, fs: Arc<dyn Fs>, cx: &mut App) {
     crate::settings::init(fs, cx);
     let registry = LanguageModelRegistry::global(cx);
     registry.update(cx, |registry, cx| {
-        register_language_model_providers(registry, user_store, client, cx);
+        register_language_model_providers(registry, client, cx);
     });
 }
 
 fn register_language_model_providers(
     registry: &mut LanguageModelRegistry,
-    user_store: Entity<UserStore>,
     client: Arc<Client>,
     cx: &mut Context<LanguageModelRegistry>,
 ) {

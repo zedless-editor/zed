@@ -7,7 +7,7 @@ use crate::{
 };
 use Role::*;
 use assistant_tool::ToolRegistry;
-use client::{Client, UserStore};
+use client::{Client};
 use collections::HashMap;
 use fs::FakeFs;
 use futures::{FutureExt, future::LocalBoxFuture};
@@ -1455,13 +1455,12 @@ impl EditAgentTest {
 
             client::init_settings(cx);
             let client = Client::production(cx);
-            let user_store = cx.new(|cx| UserStore::new(client.clone(), cx));
 
             settings::init(cx);
             Project::init_settings(cx);
             language::init(cx);
             language_model::init(client.clone(), cx);
-            language_models::init(user_store.clone(), client.clone(), fs.clone(), cx);
+            language_models::init(client.clone(), fs.clone(), cx);
             crate::init(client.http_client(), cx);
         });
 

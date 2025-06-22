@@ -1,49 +1,19 @@
-use adapters::latest_github_release;
 use anyhow::Context as _;
 use dap::{StartDebuggingRequestArguments, adapters::DebugTaskDefinition};
 use gpui::AsyncApp;
 use serde_json::Value;
-use std::{collections::HashMap, path::PathBuf, sync::OnceLock};
+use std::{collections::HashMap, path::PathBuf};
 use task::DebugRequest;
-use util::ResultExt;
 
 use crate::*;
 
 #[derive(Debug, Default)]
 pub(crate) struct JsDebugAdapter {
-    checked: OnceLock<()>,
 }
 
 impl JsDebugAdapter {
     const ADAPTER_NAME: &'static str = "JavaScript";
-    const ADAPTER_NPM_NAME: &'static str = "vscode-js-debug";
     const ADAPTER_PATH: &'static str = "js-debug/src/dapDebugServer.js";
-
-    async fn fetch_latest_adapter_version(
-        &self,
-        delegate: &Arc<dyn DapDelegate>,
-    ) -> Result<AdapterVersion> {
-        let release = latest_github_release(
-            &format!("microsoft/{}", Self::ADAPTER_NPM_NAME),
-            true,
-            false,
-            delegate.http_client(),
-        )
-        .await?;
-
-        let asset_name = format!("js-debug-dap-{}.tar.gz", release.tag_name);
-
-        Ok(AdapterVersion {
-            tag_name: release.tag_name,
-            url: release
-                .assets
-                .iter()
-                .find(|asset| asset.name == asset_name)
-                .with_context(|| format!("no asset found matching {asset_name:?}"))?
-                .browser_download_url
-                .clone(),
-        })
-    }
 
     async fn get_installed_binary(
         &self,
@@ -445,21 +415,6 @@ impl DebugAdapter for JsDebugAdapter {
         user_installed_path: Option<PathBuf>,
         cx: &mut AsyncApp,
     ) -> Result<DebugAdapterBinary> {
-        if self.checked.set(()).is_ok() {
-            delegate.output_to_console(format!("Checking latest version of {}...", self.name()));
-            if let Some(version) = self.fetch_latest_adapter_version(delegate).await.log_err() {
-                adapters::download_adapter_from_github(
-                    self.name(),
-                    version,
-                    adapters::DownloadedFileType::GzipTar,
-                    delegate.as_ref(),
-                )
-                .await?;
-            } else {
-                delegate.output_to_console(format!("{} debug adapter is up to date", self.name()));
-            }
-        }
-
         self.get_installed_binary(delegate, &config, user_installed_path, cx)
             .await
     }

@@ -1,4 +1,3 @@
-use adapters::latest_github_release;
 use anyhow::Context as _;
 use anyhow::bail;
 use dap::StartDebuggingRequestArguments;
@@ -6,46 +5,17 @@ use dap::StartDebuggingRequestArgumentsRequest;
 use dap::adapters::{DebugTaskDefinition, TcpArguments};
 use gpui::{AsyncApp, SharedString};
 use language::LanguageName;
-use std::{collections::HashMap, path::PathBuf, sync::OnceLock};
-use util::ResultExt;
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::*;
 
 #[derive(Default)]
 pub(crate) struct PhpDebugAdapter {
-    checked: OnceLock<()>,
 }
 
 impl PhpDebugAdapter {
     const ADAPTER_NAME: &'static str = "PHP";
-    const ADAPTER_PACKAGE_NAME: &'static str = "vscode-php-debug";
     const ADAPTER_PATH: &'static str = "extension/out/phpDebug.js";
-
-    async fn fetch_latest_adapter_version(
-        &self,
-        delegate: &Arc<dyn DapDelegate>,
-    ) -> Result<AdapterVersion> {
-        let release = latest_github_release(
-            &format!("{}/{}", "xdebug", Self::ADAPTER_PACKAGE_NAME),
-            true,
-            false,
-            delegate.http_client(),
-        )
-        .await?;
-
-        let asset_name = format!("php-debug-{}.vsix", release.tag_name.replace("v", ""));
-
-        Ok(AdapterVersion {
-            tag_name: release.tag_name,
-            url: release
-                .assets
-                .iter()
-                .find(|asset| asset.name == asset_name)
-                .with_context(|| format!("no asset found matching {asset_name:?}"))?
-                .browser_download_url
-                .clone(),
-        })
-    }
 
     async fn get_installed_binary(
         &self,
@@ -324,19 +294,6 @@ impl DebugAdapter for PhpDebugAdapter {
         user_installed_path: Option<PathBuf>,
         cx: &mut AsyncApp,
     ) -> Result<DebugAdapterBinary> {
-        if self.checked.set(()).is_ok() {
-            delegate.output_to_console(format!("Checking latest version of {}...", self.name()));
-            if let Some(version) = self.fetch_latest_adapter_version(delegate).await.log_err() {
-                adapters::download_adapter_from_github(
-                    self.name(),
-                    version,
-                    adapters::DownloadedFileType::Vsix,
-                    delegate.as_ref(),
-                )
-                .await?;
-            }
-        }
-
         self.get_installed_binary(delegate, &task_definition, user_installed_path, cx)
             .await
     }

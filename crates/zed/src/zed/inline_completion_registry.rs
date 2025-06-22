@@ -1,6 +1,5 @@
 use client::{Client, UserStore};
 use collections::HashMap;
-use copilot::{Copilot, CopilotCompletionProvider};
 use editor::Editor;
 use gpui::{AnyWindowHandle, App, AppContext as _, Context, Entity, WeakEntity};
 use language::language_settings::{EditPredictionProvider, all_language_settings};
@@ -23,8 +22,6 @@ pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
             if !editor.mode().is_full() {
                 return;
             }
-
-            register_backward_compatible_actions(editor, cx);
 
             let Some(window) = window else {
                 return;
@@ -121,7 +118,6 @@ pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
                                 .ok();
                         }
                         EditPredictionProvider::None
-                        | EditPredictionProvider::Copilot
                         | EditPredictionProvider::Supermaven => {}
                     }
                 }
@@ -160,46 +156,6 @@ fn assign_edit_prediction_providers(
     }
 }
 
-fn register_backward_compatible_actions(editor: &mut Editor, cx: &mut Context<Editor>) {
-    // We renamed some of these actions to not be copilot-specific, but that
-    // would have not been backwards-compatible. So here we are re-registering
-    // the actions with the old names to not break people's keymaps.
-    editor
-        .register_action(cx.listener(
-            |editor, _: &copilot::Suggest, window: &mut Window, cx: &mut Context<Editor>| {
-                editor.show_inline_completion(&Default::default(), window, cx);
-            },
-        ))
-        .detach();
-    editor
-        .register_action(cx.listener(
-            |editor, _: &copilot::NextSuggestion, window: &mut Window, cx: &mut Context<Editor>| {
-                editor.next_edit_prediction(&Default::default(), window, cx);
-            },
-        ))
-        .detach();
-    editor
-        .register_action(cx.listener(
-            |editor,
-             _: &copilot::PreviousSuggestion,
-             window: &mut Window,
-             cx: &mut Context<Editor>| {
-                editor.previous_edit_prediction(&Default::default(), window, cx);
-            },
-        ))
-        .detach();
-    editor
-        .register_action(cx.listener(
-            |editor,
-             _: &editor::actions::AcceptPartialCopilotSuggestion,
-             window: &mut Window,
-             cx: &mut Context<Editor>| {
-                editor.accept_partial_inline_completion(&Default::default(), window, cx);
-            },
-        ))
-        .detach();
-}
-
 fn assign_edit_prediction_provider(
     editor: &mut Editor,
     provider: EditPredictionProvider,
@@ -214,19 +170,6 @@ fn assign_edit_prediction_provider(
     match provider {
         EditPredictionProvider::None => {
             editor.set_edit_prediction_provider::<ZetaInlineCompletionProvider>(None, window, cx);
-        }
-        EditPredictionProvider::Copilot => {
-            if let Some(copilot) = Copilot::global(cx) {
-                if let Some(buffer) = singleton_buffer {
-                    if buffer.read(cx).file().is_some() {
-                        copilot.update(cx, |copilot, cx| {
-                            copilot.register_buffer(&buffer, cx);
-                        });
-                    }
-                }
-                let provider = cx.new(|_| CopilotCompletionProvider::new(copilot));
-                editor.set_edit_prediction_provider(Some(provider), window, cx);
-            }
         }
         EditPredictionProvider::Supermaven => {
             if let Some(supermaven) = Supermaven::global(cx) {

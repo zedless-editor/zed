@@ -1,7 +1,6 @@
 use crate::HeadlessProject;
 use crate::headless_project::HeadlessAppState;
 use anyhow::{Context as _, Result, anyhow};
-use chrono::Utc;
 use client::{ProxySettings};
 
 use extension::ExtensionHostProxy;
@@ -9,7 +8,7 @@ use fs::{Fs, RealFs};
 use futures::channel::mpsc;
 use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, FutureExt, SinkExt, select, select_biased};
 use git::GitHostingProviderRegistry;
-use gpui::{App, AppContext as _, Context, Entity, SemanticVersion, UpdateGlobal as _};
+use gpui::{App, AppContext as _, Context, SemanticVersion, UpdateGlobal as _};
 use gpui_tokio::Tokio;
 use http_client::{Url, read_proxy_from_env};
 use language::LanguageRegistry;
@@ -17,7 +16,7 @@ use node_runtime::{NodeBinaryOptions, NodeRuntime};
 use paths::logs_dir;
 use project::project_settings::ProjectSettings;
 
-use release_channel::{AppVersion, RELEASE_CHANNEL, ReleaseChannel};
+use release_channel::{AppVersion};
 use remote::proxy::ProxyLaunchError;
 use remote::ssh_session::ChannelClient;
 use remote::{
@@ -26,7 +25,6 @@ use remote::{
 };
 use reqwest_client::ReqwestClient;
 use rpc::proto::{self, Envelope, SSH_PROJECT_ID};
-use rpc::{AnyProtoClient, TypedEnvelope};
 use settings::{Settings, SettingsStore, watch_config_file};
 use smol::channel::{Receiver, Sender};
 use smol::io::AsyncReadExt;
@@ -36,7 +34,7 @@ use smol::{net::unix::UnixListener, stream::StreamExt as _};
 use std::ffi::OsStr;
 use std::ops::ControlFlow;
 use std::str::FromStr;
-use std::{env, thread};
+use std::{env};
 use std::{
     io::Write,
     mem,

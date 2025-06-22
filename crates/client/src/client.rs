@@ -13,7 +13,6 @@ use async_tungstenite::tungstenite::{
     http::{HeaderValue, Request, StatusCode},
 };
 use chrono::{DateTime, Utc};
-use clock::SystemClock;
 use credentials_provider::CredentialsProvider;
 use futures::{
     AsyncReadExt, FutureExt, SinkExt, Stream, StreamExt, TryFutureExt as _, TryStreamExt,
@@ -529,7 +528,6 @@ impl settings::Settings for TelemetrySettings {
 
 impl Client {
     pub fn new(
-        clock: Arc<dyn SystemClock>,
         http: Arc<HttpClientWithUrl>,
         cx: &mut App,
     ) -> Arc<Self> {
@@ -551,13 +549,12 @@ impl Client {
     }
 
     pub fn production(cx: &mut App) -> Arc<Self> {
-        let clock = Arc::new(clock::RealSystemClock);
         let http = Arc::new(HttpClientWithUrl::new_url(
             cx.http_client(),
             &ClientSettings::get_global(cx).server_url,
             cx.http_client().proxy().cloned(),
         ));
-        Self::new(clock, http, cx)
+        Self::new(http, cx)
     }
 
     pub fn id(&self) -> u64 {
@@ -1644,7 +1641,6 @@ mod tests {
     use super::*;
     use crate::test::FakeServer;
 
-    use clock::FakeSystemClock;
     use gpui::{AppContext as _, BackgroundExecutor, TestAppContext};
     use http_client::FakeHttpClient;
     use parking_lot::Mutex;
@@ -1658,7 +1654,6 @@ mod tests {
         let user_id = 5;
         let client = cx.update(|cx| {
             Client::new(
-                Arc::new(FakeSystemClock::new()),
                 FakeHttpClient::with_404_response(),
                 cx,
             )
@@ -1699,7 +1694,6 @@ mod tests {
         let user_id = 5;
         let client = cx.update(|cx| {
             Client::new(
-                Arc::new(FakeSystemClock::new()),
                 FakeHttpClient::with_404_response(),
                 cx,
             )
@@ -1778,7 +1772,6 @@ mod tests {
         let dropped_auth_count = Arc::new(Mutex::new(0));
         let client = cx.update(|cx| {
             Client::new(
-                Arc::new(FakeSystemClock::new()),
                 FakeHttpClient::with_404_response(),
                 cx,
             )
@@ -1821,7 +1814,6 @@ mod tests {
         let user_id = 5;
         let client = cx.update(|cx| {
             Client::new(
-                Arc::new(FakeSystemClock::new()),
                 FakeHttpClient::with_404_response(),
                 cx,
             )
@@ -1889,7 +1881,6 @@ mod tests {
         let user_id = 5;
         let client = cx.update(|cx| {
             Client::new(
-                Arc::new(FakeSystemClock::new()),
                 FakeHttpClient::with_404_response(),
                 cx,
             )
@@ -1924,7 +1915,6 @@ mod tests {
         let user_id = 5;
         let client = cx.update(|cx| {
             Client::new(
-                Arc::new(FakeSystemClock::new()),
                 FakeHttpClient::with_404_response(),
                 cx,
             )

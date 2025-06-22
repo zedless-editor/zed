@@ -1767,7 +1767,6 @@ fn tokens_for_bytes(bytes: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use client::test::FakeServer;
-    use clock::FakeSystemClock;
     use gpui::TestAppContext;
     use http_client::FakeHttpClient;
     use indoc::indoc;
@@ -1989,7 +1988,7 @@ mod tests {
                 .unwrap())
         });
 
-        let client = cx.update(|cx| Client::new(Arc::new(FakeSystemClock::new()), http_client, cx));
+        let client = cx.update(|cx| Client::new(http_client, cx));
         cx.update(|cx| {
             RefreshLlmTokenListener::register(client.clone(), cx);
         });
@@ -2043,7 +2042,7 @@ mod tests {
             }
         });
 
-        let client = cx.update(|cx| Client::new(Arc::new(FakeSystemClock::new()), http_client, cx));
+        let client = cx.update(|cx| Client::new(http_client, cx));
         cx.update(|cx| {
             RefreshLlmTokenListener::register(client.clone(), cx);
         });

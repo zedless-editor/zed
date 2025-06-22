@@ -238,16 +238,6 @@ Error: Running Zed as root or via sudo is unsupported.
     let app_commit_sha =
         option_env!("ZED_COMMIT_SHA").map(|commit_sha| AppCommitSha::new(commit_sha.to_string()));
 
-    if args.system_specs {
-        let system_specs = feedback::system_specs::SystemSpecs::new_stateless(
-            app_version,
-            app_commit_sha.clone(),
-            *release_channel::RELEASE_CHANNEL,
-        );
-        println!("Zed System Specs (from CLI):\n{}", system_specs);
-        return;
-    }
-
     log::info!("========== starting zed ==========");
 
     let app = Application::new().with_assets(Assets);
@@ -1028,11 +1018,6 @@ struct Args {
     /// Instructs zed to run as a dev server on this machine. (not implemented)
     #[arg(long)]
     dev_server_token: Option<String>,
-
-    /// Prints system specs. Useful for submitting issues on GitHub when encountering a bug
-    /// that prevents Zed from starting, so you can't run `zed: copy system specs to clipboard`
-    #[arg(long)]
-    system_specs: bool,
 
     /// Used for SSH/Git password authentication, to remove the need for netcat as a dependency,
     /// by having Zed act like netcat communicating over a Unix socket.

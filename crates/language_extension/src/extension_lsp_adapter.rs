@@ -163,22 +163,6 @@ impl LspAdapter for ExtensionLspAdapter {
         .boxed_local()
     }
 
-    async fn fetch_latest_server_version(
-        &self,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<Box<dyn 'static + Send + Any>> {
-        unreachable!("get_language_server_command is overridden")
-    }
-
-    async fn fetch_server_binary(
-        &self,
-        _: Box<dyn 'static + Send + Any>,
-        _: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<LanguageServerBinary> {
-        unreachable!("get_language_server_command is overridden")
-    }
-
     async fn cached_server_binary(
         &self,
         _: PathBuf,

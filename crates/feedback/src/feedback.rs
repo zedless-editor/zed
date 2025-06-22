@@ -17,22 +17,11 @@ actions!(
     ]
 );
 
-const ZED_REPO_URL: &str = "https://github.com/zed-industries/zed";
+const ZED_REPO_URL: &str = "https://github.com/zedless-editor/zed";
 
-const REQUEST_FEATURE_URL: &str = "https://github.com/zed-industries/zed/discussions/new/choose";
+const REQUEST_FEATURE_URL: &str = "https://github.com/zedless-editor/zed/discussions/new/choose";
 
-fn file_bug_report_url(specs: &SystemSpecs) -> String {
-    format!(
-        concat!(
-            "https://github.com/zed-industries/zed/issues/new",
-            "?",
-            "template=10_bug_report.yml",
-            "&",
-            "environment={}"
-        ),
-        urlencoding::encode(&specs.to_string())
-    )
-}
+const BUG_REPORT_URL: &str = "https://github.com/zedless-editor/zed/issues/new";
 
 pub fn init(cx: &mut App) {
     cx.observe_new(|workspace: &mut Workspace, window, cx| {
@@ -65,16 +54,8 @@ pub fn init(cx: &mut App) {
             .register_action(|_, _: &RequestFeature, _, cx| {
                 cx.open_url(REQUEST_FEATURE_URL);
             })
-            .register_action(move |_, _: &FileBugReport, window, cx| {
-                let specs = SystemSpecs::new(window, cx);
-                cx.spawn_in(window, async move |_, cx| {
-                    let specs = specs.await;
-                    cx.update(|_, cx| {
-                        cx.open_url(&file_bug_report_url(&specs));
-                    })
-                    .log_err();
-                })
-                .detach();
+            .register_action(move |_, _: &FileBugReport, _, cx| {
+                cx.open_url(BUG_REPORT_URL);
             })
             .register_action(move |_, _: &OpenZedRepo, _, cx| {
                 cx.open_url(ZED_REPO_URL);

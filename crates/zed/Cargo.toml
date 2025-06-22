@@ -41,7 +41,6 @@ collab_ui.workspace = true
 collections.workspace = true
 command_palette.workspace = true
 component.workspace = true
-copilot.workspace = true
 dap_adapters.workspace = true
 db.workspace = true
 debug_adapter_extension.workspace = true

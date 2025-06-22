@@ -140,16 +140,12 @@ dependencies = [
 name = "agent_settings"
 version = "0.1.0"
 dependencies = [
- "anthropic",
  "anyhow",
  "collections",
- "deepseek",
  "fs",
  "gpui",
  "language_model",
- "lmstudio",
  "log",
- "mistral",
  "ollama",
  "open_ai",
  "paths",
@@ -348,22 +344,6 @@ dependencies = [
  "anstyle",
  "once_cell",
  "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "anthropic"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "futures 0.3.31",
- "http_client",
- "schemars",
- "serde",
- "serde_json",
- "strum 0.27.1",
- "thiserror 2.0.12",
- "workspace-hack",
 ]
 
 [[package]]
@@ -3215,47 +3195,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "copilot"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-std",
- "chrono",
- "client",
- "clock",
- "collections",
- "command_palette_hooks",
- "ctor",
- "editor",
- "fs",
- "futures 0.3.31",
- "gpui",
- "http_client",
- "indoc",
- "inline_completion",
- "itertools 0.14.0",
- "language",
- "log",
- "lsp",
- "menu",
- "node_runtime",
- "parking_lot",
- "paths",
- "project",
- "rpc",
- "serde",
- "serde_json",
- "settings",
- "task",
- "theme",
- "ui",
- "util",
- "workspace",
- "workspace-hack",
- "zlog",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4185,19 +4124,6 @@ dependencies = [
  "workspace-hack",
  "zed_actions",
  "zlog",
-]
-
-[[package]]
-name = "deepseek"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures 0.3.31",
- "http_client",
- "schemars",
- "serde",
- "serde_json",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6926,20 +6852,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "google_ai"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures 0.3.31",
- "http_client",
- "schemars",
- "serde",
- "serde_json",
- "strum 0.27.1",
- "workspace-hack",
-]
-
-[[package]]
 name = "gpu-alloc"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8101,7 +8013,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "client",
- "copilot",
  "editor",
  "feature_flags",
  "fs",
@@ -8819,7 +8730,6 @@ dependencies = [
 name = "language_model"
 version = "0.1.0"
 dependencies = [
- "anthropic",
  "anyhow",
  "base64 0.22.1",
  "client",
@@ -8845,30 +8755,23 @@ dependencies = [
 name = "language_models"
 version = "0.1.0"
 dependencies = [
- "anthropic",
  "anyhow",
  "aws-config",
  "aws-credential-types",
  "client",
  "collections",
- "copilot",
  "credentials_provider",
- "deepseek",
  "editor",
  "fs",
  "futures 0.3.31",
- "google_ai",
  "gpui",
  "gpui_tokio",
  "http_client",
  "language_model",
- "lmstudio",
  "log",
  "menu",
- "mistral",
  "ollama",
  "open_ai",
- "open_router",
  "partial-json-fixer",
  "project",
  "proto",
@@ -8916,7 +8819,6 @@ dependencies = [
  "anyhow",
  "client",
  "collections",
- "copilot",
  "editor",
  "futures 0.3.31",
  "gpui",
@@ -9356,19 +9258,6 @@ dependencies = [
  "cc",
  "doxygen-rs",
  "libc",
-]
-
-[[package]]
-name = "lmstudio"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures 0.3.31",
- "http_client",
- "schemars",
- "serde",
- "serde_json",
- "workspace-hack",
 ]
 
 [[package]]
@@ -9930,20 +9819,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "359f76430b20a79f9e20e115b3428614e654f04fab314482fc0fda0ebd3c6044"
 dependencies = [
  "windows-sys 0.48.0",
-]
-
-[[package]]
-name = "mistral"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures 0.3.31",
- "http_client",
- "schemars",
- "serde",
- "serde_json",
- "strum 0.27.1",
- "workspace-hack",
 ]
 
 [[package]]
@@ -10797,19 +10672,6 @@ dependencies = [
  "serde",
  "serde_json",
  "strum 0.27.1",
- "workspace-hack",
-]
-
-[[package]]
-name = "open_router"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures 0.3.31",
- "http_client",
- "schemars",
- "serde",
- "serde_json",
  "workspace-hack",
 ]
 
@@ -19840,7 +19702,6 @@ dependencies = [
  "collections",
  "command_palette",
  "component",
- "copilot",
  "dap",
  "dap_adapters",
  "db",

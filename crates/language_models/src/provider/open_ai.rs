@@ -756,13 +756,6 @@ impl ConfigurationView {
 
 impl Render for ConfigurationView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        const INSTRUCTIONS: [&str; 4] = [
-            "To use Zed's assistant with an OpenAI-compatible provider, follow these steps:",
-            " - Configure the provider in the config file",
-            " - Paste your API key below and hit enter to start using the assistant",
-            " - If your provider has no authentication, just insert a dummy key",
-        ];
-
         let env_var_set = self.state.read(cx).api_key_from_env;
 
         if self.load_credentials_task.is_some() {

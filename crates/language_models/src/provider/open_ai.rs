@@ -22,7 +22,6 @@ use settings::{Settings, SettingsStore};
 use std::pin::Pin;
 use std::str::FromStr as _;
 use std::sync::Arc;
-use strum::IntoEnumIterator;
 use theme::ThemeSettings;
 use ui::{Icon, IconName, List, Tooltip, prelude::*};
 use util::ResultExt;
@@ -836,6 +835,7 @@ impl Render for ConfigurationView {
 mod tests {
     use gpui::TestAppContext;
     use language_model::LanguageModelRequestMessage;
+    use strum::IntoEnumIterator as _;
 
     use super::*;
 

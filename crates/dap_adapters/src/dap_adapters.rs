@@ -14,8 +14,7 @@ use codelldb::CodeLldbDebugAdapter;
 use dap::{
     DapRegistry,
     adapters::{
-        self, AdapterVersion, DapDelegate, DebugAdapter, DebugAdapterBinary, DebugAdapterName,
-        GithubRepo,
+        self, DapDelegate, DebugAdapter, DebugAdapterBinary, DebugAdapterName,
     },
     configure_tcp_connection,
     inline_value::{GoInlineValueProvider, PythonInlineValueProvider, RustInlineValueProvider},

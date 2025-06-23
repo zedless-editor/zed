@@ -1,6 +1,5 @@
 mod application_menu;
 mod collab;
-mod onboarding_banner;
 mod platforms;
 mod title_bar_settings;
 
@@ -15,7 +14,6 @@ use crate::application_menu::{
 };
 
 use crate::platforms::{platform_linux, platform_mac, platform_windows};
-use auto_update::AutoUpdateStatus;
 use call::ActiveCall;
 use client::{Client, UserStore};
 use gpui::{
@@ -24,7 +22,6 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, WindowControlArea,
     actions, div, px,
 };
-use onboarding_banner::OnboardingBanner;
 use project::Project;
 use rpc::proto;
 use settings::Settings as _;
@@ -39,8 +36,6 @@ use ui::{
 use util::ResultExt;
 use workspace::{Workspace, notifications::NotifyResultExt};
 use zed_actions::{OpenRecent, OpenRemote};
-
-pub use onboarding_banner::restore_banner;
 
 #[cfg(feature = "stories")]
 pub use stories::*;
@@ -121,7 +116,6 @@ pub struct TitleBar {
     should_move: bool,
     application_menu: Option<Entity<ApplicationMenu>>,
     _subscriptions: Vec<Subscription>,
-    banner: Entity<OnboardingBanner>,
 }
 
 impl Render for TitleBar {
@@ -309,17 +303,6 @@ impl TitleBar {
         subscriptions.push(cx.observe_window_activation(window, Self::window_activation_changed));
         subscriptions.push(cx.observe(&user_store, |_, _, cx| cx.notify()));
 
-        let banner = cx.new(|cx| {
-            OnboardingBanner::new(
-                "Agentic Onboarding",
-                IconName::ZedAssistant,
-                "Agentic Editing",
-                None,
-                zed_actions::agent::OpenOnboardingModal.boxed_clone(),
-                cx,
-            )
-        });
-
         Self {
             platform_style,
             content: div().id(id.into()),
@@ -331,7 +314,6 @@ impl TitleBar {
             user_store,
             client,
             _subscriptions: subscriptions,
-            banner,
         }
     }
 
@@ -620,33 +602,6 @@ impl TitleBar {
                     .tooltip(Tooltip::text("Disconnected"))
                     .into_any_element(),
             ),
-            client::Status::UpgradeRequired => {
-                let auto_updater = auto_update::AutoUpdater::get(cx);
-                let label = match auto_updater.map(|auto_update| auto_update.read(cx).status()) {
-                    Some(AutoUpdateStatus::Updated { .. }) => "Please restart Zed to Collaborate",
-                    Some(AutoUpdateStatus::Installing { .. })
-                    | Some(AutoUpdateStatus::Downloading { .. })
-                    | Some(AutoUpdateStatus::Checking) => "Updating...",
-                    Some(AutoUpdateStatus::Idle) | Some(AutoUpdateStatus::Errored) | None => {
-                        "Please update Zed to Collaborate"
-                    }
-                };
-
-                Some(
-                    Button::new("connection-status", label)
-                        .label_size(LabelSize::Small)
-                        .on_click(|_, window, cx| {
-                            if let Some(auto_updater) = auto_update::AutoUpdater::get(cx) {
-                                if auto_updater.read(cx).status().is_updated() {
-                                    workspace::reload(&Default::default(), cx);
-                                    return;
-                                }
-                            }
-                            auto_update::check(&Default::default(), window, cx);
-                        })
-                        .into_any_element(),
-                )
-            }
             _ => None,
         }
     }

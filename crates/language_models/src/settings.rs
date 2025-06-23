@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use gpui::App;
-use language_model::LanguageModelCacheConfiguration;
 use project::Fs;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -10,16 +9,8 @@ use settings::{Settings, SettingsSources, update_settings_file};
 
 use crate::provider::{
     self,
-    anthropic::AnthropicSettings,
-    cloud::{self, ZedDotDevSettings},
-    copilot_chat::CopilotChatSettings,
-    deepseek::DeepSeekSettings,
-    google::GoogleSettings,
-    lmstudio::LmStudioSettings,
-    mistral::MistralSettings,
     ollama::OllamaSettings,
     open_ai::OpenAiSettings,
-    open_router::OpenRouterSettings,
 };
 
 /// Initializes the language model settings.
@@ -39,150 +30,24 @@ pub fn init(fs: Arc<dyn Fs>, cx: &mut App) {
             }
         });
     }
-
-    if AllLanguageModelSettings::get_global(cx)
-        .anthropic
-        .needs_setting_migration
-    {
-        update_settings_file::<AllLanguageModelSettings>(fs, cx, move |setting, _| {
-            if let Some(settings) = setting.anthropic.clone() {
-                let (newest_version, _) = settings.upgrade();
-                setting.anthropic = Some(AnthropicSettingsContent::Versioned(
-                    VersionedAnthropicSettingsContent::V1(newest_version),
-                ));
-            }
-        });
-    }
 }
 
 #[derive(Default)]
 pub struct AllLanguageModelSettings {
-    pub anthropic: AnthropicSettings,
     pub ollama: OllamaSettings,
     pub openai: OpenAiSettings,
-    pub open_router: OpenRouterSettings,
-    pub zed_dot_dev: ZedDotDevSettings,
-    pub google: GoogleSettings,
-    pub copilot_chat: CopilotChatSettings,
-    pub lmstudio: LmStudioSettings,
-    pub deepseek: DeepSeekSettings,
-    pub mistral: MistralSettings,
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct AllLanguageModelSettingsContent {
-    pub anthropic: Option<AnthropicSettingsContent>,
     pub ollama: Option<OllamaSettingsContent>,
-    pub lmstudio: Option<LmStudioSettingsContent>,
     pub openai: Option<OpenAiSettingsContent>,
-    pub open_router: Option<OpenRouterSettingsContent>,
-    #[serde(rename = "zed.dev")]
-    pub zed_dot_dev: Option<ZedDotDevSettingsContent>,
-    pub google: Option<GoogleSettingsContent>,
-    pub deepseek: Option<DeepseekSettingsContent>,
-    pub copilot_chat: Option<CopilotChatSettingsContent>,
-    pub mistral: Option<MistralSettingsContent>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
-#[serde(untagged)]
-pub enum AnthropicSettingsContent {
-    Versioned(VersionedAnthropicSettingsContent),
-    Legacy(LegacyAnthropicSettingsContent),
-}
-
-impl AnthropicSettingsContent {
-    pub fn upgrade(self) -> (AnthropicSettingsContentV1, bool) {
-        match self {
-            AnthropicSettingsContent::Legacy(content) => (
-                AnthropicSettingsContentV1 {
-                    api_url: content.api_url,
-                    available_models: content.available_models.map(|models| {
-                        models
-                            .into_iter()
-                            .filter_map(|model| match model {
-                                anthropic::Model::Custom {
-                                    name,
-                                    display_name,
-                                    max_tokens,
-                                    tool_override,
-                                    cache_configuration,
-                                    max_output_tokens,
-                                    default_temperature,
-                                    extra_beta_headers,
-                                    mode,
-                                } => Some(provider::anthropic::AvailableModel {
-                                    name,
-                                    display_name,
-                                    max_tokens,
-                                    tool_override,
-                                    cache_configuration: cache_configuration.as_ref().map(
-                                        |config| LanguageModelCacheConfiguration {
-                                            max_cache_anchors: config.max_cache_anchors,
-                                            should_speculate: config.should_speculate,
-                                            min_total_token: config.min_total_token,
-                                        },
-                                    ),
-                                    max_output_tokens,
-                                    default_temperature,
-                                    extra_beta_headers,
-                                    mode: Some(mode.into()),
-                                }),
-                                _ => None,
-                            })
-                            .collect()
-                    }),
-                },
-                true,
-            ),
-            AnthropicSettingsContent::Versioned(content) => match content {
-                VersionedAnthropicSettingsContent::V1(content) => (content, false),
-            },
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
-pub struct LegacyAnthropicSettingsContent {
-    pub api_url: Option<String>,
-    pub available_models: Option<Vec<anthropic::Model>>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
-#[serde(tag = "version")]
-pub enum VersionedAnthropicSettingsContent {
-    #[serde(rename = "1")]
-    V1(AnthropicSettingsContentV1),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
-pub struct AnthropicSettingsContentV1 {
-    pub api_url: Option<String>,
-    pub available_models: Option<Vec<provider::anthropic::AvailableModel>>,
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct OllamaSettingsContent {
     pub api_url: Option<String>,
     pub available_models: Option<Vec<provider::ollama::AvailableModel>>,
-}
-
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
-pub struct LmStudioSettingsContent {
-    pub api_url: Option<String>,
-    pub available_models: Option<Vec<provider::lmstudio::AvailableModel>>,
-}
-
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
-pub struct DeepseekSettingsContent {
-    pub api_url: Option<String>,
-    pub available_models: Option<Vec<provider::deepseek::AvailableModel>>,
-}
-
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
-pub struct MistralSettingsContent {
-    pub api_url: Option<String>,
-    pub available_models: Option<Vec<provider::mistral::AvailableModel>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
@@ -248,30 +113,6 @@ pub struct OpenAiSettingsContentV1 {
     pub available_models: Option<Vec<provider::open_ai::AvailableModel>>,
 }
 
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
-pub struct GoogleSettingsContent {
-    pub api_url: Option<String>,
-    pub available_models: Option<Vec<provider::google::AvailableModel>>,
-}
-
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
-pub struct ZedDotDevSettingsContent {
-    available_models: Option<Vec<cloud::AvailableModel>>,
-}
-
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
-pub struct CopilotChatSettingsContent {
-    pub api_url: Option<String>,
-    pub auth_url: Option<String>,
-    pub models_url: Option<String>,
-}
-
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
-pub struct OpenRouterSettingsContent {
-    pub api_url: Option<String>,
-    pub available_models: Option<Vec<provider::open_router::AvailableModel>>,
-}
-
 impl settings::Settings for AllLanguageModelSettings {
     const KEY: Option<&'static str> = Some("language_models");
 
@@ -289,25 +130,6 @@ impl settings::Settings for AllLanguageModelSettings {
         let mut settings = AllLanguageModelSettings::default();
 
         for value in sources.defaults_and_customizations() {
-            // Anthropic
-            let (anthropic, upgraded) = match value.anthropic.clone().map(|s| s.upgrade()) {
-                Some((content, upgraded)) => (Some(content), upgraded),
-                None => (None, false),
-            };
-
-            if upgraded {
-                settings.anthropic.needs_setting_migration = true;
-            }
-
-            merge(
-                &mut settings.anthropic.api_url,
-                anthropic.as_ref().and_then(|s| s.api_url.clone()),
-            );
-            merge(
-                &mut settings.anthropic.available_models,
-                anthropic.as_ref().and_then(|s| s.available_models.clone()),
-            );
-
             // Ollama
             let ollama = value.ollama.clone();
 
@@ -318,30 +140,6 @@ impl settings::Settings for AllLanguageModelSettings {
             merge(
                 &mut settings.ollama.available_models,
                 ollama.as_ref().and_then(|s| s.available_models.clone()),
-            );
-
-            // LM Studio
-            let lmstudio = value.lmstudio.clone();
-
-            merge(
-                &mut settings.lmstudio.api_url,
-                value.lmstudio.as_ref().and_then(|s| s.api_url.clone()),
-            );
-            merge(
-                &mut settings.lmstudio.available_models,
-                lmstudio.as_ref().and_then(|s| s.available_models.clone()),
-            );
-
-            // DeepSeek
-            let deepseek = value.deepseek.clone();
-
-            merge(
-                &mut settings.deepseek.api_url,
-                value.deepseek.as_ref().and_then(|s| s.api_url.clone()),
-            );
-            merge(
-                &mut settings.deepseek.available_models,
-                deepseek.as_ref().and_then(|s| s.available_models.clone()),
             );
 
             // OpenAI
@@ -361,66 +159,6 @@ impl settings::Settings for AllLanguageModelSettings {
             merge(
                 &mut settings.openai.available_models,
                 openai.as_ref().and_then(|s| s.available_models.clone()),
-            );
-            merge(
-                &mut settings.zed_dot_dev.available_models,
-                value
-                    .zed_dot_dev
-                    .as_ref()
-                    .and_then(|s| s.available_models.clone()),
-            );
-            merge(
-                &mut settings.google.api_url,
-                value.google.as_ref().and_then(|s| s.api_url.clone()),
-            );
-            merge(
-                &mut settings.google.available_models,
-                value
-                    .google
-                    .as_ref()
-                    .and_then(|s| s.available_models.clone()),
-            );
-
-            // Mistral
-            let mistral = value.mistral.clone();
-            merge(
-                &mut settings.mistral.api_url,
-                mistral.as_ref().and_then(|s| s.api_url.clone()),
-            );
-            merge(
-                &mut settings.mistral.available_models,
-                mistral.as_ref().and_then(|s| s.available_models.clone()),
-            );
-
-            // OpenRouter
-            let open_router = value.open_router.clone();
-            merge(
-                &mut settings.open_router.api_url,
-                open_router.as_ref().and_then(|s| s.api_url.clone()),
-            );
-            merge(
-                &mut settings.open_router.available_models,
-                open_router
-                    .as_ref()
-                    .and_then(|s| s.available_models.clone()),
-            );
-
-            // Copilot Chat
-            let copilot_chat = value.copilot_chat.clone().unwrap_or_default();
-
-            settings.copilot_chat.api_url = copilot_chat.api_url.map_or_else(
-                || Arc::from("https://api.githubcopilot.com/chat/completions"),
-                Arc::from,
-            );
-
-            settings.copilot_chat.auth_url = copilot_chat.auth_url.map_or_else(
-                || Arc::from("https://api.github.com/copilot_internal/v2/token"),
-                Arc::from,
-            );
-
-            settings.copilot_chat.models_url = copilot_chat.models_url.map_or_else(
-                || Arc::from("https://api.githubcopilot.com/models"),
-                Arc::from,
             );
         }
 

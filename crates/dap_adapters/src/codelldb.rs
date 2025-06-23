@@ -2,12 +2,10 @@ use std::{collections::HashMap, path::PathBuf, sync::OnceLock};
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
-use dap::adapters::{DebugTaskDefinition, latest_github_release};
-use futures::StreamExt;
+use dap::adapters::{DebugTaskDefinition};
 use gpui::AsyncApp;
 use serde_json::Value;
 use task::{DebugRequest, DebugScenario, ZedDebugConfig};
-use util::fs::remove_matching;
 
 use crate::*;
 
@@ -43,43 +41,6 @@ impl CodeLldbDebugAdapter {
             request,
             configuration,
         })
-    }
-
-    async fn fetch_latest_adapter_version(
-        &self,
-        delegate: &Arc<dyn DapDelegate>,
-    ) -> Result<AdapterVersion> {
-        let release =
-            latest_github_release("vadimcn/codelldb", true, false, delegate.http_client()).await?;
-
-        let arch = match std::env::consts::ARCH {
-            "aarch64" => "arm64",
-            "x86_64" => "x64",
-            unsupported => {
-                anyhow::bail!("unsupported architecture {unsupported}");
-            }
-        };
-        let platform = match std::env::consts::OS {
-            "macos" => "darwin",
-            "linux" => "linux",
-            "windows" => "win32",
-            unsupported => {
-                anyhow::bail!("unsupported operating system {unsupported}");
-            }
-        };
-        let asset_name = format!("codelldb-{platform}-{arch}.vsix");
-        let ret = AdapterVersion {
-            tag_name: release.tag_name,
-            url: release
-                .assets
-                .iter()
-                .find(|asset| asset.name == asset_name)
-                .with_context(|| format!("no asset found matching {asset_name:?}"))?
-                .browser_download_url
-                .clone(),
-        };
-
-        Ok(ret)
     }
 }
 
@@ -331,35 +292,9 @@ impl DebugAdapter for CodeLldbDebugAdapter {
         user_installed_path: Option<PathBuf>,
         _: &mut AsyncApp,
     ) -> Result<DebugAdapterBinary> {
-        let mut command = user_installed_path
+        let command = user_installed_path
             .map(|p| p.to_string_lossy().to_string())
             .or(self.path_to_codelldb.get().cloned());
-
-        if command.is_none() {
-            delegate.output_to_console(format!("Checking latest version of {}...", self.name()));
-            let adapter_path = paths::debug_adapters_dir().join(&Self::ADAPTER_NAME);
-            let version_path =
-                if let Ok(version) = self.fetch_latest_adapter_version(delegate).await {
-                    adapters::download_adapter_from_github(
-                        self.name(),
-                        version.clone(),
-                        adapters::DownloadedFileType::Vsix,
-                        delegate.as_ref(),
-                    )
-                    .await?;
-                    let version_path =
-                        adapter_path.join(format!("{}_{}", Self::ADAPTER_NAME, version.tag_name));
-                    remove_matching(&adapter_path, |entry| entry != version_path).await;
-                    version_path
-                } else {
-                    let mut paths = delegate.fs().read_dir(&adapter_path).await?;
-                    paths.next().await.context("No adapter found")??
-                };
-            let adapter_dir = version_path.join("extension").join("adapter");
-            let path = adapter_dir.join("codelldb").to_string_lossy().to_string();
-            self.path_to_codelldb.set(path.clone()).ok();
-            command = Some(path);
-        };
 
         Ok(DebugAdapterBinary {
             command: Some(command.unwrap()),

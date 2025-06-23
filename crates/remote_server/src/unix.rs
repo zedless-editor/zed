@@ -1,15 +1,14 @@
 use crate::HeadlessProject;
 use crate::headless_project::HeadlessAppState;
 use anyhow::{Context as _, Result, anyhow};
-use chrono::Utc;
-use client::{ProxySettings, telemetry};
+use client::{ProxySettings};
 
 use extension::ExtensionHostProxy;
 use fs::{Fs, RealFs};
 use futures::channel::mpsc;
 use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, FutureExt, SinkExt, select, select_biased};
 use git::GitHostingProviderRegistry;
-use gpui::{App, AppContext as _, Context, Entity, SemanticVersion, UpdateGlobal as _};
+use gpui::{App, AppContext as _, Context, SemanticVersion, UpdateGlobal as _};
 use gpui_tokio::Tokio;
 use http_client::{Url, read_proxy_from_env};
 use language::LanguageRegistry;
@@ -17,7 +16,7 @@ use node_runtime::{NodeBinaryOptions, NodeRuntime};
 use paths::logs_dir;
 use project::project_settings::ProjectSettings;
 
-use release_channel::{AppVersion, RELEASE_CHANNEL, ReleaseChannel};
+use release_channel::{AppVersion};
 use remote::proxy::ProxyLaunchError;
 use remote::ssh_session::ChannelClient;
 use remote::{
@@ -26,7 +25,6 @@ use remote::{
 };
 use reqwest_client::ReqwestClient;
 use rpc::proto::{self, Envelope, SSH_PROJECT_ID};
-use rpc::{AnyProtoClient, TypedEnvelope};
 use settings::{Settings, SettingsStore, watch_config_file};
 use smol::channel::{Receiver, Sender};
 use smol::io::AsyncReadExt;
@@ -36,14 +34,13 @@ use smol::{net::unix::UnixListener, stream::StreamExt as _};
 use std::ffi::OsStr;
 use std::ops::ControlFlow;
 use std::str::FromStr;
-use std::{env, thread};
+use std::{env};
 use std::{
     io::Write,
     mem,
     path::{Path, PathBuf},
     sync::Arc,
 };
-use telemetry_events::LocationData;
 use util::ResultExt;
 
 fn init_logging_proxy() {
@@ -107,133 +104,6 @@ fn init_logging_server(log_file_path: PathBuf) -> Result<Receiver<Vec<u8>>> {
         .init();
 
     Ok(rx)
-}
-
-fn init_panic_hook() {
-    std::panic::set_hook(Box::new(|info| {
-        let payload = info
-            .payload()
-            .downcast_ref::<&str>()
-            .map(|s| s.to_string())
-            .or_else(|| info.payload().downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "Box<Any>".to_string());
-
-        let backtrace = backtrace::Backtrace::new();
-        let mut backtrace = backtrace
-            .frames()
-            .iter()
-            .flat_map(|frame| {
-                frame
-                    .symbols()
-                    .iter()
-                    .filter_map(|frame| Some(format!("{:#}", frame.name()?)))
-            })
-            .collect::<Vec<_>>();
-
-        // Strip out leading stack frames for rust panic-handling.
-        if let Some(ix) = backtrace
-            .iter()
-            .position(|name| name == "rust_begin_unwind")
-        {
-            backtrace.drain(0..=ix);
-        }
-
-        let thread = thread::current();
-        let thread_name = thread.name().unwrap_or("<unnamed>");
-
-        log::error!(
-            "panic occurred: {}\nBacktrace:\n{}",
-            &payload,
-            (&backtrace).join("\n")
-        );
-
-        let release_channel = *RELEASE_CHANNEL;
-        let version = match release_channel {
-            ReleaseChannel::Stable | ReleaseChannel::Preview => env!("ZED_PKG_VERSION"),
-            ReleaseChannel::Nightly | ReleaseChannel::Dev => {
-                option_env!("ZED_COMMIT_SHA").unwrap_or("missing-zed-commit-sha")
-            }
-        };
-
-        let panic_data = telemetry_events::Panic {
-            thread: thread_name.into(),
-            payload: payload.clone(),
-            location_data: info.location().map(|location| LocationData {
-                file: location.file().into(),
-                line: location.line(),
-            }),
-            app_version: format!("remote-server-{version}"),
-            app_commit_sha: option_env!("ZED_COMMIT_SHA").map(|sha| sha.into()),
-            release_channel: release_channel.display_name().into(),
-            target: env!("TARGET").to_owned().into(),
-            os_name: telemetry::os_name(),
-            os_version: Some(telemetry::os_version()),
-            architecture: env::consts::ARCH.into(),
-            panicked_on: Utc::now().timestamp_millis(),
-            backtrace,
-            system_id: None,            // Set on SSH client
-            installation_id: None,      // Set on SSH client
-            session_id: "".to_string(), // Set on SSH client
-        };
-
-        if let Some(panic_data_json) = serde_json::to_string(&panic_data).log_err() {
-            let timestamp = chrono::Utc::now().format("%Y_%m_%d %H_%M_%S").to_string();
-            let panic_file_path = paths::logs_dir().join(format!("zed-{timestamp}.panic"));
-            let panic_file = std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&panic_file_path)
-                .log_err();
-            if let Some(mut panic_file) = panic_file {
-                writeln!(&mut panic_file, "{panic_data_json}").log_err();
-                panic_file.flush().log_err();
-            }
-        }
-
-        std::process::abort();
-    }));
-}
-
-fn handle_panic_requests(project: &Entity<HeadlessProject>, client: &Arc<ChannelClient>) {
-    let client: AnyProtoClient = client.clone().into();
-    client.add_request_handler(
-        project.downgrade(),
-        |_, _: TypedEnvelope<proto::GetPanicFiles>, _cx| async move {
-            let mut children = smol::fs::read_dir(paths::logs_dir()).await?;
-            let mut panic_files = Vec::new();
-            while let Some(child) = children.next().await {
-                let child = child?;
-                let child_path = child.path();
-
-                if child_path.extension() != Some(OsStr::new("panic")) {
-                    continue;
-                }
-                let filename = if let Some(filename) = child_path.file_name() {
-                    filename.to_string_lossy()
-                } else {
-                    continue;
-                };
-
-                if !filename.starts_with("zed") {
-                    continue;
-                }
-
-                let file_contents = smol::fs::read_to_string(&child_path)
-                    .await
-                    .context("error reading panic file")?;
-
-                panic_files.push(file_contents);
-
-                // We've done what we can, delete the file
-                std::fs::remove_file(child_path)
-                    .context("error removing panic")
-                    .log_err();
-            }
-            anyhow::Ok(proto::GetPanicFilesResponse {
-                file_contents: panic_files,
-            })
-        },
-    );
 }
 
 struct ServerListeners {
@@ -409,7 +279,6 @@ pub fn execute_run(
         ControlFlow::Continue(_) => {}
     }
 
-    init_panic_hook();
     let log_rx = init_logging_server(log_file)?;
     log::info!(
         "starting up. pid_file: {:?}, stdin_socket: {:?}, stdout_socket: {:?}, stderr_socket: {:?}",
@@ -486,8 +355,6 @@ pub fn execute_run(
             )
         });
 
-        handle_panic_requests(&project, &session);
-
         cx.background_spawn(async move { cleanup_old_binaries() })
             .detach();
 
@@ -530,7 +397,6 @@ impl ServerPaths {
 
 pub fn execute_proxy(identifier: String, is_reconnecting: bool) -> Result<()> {
     init_logging_proxy();
-    init_panic_hook();
 
     log::info!("starting proxy process. PID: {}", std::process::id());
 

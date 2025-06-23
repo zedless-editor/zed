@@ -1,6 +1,5 @@
 use anyhow::Result;
 use client::{UserStore, zed_urls};
-use copilot::{Copilot, Status};
 use editor::{
     Editor,
     actions::{ShowEditPrediction, ToggleEditPrediction},
@@ -24,24 +23,17 @@ use std::{
     sync::{Arc, LazyLock},
     time::Duration,
 };
-use supermaven::{AccountStatus, Supermaven};
 use ui::{
     Clickable, ContextMenu, ContextMenuEntry, DocumentationSide, IconButton, IconButtonShape,
     Indicator, PopoverMenu, PopoverMenuHandle, ProgressBar, Tooltip, prelude::*,
 };
 use workspace::{
-    StatusItemView, Toast, Workspace, create_and_open_local_file, item::ItemHandle,
-    notifications::NotificationId,
+    StatusItemView, Workspace, create_and_open_local_file, item::ItemHandle,
 };
-use zed_actions::OpenBrowser;
 use zed_llm_client::UsageLimit;
 use zeta::RateCompletions;
 
 actions!(edit_prediction, [ToggleMenu]);
-
-const COPILOT_SETTINGS_URL: &str = "https://github.com/settings/copilot";
-
-struct CopilotErrorToast;
 
 pub struct InlineCompletionButton {
     editor_subscription: Option<(Subscription, usize)>,
@@ -56,173 +48,12 @@ pub struct InlineCompletionButton {
     popover_menu_handle: PopoverMenuHandle<ContextMenu>,
 }
 
-enum SupermavenButtonStatus {
-    Ready,
-    Errored(String),
-    NeedsActivation(String),
-    Initializing,
-}
-
 impl Render for InlineCompletionButton {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let all_language_settings = all_language_settings(None, cx);
 
         match all_language_settings.edit_predictions.provider {
             EditPredictionProvider::None => div(),
-
-            EditPredictionProvider::Copilot => {
-                let Some(copilot) = Copilot::global(cx) else {
-                    return div();
-                };
-                let status = copilot.read(cx).status();
-
-                let enabled = self.editor_enabled.unwrap_or(false);
-
-                let icon = match status {
-                    Status::Error(_) => IconName::CopilotError,
-                    Status::Authorized => {
-                        if enabled {
-                            IconName::Copilot
-                        } else {
-                            IconName::CopilotDisabled
-                        }
-                    }
-                    _ => IconName::CopilotInit,
-                };
-
-                if let Status::Error(e) = status {
-                    return div().child(
-                        IconButton::new("copilot-error", icon)
-                            .icon_size(IconSize::Small)
-                            .on_click(cx.listener(move |_, _, window, cx| {
-                                if let Some(workspace) = window.root::<Workspace>().flatten() {
-                                    workspace.update(cx, |workspace, cx| {
-                                        workspace.show_toast(
-                                            Toast::new(
-                                                NotificationId::unique::<CopilotErrorToast>(),
-                                                format!("Copilot can't be started: {}", e),
-                                            )
-                                            .on_click(
-                                                "Reinstall Copilot",
-                                                |window, cx| {
-                                                    copilot::reinstall_and_sign_in(window, cx)
-                                                },
-                                            ),
-                                            cx,
-                                        );
-                                    });
-                                }
-                            }))
-                            .tooltip(|window, cx| {
-                                Tooltip::for_action("GitHub Copilot", &ToggleMenu, window, cx)
-                            }),
-                    );
-                }
-                let this = cx.entity().clone();
-
-                div().child(
-                    PopoverMenu::new("copilot")
-                        .menu(move |window, cx| {
-                            Some(match status {
-                                Status::Authorized => this.update(cx, |this, cx| {
-                                    this.build_copilot_context_menu(window, cx)
-                                }),
-                                _ => this.update(cx, |this, cx| {
-                                    this.build_copilot_start_menu(window, cx)
-                                }),
-                            })
-                        })
-                        .anchor(Corner::BottomRight)
-                        .trigger_with_tooltip(
-                            IconButton::new("copilot-icon", icon),
-                            |window, cx| {
-                                Tooltip::for_action("GitHub Copilot", &ToggleMenu, window, cx)
-                            },
-                        )
-                        .with_handle(self.popover_menu_handle.clone()),
-                )
-            }
-
-            EditPredictionProvider::Supermaven => {
-                let Some(supermaven) = Supermaven::global(cx) else {
-                    return div();
-                };
-
-                let supermaven = supermaven.read(cx);
-
-                let status = match supermaven {
-                    Supermaven::Starting => SupermavenButtonStatus::Initializing,
-                    Supermaven::FailedDownload { error } => {
-                        SupermavenButtonStatus::Errored(error.to_string())
-                    }
-                    Supermaven::Spawned(agent) => {
-                        let account_status = agent.account_status.clone();
-                        match account_status {
-                            AccountStatus::NeedsActivation { activate_url } => {
-                                SupermavenButtonStatus::NeedsActivation(activate_url.clone())
-                            }
-                            AccountStatus::Unknown => SupermavenButtonStatus::Initializing,
-                            AccountStatus::Ready => SupermavenButtonStatus::Ready,
-                        }
-                    }
-                    Supermaven::Error { error } => {
-                        SupermavenButtonStatus::Errored(error.to_string())
-                    }
-                };
-
-                let icon = status.to_icon();
-                let tooltip_text = status.to_tooltip();
-                let has_menu = status.has_menu();
-                let this = cx.entity().clone();
-                let fs = self.fs.clone();
-
-                return div().child(
-                    PopoverMenu::new("supermaven")
-                        .menu(move |window, cx| match &status {
-                            SupermavenButtonStatus::NeedsActivation(activate_url) => {
-                                Some(ContextMenu::build(window, cx, |menu, _, _| {
-                                    let fs = fs.clone();
-                                    let activate_url = activate_url.clone();
-                                    menu.entry("Sign In", None, move |_, cx| {
-                                        cx.open_url(activate_url.as_str())
-                                    })
-                                    .entry(
-                                        "Use Copilot",
-                                        None,
-                                        move |_, cx| {
-                                            set_completion_provider(
-                                                fs.clone(),
-                                                cx,
-                                                EditPredictionProvider::Copilot,
-                                            )
-                                        },
-                                    )
-                                }))
-                            }
-                            SupermavenButtonStatus::Ready => Some(this.update(cx, |this, cx| {
-                                this.build_supermaven_context_menu(window, cx)
-                            })),
-                            _ => None,
-                        })
-                        .anchor(Corner::BottomRight)
-                        .trigger_with_tooltip(
-                            IconButton::new("supermaven-icon", icon),
-                            move |window, cx| {
-                                if has_menu {
-                                    Tooltip::for_action(
-                                        tooltip_text.clone(),
-                                        &ToggleMenu,
-                                        window,
-                                        cx,
-                                    )
-                                } else {
-                                    Tooltip::text(tooltip_text.clone())(window, cx)
-                                }
-                            },
-                        )
-                        .with_handle(self.popover_menu_handle.clone()),
-                );
-            }
 
             EditPredictionProvider::Zed => {
                 let enabled = self.editor_enabled.unwrap_or(true);
@@ -265,10 +96,6 @@ impl Render for InlineCompletionButton {
                                 )
                             })
                             .on_click(cx.listener(move |_, _, window, cx| {
-                                telemetry::event!(
-                                    "Pending ToS Clicked",
-                                    source = "Edit Prediction Status Button"
-                                );
                                 window.dispatch_action(
                                     zed_actions::OpenZedPredictOnboarding.boxed_clone(),
                                     cx,
@@ -369,10 +196,6 @@ impl InlineCompletionButton {
         popover_menu_handle: PopoverMenuHandle<ContextMenu>,
         cx: &mut Context<Self>,
     ) -> Self {
-        if let Some(copilot) = Copilot::global(cx) {
-            cx.observe(&copilot, |_, _, cx| cx.notify()).detach()
-        }
-
         cx.observe_global::<SettingsStore>(move |_, cx| cx.notify())
             .detach();
 
@@ -390,35 +213,13 @@ impl InlineCompletionButton {
         }
     }
 
-    pub fn build_copilot_start_menu(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<ContextMenu> {
-        let fs = self.fs.clone();
-        ContextMenu::build(window, cx, |menu, _, _| {
-            menu.entry("Sign In", None, copilot::initiate_sign_in)
-                .entry("Disable Copilot", None, {
-                    let fs = fs.clone();
-                    move |_window, cx| hide_copilot(fs.clone(), cx)
-                })
-                .entry("Use Supermaven", None, {
-                    let fs = fs.clone();
-                    move |_window, cx| {
-                        set_completion_provider(fs.clone(), cx, EditPredictionProvider::Supermaven)
-                    }
-                })
-        })
-    }
-
     pub fn build_language_settings_menu(
         &self,
         mut menu: ContextMenu,
-        window: &Window,
+        _window: &Window,
         cx: &mut App,
     ) -> ContextMenu {
         let fs = self.fs.clone();
-        let line_height = window.line_height();
 
         menu = menu.header("Show Edit Predictions For");
 
@@ -512,102 +313,6 @@ impl InlineCompletionButton {
                 );
         }
 
-        menu = menu.separator().header("Privacy Settings");
-        if let Some(provider) = &self.edit_prediction_provider {
-            let data_collection = provider.data_collection_state(cx);
-            if data_collection.is_supported() {
-                let provider = provider.clone();
-                let enabled = data_collection.is_enabled();
-                let is_open_source = data_collection.is_project_open_source();
-                let is_collecting = data_collection.is_enabled();
-                let (icon_name, icon_color) = if is_open_source && is_collecting {
-                    (IconName::Check, Color::Success)
-                } else {
-                    (IconName::Check, Color::Accent)
-                };
-
-                menu = menu.item(
-                    ContextMenuEntry::new("Training Data Collection")
-                        .toggleable(IconPosition::Start, data_collection.is_enabled())
-                        .icon(icon_name)
-                        .icon_color(icon_color)
-                        .documentation_aside(DocumentationSide::Left, move |cx| {
-                            let (msg, label_color, icon_name, icon_color) = match (is_open_source, is_collecting) {
-                                (true, true) => (
-                                    "Project identified as open source, and you're sharing data.",
-                                    Color::Default,
-                                    IconName::Check,
-                                    Color::Success,
-                                ),
-                                (true, false) => (
-                                    "Project identified as open source, but you're not sharing data.",
-                                    Color::Muted,
-                                    IconName::Close,
-                                    Color::Muted,
-                                ),
-                                (false, true) => (
-                                    "Project not identified as open source. No data captured.",
-                                    Color::Muted,
-                                    IconName::Close,
-                                    Color::Muted,
-                                ),
-                                (false, false) => (
-                                    "Project not identified as open source, and setting turned off.",
-                                    Color::Muted,
-                                    IconName::Close,
-                                    Color::Muted,
-                                ),
-                            };
-                            v_flex()
-                                .gap_2()
-                                .child(
-                                    Label::new(indoc!{
-                                        "Help us improve our open dataset model by sharing data from open source repositories. \
-                                        Zed must detect a license file in your repo for this setting to take effect."
-                                    })
-                                )
-                                .child(
-                                    h_flex()
-                                        .items_start()
-                                        .pt_2()
-                                        .flex_1()
-                                        .gap_1p5()
-                                        .border_t_1()
-                                        .border_color(cx.theme().colors().border_variant)
-                                        .child(h_flex().flex_shrink_0().h(line_height).child(Icon::new(icon_name).size(IconSize::XSmall).color(icon_color)))
-                                        .child(div().child(msg).w_full().text_sm().text_color(label_color.color(cx)))
-                                )
-                                .into_any_element()
-                        })
-                        .handler(move |_, cx| {
-                            provider.toggle_data_collection(cx);
-
-                            if !enabled {
-                                telemetry::event!(
-                                    "Data Collection Enabled",
-                                    source = "Edit Prediction Status Menu"
-                                );
-                            } else {
-                                telemetry::event!(
-                                    "Data Collection Disabled",
-                                    source = "Edit Prediction Status Menu"
-                                );
-                            }
-                        })
-                );
-
-                if is_collecting && !is_open_source {
-                    menu = menu.item(
-                        ContextMenuEntry::new("No data captured.")
-                            .disabled(true)
-                            .icon(IconName::Close)
-                            .icon_color(Color::Error)
-                            .icon_size(IconSize::Small),
-                    );
-                }
-            }
-        }
-
         menu = menu.item(
             ContextMenuEntry::new("Configure Excluded Files")
                 .icon(IconName::LockOutlined)
@@ -657,37 +362,6 @@ impl InlineCompletionButton {
         }
 
         menu
-    }
-
-    fn build_copilot_context_menu(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<ContextMenu> {
-        ContextMenu::build(window, cx, |menu, window, cx| {
-            self.build_language_settings_menu(menu, window, cx)
-                .separator()
-                .link(
-                    "Go to Copilot Settings",
-                    OpenBrowser {
-                        url: COPILOT_SETTINGS_URL.to_string(),
-                    }
-                    .boxed_clone(),
-                )
-                .action("Sign Out", copilot::SignOut.boxed_clone())
-        })
-    }
-
-    fn build_supermaven_context_menu(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<ContextMenu> {
-        ContextMenu::build(window, cx, |menu, window, cx| {
-            self.build_language_settings_menu(menu, window, cx)
-                .separator()
-                .action("Sign Out", supermaven::SignOut.boxed_clone())
-        })
     }
 
     fn build_zeta_context_menu(
@@ -857,33 +531,6 @@ impl StatusItemView for InlineCompletionButton {
     }
 }
 
-impl SupermavenButtonStatus {
-    fn to_icon(&self) -> IconName {
-        match self {
-            SupermavenButtonStatus::Ready => IconName::Supermaven,
-            SupermavenButtonStatus::Errored(_) => IconName::SupermavenError,
-            SupermavenButtonStatus::NeedsActivation(_) => IconName::SupermavenInit,
-            SupermavenButtonStatus::Initializing => IconName::SupermavenInit,
-        }
-    }
-
-    fn to_tooltip(&self) -> String {
-        match self {
-            SupermavenButtonStatus::Ready => "Supermaven is ready".to_string(),
-            SupermavenButtonStatus::Errored(error) => format!("Supermaven error: {}", error),
-            SupermavenButtonStatus::NeedsActivation(_) => "Supermaven needs activation".to_string(),
-            SupermavenButtonStatus::Initializing => "Supermaven initializing".to_string(),
-        }
-    }
-
-    fn has_menu(&self) -> bool {
-        match self {
-            SupermavenButtonStatus::Ready | SupermavenButtonStatus::NeedsActivation(_) => true,
-            SupermavenButtonStatus::Errored(_) | SupermavenButtonStatus::Initializing => false,
-        }
-    }
-}
-
 async fn open_disabled_globs_setting_in_editor(
     workspace: WeakEntity<Workspace>,
     cx: &mut AsyncWindowContext,
@@ -965,14 +612,6 @@ fn toggle_show_inline_completions_for_language(
             .entry(language.name())
             .or_default()
             .show_edit_predictions = Some(!show_edit_predictions);
-    });
-}
-
-fn hide_copilot(fs: Arc<dyn Fs>, cx: &mut App) {
-    update_settings_file::<AllLanguageSettings>(fs, cx, move |file, _| {
-        file.features
-            .get_or_insert(Default::default())
-            .edit_prediction_provider = Some(EditPredictionProvider::None);
     });
 }
 

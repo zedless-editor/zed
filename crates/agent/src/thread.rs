@@ -47,7 +47,7 @@ use crate::thread_store::{
     SerializedCrease, SerializedLanguageModel, SerializedMessage, SerializedMessageSegment,
     SerializedThread, SerializedToolResult, SerializedToolUse, SharedProjectContext,
 };
-use crate::tool_use::{PendingToolUse, ToolUse, ToolUseMetadata, ToolUseState};
+use crate::tool_use::{PendingToolUse, ToolUse, ToolUseState};
 
 #[derive(
     Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize, JsonSchema,
@@ -222,12 +222,6 @@ pub struct ThreadCheckpoint {
     git_checkpoint: GitStoreCheckpoint,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ThreadFeedback {
-    Positive,
-    Negative,
-}
-
 pub enum LastRestoreCheckpoint {
     Pending {
         message_id: MessageId,
@@ -352,8 +346,6 @@ pub struct Thread {
     exceeded_window_error: Option<ExceededWindowError>,
     last_usage: Option<RequestUsage>,
     tool_use_limit_reached: bool,
-    feedback: Option<ThreadFeedback>,
-    message_feedback: HashMap<MessageId, ThreadFeedback>,
     last_auto_capture_at: Option<Instant>,
     last_received_chunk_at: Option<Instant>,
     request_callback: Option<
@@ -445,8 +437,6 @@ impl Thread {
             exceeded_window_error: None,
             last_usage: None,
             tool_use_limit_reached: false,
-            feedback: None,
-            message_feedback: HashMap::default(),
             last_auto_capture_at: None,
             last_received_chunk_at: None,
             request_callback: None,
@@ -570,8 +560,6 @@ impl Thread {
             exceeded_window_error: None,
             last_usage: None,
             tool_use_limit_reached: serialized.tool_use_limit_reached,
-            feedback: None,
-            message_feedback: HashMap::default(),
             last_auto_capture_at: None,
             last_received_chunk_at: None,
             request_callback: None,
@@ -1508,19 +1496,11 @@ impl Thread {
         } else {
             None
         };
-        let prompt_id = self.last_prompt_id.clone();
-        let tool_use_metadata = ToolUseMetadata {
-            model: model.clone(),
-            thread_id: self.id.clone(),
-            prompt_id: prompt_id.clone(),
-        };
 
         self.last_received_chunk_at = Some(Instant::now());
 
         let task = cx.spawn(async move |thread, cx| {
             let stream_completion_future = model.stream_completion(request, &cx);
-            let initial_token_usage =
-                thread.read_with(cx, |thread, _cx| thread.cumulative_token_usage);
             let stream_completion = async {
                 let mut events = stream_completion_future.await?;
 
@@ -1665,7 +1645,6 @@ impl Thread {
                                 let ui_text = thread.tool_use.request_tool_use(
                                     last_assistant_message_id,
                                     tool_use,
-                                    tool_use_metadata.clone(),
                                     cx,
                                 );
 
@@ -1851,22 +1830,6 @@ impl Thread {
                     }
 
                     thread.auto_capture_telemetry(cx);
-
-                    if let Ok(initial_usage) = initial_token_usage {
-                        let usage = thread.cumulative_token_usage - initial_usage;
-
-                        telemetry::event!(
-                            "Assistant Thread Completion",
-                            thread_id = thread.id().to_string(),
-                            prompt_id = prompt_id,
-                            model = model.telemetry_id(),
-                            model_provider = model.provider_id().to_string(),
-                            input_tokens = usage.input_tokens,
-                            output_tokens = usage.output_tokens,
-                            cache_creation_input_tokens = usage.cache_creation_input_tokens,
-                            cache_read_input_tokens = usage.cache_read_input_tokens,
-                        );
-                    }
                 })
                 .ok();
         });
@@ -2338,117 +2301,6 @@ impl Thread {
         cx.emit(ThreadEvent::CancelEditing);
     }
 
-    pub fn feedback(&self) -> Option<ThreadFeedback> {
-        self.feedback
-    }
-
-    pub fn message_feedback(&self, message_id: MessageId) -> Option<ThreadFeedback> {
-        self.message_feedback.get(&message_id).copied()
-    }
-
-    pub fn report_message_feedback(
-        &mut self,
-        message_id: MessageId,
-        feedback: ThreadFeedback,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<()>> {
-        if self.message_feedback.get(&message_id) == Some(&feedback) {
-            return Task::ready(Ok(()));
-        }
-
-        let final_project_snapshot = Self::project_snapshot(self.project.clone(), cx);
-        let serialized_thread = self.serialize(cx);
-        let thread_id = self.id().clone();
-        let client = self.project.read(cx).client();
-
-        let enabled_tool_names: Vec<String> = self
-            .profile
-            .enabled_tools(cx)
-            .iter()
-            .map(|tool| tool.name())
-            .collect();
-
-        self.message_feedback.insert(message_id, feedback);
-
-        cx.notify();
-
-        let message_content = self
-            .message(message_id)
-            .map(|msg| msg.to_string())
-            .unwrap_or_default();
-
-        cx.background_spawn(async move {
-            let final_project_snapshot = final_project_snapshot.await;
-            let serialized_thread = serialized_thread.await?;
-            let thread_data =
-                serde_json::to_value(serialized_thread).unwrap_or_else(|_| serde_json::Value::Null);
-
-            let rating = match feedback {
-                ThreadFeedback::Positive => "positive",
-                ThreadFeedback::Negative => "negative",
-            };
-            telemetry::event!(
-                "Assistant Thread Rated",
-                rating,
-                thread_id,
-                enabled_tool_names,
-                message_id = message_id.0,
-                message_content,
-                thread_data,
-                final_project_snapshot
-            );
-            client.telemetry().flush_events().await;
-
-            Ok(())
-        })
-    }
-
-    pub fn report_feedback(
-        &mut self,
-        feedback: ThreadFeedback,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<()>> {
-        let last_assistant_message_id = self
-            .messages
-            .iter()
-            .rev()
-            .find(|msg| msg.role == Role::Assistant)
-            .map(|msg| msg.id);
-
-        if let Some(message_id) = last_assistant_message_id {
-            self.report_message_feedback(message_id, feedback, cx)
-        } else {
-            let final_project_snapshot = Self::project_snapshot(self.project.clone(), cx);
-            let serialized_thread = self.serialize(cx);
-            let thread_id = self.id().clone();
-            let client = self.project.read(cx).client();
-            self.feedback = Some(feedback);
-            cx.notify();
-
-            cx.background_spawn(async move {
-                let final_project_snapshot = final_project_snapshot.await;
-                let serialized_thread = serialized_thread.await?;
-                let thread_data = serde_json::to_value(serialized_thread)
-                    .unwrap_or_else(|_| serde_json::Value::Null);
-
-                let rating = match feedback {
-                    ThreadFeedback::Positive => "positive",
-                    ThreadFeedback::Negative => "negative",
-                };
-                telemetry::event!(
-                    "Assistant Thread Rated",
-                    rating,
-                    thread_id,
-                    thread_data,
-                    final_project_snapshot
-                );
-                client.telemetry().flush_events().await;
-
-                Ok(())
-            })
-        }
-    }
-
     /// Create a snapshot of the current project state including git information and unsaved buffers.
     fn project_snapshot(
         project: Entity<Project>,
@@ -2696,35 +2548,6 @@ impl Thread {
         }
 
         self.last_auto_capture_at = Some(now);
-
-        let thread_id = self.id().clone();
-        let github_login = self
-            .project
-            .read(cx)
-            .user_store()
-            .read(cx)
-            .current_user()
-            .map(|user| user.github_login.clone());
-        let client = self.project.read(cx).client();
-        let serialize_task = self.serialize(cx);
-
-        cx.background_executor()
-            .spawn(async move {
-                if let Ok(serialized_thread) = serialize_task.await {
-                    if let Ok(thread_data) = serde_json::to_value(serialized_thread) {
-                        telemetry::event!(
-                            "Agent Thread Auto-Captured",
-                            thread_id = thread_id.to_string(),
-                            thread_data = thread_data,
-                            auto_capture_reason = "tracked_user",
-                            github_login = github_login
-                        );
-
-                        client.telemetry().flush_events().await;
-                    }
-                }
-            })
-            .detach();
     }
 
     pub fn cumulative_token_usage(&self) -> TokenUsage {

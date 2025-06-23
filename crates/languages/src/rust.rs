@@ -1,11 +1,8 @@
 use anyhow::{Context as _, Result};
-use async_compression::futures::bufread::GzipDecoder;
 use async_trait::async_trait;
 use collections::HashMap;
-use futures::{StreamExt, io::BufReader};
+use futures::{StreamExt};
 use gpui::{App, AppContext, AsyncApp, SharedString, Task};
-use http_client::github::AssetKind;
-use http_client::github::{GitHubLspBinaryVersion, latest_github_release};
 pub use language::*;
 use lsp::{InitializeParams, LanguageServerBinary};
 use project::Fs;
@@ -17,15 +14,13 @@ use settings::Settings as _;
 use smol::fs::{self};
 use std::fmt::Display;
 use std::{
-    any::Any,
     borrow::Cow,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
 use task::{TaskTemplate, TaskTemplates, TaskVariables, VariableName};
-use util::archive::extract_zip;
 use util::merge_json_value_into;
-use util::{ResultExt, fs::remove_matching, maybe};
+use util::{ResultExt, maybe};
 
 use crate::language_settings::language_settings;
 
@@ -33,46 +28,26 @@ pub struct RustLspAdapter;
 
 #[cfg(target_os = "macos")]
 impl RustLspAdapter {
-    const GITHUB_ASSET_KIND: AssetKind = AssetKind::Gz;
     const ARCH_SERVER_NAME: &str = "apple-darwin";
 }
 
 #[cfg(target_os = "linux")]
 impl RustLspAdapter {
-    const GITHUB_ASSET_KIND: AssetKind = AssetKind::Gz;
-    const ARCH_SERVER_NAME: &str = "unknown-linux-gnu";
 }
 
 #[cfg(target_os = "freebsd")]
 impl RustLspAdapter {
-    const GITHUB_ASSET_KIND: AssetKind = AssetKind::Gz;
     const ARCH_SERVER_NAME: &str = "unknown-freebsd";
 }
 
 #[cfg(target_os = "windows")]
 impl RustLspAdapter {
-    const GITHUB_ASSET_KIND: AssetKind = AssetKind::Zip;
     const ARCH_SERVER_NAME: &str = "pc-windows-msvc";
 }
 
 const SERVER_NAME: LanguageServerName = LanguageServerName::new_static("rust-analyzer");
 
 impl RustLspAdapter {
-    fn build_asset_name() -> String {
-        let extension = match Self::GITHUB_ASSET_KIND {
-            AssetKind::TarGz => "tar.gz",
-            AssetKind::Gz => "gz",
-            AssetKind::Zip => "zip",
-        };
-
-        format!(
-            "{}-{}-{}.{}",
-            SERVER_NAME,
-            std::env::consts::ARCH,
-            Self::ARCH_SERVER_NAME,
-            extension
-        )
-    }
 }
 
 pub(crate) struct CargoManifestProvider;
@@ -144,102 +119,6 @@ impl LspAdapter for RustLspAdapter {
             path,
             env: Some(env),
             arguments: vec![],
-        })
-    }
-
-    async fn fetch_latest_server_version(
-        &self,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Result<Box<dyn 'static + Send + Any>> {
-        let release = latest_github_release(
-            "rust-lang/rust-analyzer",
-            true,
-            false,
-            delegate.http_client(),
-        )
-        .await?;
-        let asset_name = Self::build_asset_name();
-
-        let asset = release
-            .assets
-            .iter()
-            .find(|asset| asset.name == asset_name)
-            .with_context(|| format!("no asset found matching `{asset_name:?}`"))?;
-        Ok(Box::new(GitHubLspBinaryVersion {
-            name: release.tag_name,
-            url: asset.browser_download_url.clone(),
-        }))
-    }
-
-    async fn fetch_server_binary(
-        &self,
-        version: Box<dyn 'static + Send + Any>,
-        container_dir: PathBuf,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Result<LanguageServerBinary> {
-        let version = version.downcast::<GitHubLspBinaryVersion>().unwrap();
-        let destination_path = container_dir.join(format!("rust-analyzer-{}", version.name));
-        let server_path = match Self::GITHUB_ASSET_KIND {
-            AssetKind::TarGz | AssetKind::Gz => destination_path.clone(), // Tar and gzip extract in place.
-            AssetKind::Zip => destination_path.clone().join("rust-analyzer.exe"), // zip contains a .exe
-        };
-
-        if fs::metadata(&server_path).await.is_err() {
-            remove_matching(&container_dir, |entry| entry != destination_path).await;
-
-            let mut response = delegate
-                .http_client()
-                .get(&version.url, Default::default(), true)
-                .await
-                .with_context(|| format!("downloading release from {}", version.url))?;
-            match Self::GITHUB_ASSET_KIND {
-                AssetKind::TarGz => {
-                    let decompressed_bytes = GzipDecoder::new(BufReader::new(response.body_mut()));
-                    let archive = async_tar::Archive::new(decompressed_bytes);
-                    archive.unpack(&destination_path).await.with_context(|| {
-                        format!("extracting {} to {:?}", version.url, destination_path)
-                    })?;
-                }
-                AssetKind::Gz => {
-                    let mut decompressed_bytes =
-                        GzipDecoder::new(BufReader::new(response.body_mut()));
-                    let mut file =
-                        fs::File::create(&destination_path).await.with_context(|| {
-                            format!(
-                                "creating a file {:?} for a download from {}",
-                                destination_path, version.url,
-                            )
-                        })?;
-                    futures::io::copy(&mut decompressed_bytes, &mut file)
-                        .await
-                        .with_context(|| {
-                            format!("extracting {} to {:?}", version.url, destination_path)
-                        })?;
-                }
-                AssetKind::Zip => {
-                    extract_zip(&destination_path, response.body_mut())
-                        .await
-                        .with_context(|| {
-                            format!("unzipping {} to {:?}", version.url, destination_path)
-                        })?;
-                }
-            };
-
-            // todo("windows")
-            #[cfg(not(windows))]
-            {
-                fs::set_permissions(
-                    &server_path,
-                    <fs::Permissions as fs::unix::PermissionsExt>::from_mode(0o755),
-                )
-                .await?;
-            }
-        }
-
-        Ok(LanguageServerBinary {
-            path: server_path,
-            env: None,
-            arguments: Default::default(),
         })
     }
 

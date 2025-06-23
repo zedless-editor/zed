@@ -98,7 +98,6 @@ mod tests {
     use super::*;
     use agent_settings::AgentSettings;
     use client::Client;
-    use clock::FakeSystemClock;
     use http_client::FakeHttpClient;
     use schemars::JsonSchema;
     use serde::Serialize;
@@ -137,7 +136,6 @@ mod tests {
         AgentSettings::register(cx);
 
         let client = Client::new(
-            Arc::new(FakeSystemClock::new()),
             FakeHttpClient::with_200_response(),
             cx,
         );

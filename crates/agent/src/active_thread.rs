@@ -5,7 +5,7 @@ use crate::context_strip::{ContextStrip, ContextStripEvent, SuggestContextKind};
 use crate::message_editor::{extract_message_creases, insert_message_creases};
 use crate::thread::{
     LastRestoreCheckpoint, MessageCrease, MessageId, MessageSegment, Thread, ThreadError,
-    ThreadEvent, ThreadFeedback, ThreadSummary,
+    ThreadEvent, ThreadSummary,
 };
 use crate::thread_store::{RulesLoadingError, TextThreadStore, ThreadStore};
 use crate::tool_use::{PendingToolUseStatus, ToolUse};
@@ -29,7 +29,7 @@ use gpui::{
     UnderlineStyle, WeakEntity, WindowHandle, linear_color_stop, linear_gradient, list, percentage,
     pulsating_between,
 };
-use language::{Buffer, Language, LanguageRegistry};
+use language::{Language, LanguageRegistry};
 use language_model::{
     LanguageModelRequestMessage, LanguageModelToolUseId, MessageContent, Role, StopReason,
 };
@@ -48,7 +48,7 @@ use std::time::Duration;
 use text::ToPoint;
 use theme::ThemeSettings;
 use ui::{
-    Disclosure, IconButton, KeyBinding, PopoverMenuHandle, Scrollbar, ScrollbarState, TextSize,
+    Disclosure, IconButton, PopoverMenuHandle, Scrollbar, ScrollbarState, TextSize,
     Tooltip, prelude::*,
 };
 use util::ResultExt as _;
@@ -81,7 +81,6 @@ pub struct ActiveThread {
     copied_code_block_ids: HashSet<(MessageId, usize)>,
     _subscriptions: Vec<Subscription>,
     notification_subscriptions: HashMap<WindowHandle<AgentNotification>, Vec<Subscription>>,
-    open_feedback_editors: HashMap<MessageId, Entity<Editor>>,
     _load_edited_message_context_task: Option<Task<()>>,
 }
 
@@ -804,7 +803,6 @@ impl ActiveThread {
             notifications: Vec::new(),
             _subscriptions: subscriptions,
             notification_subscriptions: HashMap::default(),
-            open_feedback_editors: HashMap::default(),
             _load_edited_message_context_task: None,
         };
 
@@ -1641,103 +1639,6 @@ impl ActiveThread {
         self.confirm_editing_message(&menu::Confirm, window, cx);
     }
 
-    fn handle_feedback_click(
-        &mut self,
-        message_id: MessageId,
-        feedback: ThreadFeedback,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let report = self.thread.update(cx, |thread, cx| {
-            thread.report_message_feedback(message_id, feedback, cx)
-        });
-
-        cx.spawn(async move |this, cx| {
-            report.await?;
-            this.update(cx, |_this, cx| cx.notify())
-        })
-        .detach_and_log_err(cx);
-
-        match feedback {
-            ThreadFeedback::Positive => {
-                self.open_feedback_editors.remove(&message_id);
-            }
-            ThreadFeedback::Negative => {
-                self.handle_show_feedback_comments(message_id, window, cx);
-            }
-        }
-    }
-
-    fn handle_show_feedback_comments(
-        &mut self,
-        message_id: MessageId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let buffer = cx.new(|cx| {
-            let empty_string = String::new();
-            MultiBuffer::singleton(cx.new(|cx| Buffer::local(empty_string, cx)), cx)
-        });
-
-        let editor = cx.new(|cx| {
-            let mut editor = Editor::new(
-                editor::EditorMode::AutoHeight { max_lines: 4 },
-                buffer,
-                None,
-                window,
-                cx,
-            );
-            editor.set_placeholder_text(
-                "What went wrong? Share your feedback so we can improve.",
-                cx,
-            );
-            editor
-        });
-
-        editor.read(cx).focus_handle(cx).focus(window);
-        self.open_feedback_editors.insert(message_id, editor);
-        cx.notify();
-    }
-
-    fn submit_feedback_message(&mut self, message_id: MessageId, cx: &mut Context<Self>) {
-        let Some(editor) = self.open_feedback_editors.get(&message_id) else {
-            return;
-        };
-
-        let report_task = self.thread.update(cx, |thread, cx| {
-            thread.report_message_feedback(message_id, ThreadFeedback::Negative, cx)
-        });
-
-        let comments = editor.read(cx).text(cx);
-        if !comments.is_empty() {
-            let thread_id = self.thread.read(cx).id().clone();
-            let comments_value = String::from(comments.as_str());
-
-            let message_content = self
-                .thread
-                .read(cx)
-                .message(message_id)
-                .map(|msg| msg.to_string())
-                .unwrap_or_default();
-
-            telemetry::event!(
-                "Assistant Thread Feedback Comments",
-                thread_id,
-                message_id = message_id.0,
-                message_content,
-                comments = comments_value
-            );
-
-            self.open_feedback_editors.remove(&message_id);
-
-            cx.spawn(async move |this, cx| {
-                report_task.await?;
-                this.update(cx, |_this, cx| cx.notify())
-            })
-            .detach_and_log_err(cx);
-        }
-    }
-
     fn render_edit_message_editor(
         &self,
         state: &EditingMessageState,
@@ -1843,137 +1744,8 @@ impl ActiveThread {
         let editor_bg_color = colors.editor_background;
         let panel_bg = colors.panel_background;
 
-        let open_as_markdown = IconButton::new(("open-as-markdown", ix), IconName::DocumentText)
-            .icon_size(IconSize::XSmall)
-            .icon_color(Color::Ignored)
-            .tooltip(Tooltip::text("Open Thread as Markdown"))
-            .on_click({
-                let thread = self.thread.clone();
-                let workspace = self.workspace.clone();
-                move |_, window, cx| {
-                    if let Some(workspace) = workspace.upgrade() {
-                        open_active_thread_as_markdown(thread.clone(), workspace, window, cx)
-                            .detach_and_log_err(cx);
-                    }
-                }
-            });
-
         // For all items that should be aligned with the LLM's response.
         const RESPONSE_PADDING_X: Pixels = px(19.);
-
-        let show_feedback = thread.is_turn_end(ix);
-        let feedback_container = h_flex()
-            .group("feedback_container")
-            .mt_1()
-            .py_2()
-            .px(RESPONSE_PADDING_X)
-            .mr_1()
-            .opacity(0.4)
-            .hover(|style| style.opacity(1.))
-            .gap_1p5()
-            .flex_wrap()
-            .justify_end();
-        let feedback_items = match self.thread.read(cx).message_feedback(message_id) {
-            Some(feedback) => feedback_container
-                .child(
-                    div().visible_on_hover("feedback_container").child(
-                        Label::new(match feedback {
-                            ThreadFeedback::Positive => "Thanks for your feedback!",
-                            ThreadFeedback::Negative => {
-                                "We appreciate your feedback and will use it to improve."
-                            }
-                        })
-                    .color(Color::Muted)
-                    .size(LabelSize::XSmall)
-                    .truncate())
-                )
-                .child(
-                    h_flex()
-                        .child(
-                            IconButton::new(("feedback-thumbs-up", ix), IconName::ThumbsUp)
-                                .icon_size(IconSize::XSmall)
-                                .icon_color(match feedback {
-                                    ThreadFeedback::Positive => Color::Accent,
-                                    ThreadFeedback::Negative => Color::Ignored,
-                                })
-                                .tooltip(Tooltip::text("Helpful Response"))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.handle_feedback_click(
-                                        message_id,
-                                        ThreadFeedback::Positive,
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        )
-                        .child(
-                            IconButton::new(("feedback-thumbs-down", ix), IconName::ThumbsDown)
-                                .icon_size(IconSize::XSmall)
-                                .icon_color(match feedback {
-                                    ThreadFeedback::Positive => Color::Ignored,
-                                    ThreadFeedback::Negative => Color::Accent,
-                                })
-                                .tooltip(Tooltip::text("Not Helpful"))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.handle_feedback_click(
-                                        message_id,
-                                        ThreadFeedback::Negative,
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        )
-                        .child(open_as_markdown),
-                )
-                .into_any_element(),
-            None if AgentSettings::get_global(cx).enable_feedback =>
-                feedback_container
-                .child(
-                    div().visible_on_hover("feedback_container").child(
-                        Label::new(
-                            "Rating the thread sends all of your current conversation to the Zed team.",
-                        )
-                        .color(Color::Muted)
-                    .size(LabelSize::XSmall)
-                    .truncate())
-                )
-                .child(
-                    h_flex()
-                        .child(
-                            IconButton::new(("feedback-thumbs-up", ix), IconName::ThumbsUp)
-                                .icon_size(IconSize::XSmall)
-                                .icon_color(Color::Ignored)
-                                .tooltip(Tooltip::text("Helpful Response"))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.handle_feedback_click(
-                                        message_id,
-                                        ThreadFeedback::Positive,
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        )
-                        .child(
-                            IconButton::new(("feedback-thumbs-down", ix), IconName::ThumbsDown)
-                                .icon_size(IconSize::XSmall)
-                                .icon_color(Color::Ignored)
-                                .tooltip(Tooltip::text("Not Helpful"))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.handle_feedback_click(
-                                        message_id,
-                                        ThreadFeedback::Negative,
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        )
-                        .child(open_as_markdown),
-                )
-                .into_any_element(),
-            None => feedback_container
-                .child(h_flex().child(open_as_markdown))
-                .into_any_element(),
-        };
 
         let message_is_empty = message.should_display_content();
         let has_content = !message_is_empty || !added_context.is_empty();
@@ -2248,83 +2020,6 @@ impl ActiveThread {
             })
             .child(styled_message)
             .children(loading_dots)
-            .when(show_feedback, move |parent| {
-                parent.child(feedback_items).when_some(
-                    self.open_feedback_editors.get(&message_id),
-                    move |parent, feedback_editor| {
-                        let focus_handle = feedback_editor.focus_handle(cx);
-                        parent.child(
-                            v_flex()
-                                .key_context("AgentFeedbackMessageEditor")
-                                .on_action(cx.listener(move |this, _: &menu::Cancel, _, cx| {
-                                    this.open_feedback_editors.remove(&message_id);
-                                    cx.notify();
-                                }))
-                                .on_action(cx.listener(move |this, _: &menu::Confirm, _, cx| {
-                                    this.submit_feedback_message(message_id, cx);
-                                    cx.notify();
-                                }))
-                                .on_action(cx.listener(Self::confirm_editing_message))
-                                .mb_2()
-                                .mx_4()
-                                .p_2()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(cx.theme().colors().border)
-                                .bg(cx.theme().colors().editor_background)
-                                .child(feedback_editor.clone())
-                                .child(
-                                    h_flex()
-                                        .gap_1()
-                                        .justify_end()
-                                        .child(
-                                            Button::new("dismiss-feedback-message", "Cancel")
-                                                .label_size(LabelSize::Small)
-                                                .key_binding(
-                                                    KeyBinding::for_action_in(
-                                                        &menu::Cancel,
-                                                        &focus_handle,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                    .map(|kb| kb.size(rems_from_px(10.))),
-                                                )
-                                                .on_click(cx.listener(
-                                                    move |this, _, _window, cx| {
-                                                        this.open_feedback_editors
-                                                            .remove(&message_id);
-                                                        cx.notify();
-                                                    },
-                                                )),
-                                        )
-                                        .child(
-                                            Button::new(
-                                                "submit-feedback-message",
-                                                "Share Feedback",
-                                            )
-                                            .style(ButtonStyle::Tinted(ui::TintColor::Accent))
-                                            .label_size(LabelSize::Small)
-                                            .key_binding(
-                                                KeyBinding::for_action_in(
-                                                    &menu::Confirm,
-                                                    &focus_handle,
-                                                    window,
-                                                    cx,
-                                                )
-                                                .map(|kb| kb.size(rems_from_px(10.))),
-                                            )
-                                            .on_click(
-                                                cx.listener(move |this, _, _window, cx| {
-                                                    this.submit_feedback_message(message_id, cx);
-                                                    cx.notify()
-                                                }),
-                                            ),
-                                        ),
-                                ),
-                        )
-                    },
-                )
-            })
             .when(after_editing_message, |parent| {
                 // Backdrop to dim out the whole thread below the editing user message
                 parent.relative().child(backdrop)

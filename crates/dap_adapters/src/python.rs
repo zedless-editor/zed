@@ -1,8 +1,7 @@
 use crate::*;
 use anyhow::Context as _;
-use dap::adapters::latest_github_release;
 use dap::{DebugRequest, StartDebuggingRequestArguments, adapters::DebugTaskDefinition};
-use gpui::{AppContext, AsyncApp, SharedString};
+use gpui::{AsyncApp, SharedString};
 use json_dotpath::DotPaths;
 use language::{LanguageName, Toolchain};
 use serde_json::Value;
@@ -11,20 +10,16 @@ use std::{
     collections::HashMap,
     ffi::OsStr,
     path::{Path, PathBuf},
-    sync::OnceLock,
 };
-use util::ResultExt;
 
 #[derive(Default)]
 pub(crate) struct PythonDebugAdapter {
-    checked: OnceLock<()>,
 }
 
 impl PythonDebugAdapter {
     const ADAPTER_NAME: &'static str = "Debugpy";
     const DEBUG_ADAPTER_NAME: DebugAdapterName =
         DebugAdapterName(SharedString::new_static(Self::ADAPTER_NAME));
-    const ADAPTER_PACKAGE_NAME: &'static str = "debugpy";
     const ADAPTER_PATH: &'static str = "src/debugpy/adapter";
     const LANGUAGE_NAME: &'static str = "Python";
 
@@ -105,45 +100,6 @@ impl PythonDebugAdapter {
             configuration,
             request,
         })
-    }
-    async fn fetch_latest_adapter_version(
-        &self,
-        delegate: &Arc<dyn DapDelegate>,
-    ) -> Result<AdapterVersion> {
-        let github_repo = GithubRepo {
-            repo_name: Self::ADAPTER_PACKAGE_NAME.into(),
-            repo_owner: "microsoft".into(),
-        };
-
-        fetch_latest_adapter_version_from_github(github_repo, delegate.as_ref()).await
-    }
-
-    async fn install_binary(
-        adapter_name: DebugAdapterName,
-        version: AdapterVersion,
-        delegate: Arc<dyn DapDelegate>,
-    ) -> Result<()> {
-        let version_path = adapters::download_adapter_from_github(
-            adapter_name,
-            version,
-            adapters::DownloadedFileType::GzipTar,
-            delegate.as_ref(),
-        )
-        .await?;
-        // only needed when you install the latest version for the first time
-        if let Some(debugpy_dir) =
-            util::fs::find_file_name_in_dir(version_path.as_path(), |file_name| {
-                file_name.starts_with("microsoft-debugpy-")
-            })
-            .await
-        {
-            // TODO Debugger: Rename folder instead of moving all files to another folder
-            // We're doing unnecessary IO work right now
-            util::fs::move_folder_files_to_folder(debugpy_dir.as_path(), version_path.as_path())
-                .await?;
-        }
-
-        Ok(())
     }
 
     async fn get_installed_binary(
@@ -638,36 +594,9 @@ impl DebugAdapter for PythonDebugAdapter {
             }
         }
 
-        if self.checked.set(()).is_ok() {
-            delegate.output_to_console(format!("Checking latest version of {}...", self.name()));
-            if let Some(version) = self.fetch_latest_adapter_version(delegate).await.log_err() {
-                cx.background_spawn(Self::install_binary(self.name(), version, delegate.clone()))
-                    .await
-                    .context("Failed to install debugpy")?;
-            }
-        }
-
         self.get_installed_binary(delegate, &config, None, toolchain, false)
             .await
     }
-}
-
-async fn fetch_latest_adapter_version_from_github(
-    github_repo: GithubRepo,
-    delegate: &dyn DapDelegate,
-) -> Result<AdapterVersion> {
-    let release = latest_github_release(
-        &format!("{}/{}", github_repo.repo_owner, github_repo.repo_name),
-        false,
-        false,
-        delegate.http_client(),
-    )
-    .await?;
-
-    Ok(AdapterVersion {
-        tag_name: release.tag_name,
-        url: release.tarball_url,
-    })
 }
 
 #[cfg(test)]

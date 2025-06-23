@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use agent_settings::AgentSettings;
 use anyhow::{Context as _, Result};
-use client::telemetry::Telemetry;
+
 use collections::{HashMap, HashSet, VecDeque, hash_map};
 use editor::display_map::EditorMargins;
 use editor::{
@@ -26,7 +26,7 @@ use gpui::{
 use language::{Buffer, Point, Selection, TransactionId};
 use language_model::ConfigurationError;
 use language_model::ConfiguredModel;
-use language_model::{LanguageModelRegistry, report_assistant_event};
+use language_model::{LanguageModelRegistry};
 use multi_buffer::MultiBufferRow;
 use parking_lot::Mutex;
 use project::LspAction;
@@ -35,7 +35,7 @@ use project::{CodeAction, ProjectTransaction};
 use prompt_store::PromptBuilder;
 use prompt_store::PromptStore;
 use settings::{Settings, SettingsStore};
-use telemetry_events::{AssistantEventData, AssistantKind, AssistantPhase};
+
 use terminal_view::{TerminalView, terminal_panel::TerminalPanel};
 use text::{OffsetRangeExt, ToPoint as _};
 use ui::prelude::*;
@@ -54,10 +54,9 @@ use crate::thread_store::ThreadStore;
 pub fn init(
     fs: Arc<dyn Fs>,
     prompt_builder: Arc<PromptBuilder>,
-    telemetry: Arc<Telemetry>,
     cx: &mut App,
 ) {
-    cx.set_global(InlineAssistant::new(fs, prompt_builder, telemetry));
+    cx.set_global(InlineAssistant::new(fs, prompt_builder));
     cx.observe_new(|_workspace: &mut Workspace, window, cx| {
         let Some(window) = window else {
             return;
@@ -86,7 +85,6 @@ pub struct InlineAssistant {
     confirmed_assists: HashMap<InlineAssistId, Entity<CodegenAlternative>>,
     prompt_history: VecDeque<String>,
     prompt_builder: Arc<PromptBuilder>,
-    telemetry: Arc<Telemetry>,
     fs: Arc<dyn Fs>,
 }
 
@@ -96,7 +94,6 @@ impl InlineAssistant {
     pub fn new(
         fs: Arc<dyn Fs>,
         prompt_builder: Arc<PromptBuilder>,
-        telemetry: Arc<Telemetry>,
     ) -> Self {
         Self {
             next_assist_id: InlineAssistId::default(),
@@ -107,7 +104,6 @@ impl InlineAssistant {
             confirmed_assists: HashMap::default(),
             prompt_history: VecDeque::default(),
             prompt_builder,
-            telemetry,
             fs,
         }
     }
@@ -428,19 +424,6 @@ impl InlineAssistant {
 
             codegen_ranges.push(anchor_range);
 
-            if let Some(model) = LanguageModelRegistry::read_global(cx).inline_assistant_model() {
-                self.telemetry.report_assistant_event(AssistantEventData {
-                    conversation_id: None,
-                    kind: AssistantKind::Inline,
-                    phase: AssistantPhase::Invoked,
-                    message_id: None,
-                    model: model.model.telemetry_id(),
-                    model_provider: model.provider.id().to_string(),
-                    response_latency: None,
-                    error_message: None,
-                    language_name: buffer.language().map(|language| language.name().to_proto()),
-                });
-            }
         }
 
         let assist_group_id = self.next_assist_group_id.post_inc();
@@ -463,7 +446,6 @@ impl InlineAssistant {
                     context_store.clone(),
                     project.clone(),
                     prompt_store.clone(),
-                    self.telemetry.clone(),
                     self.prompt_builder.clone(),
                     cx,
                 )
@@ -582,7 +564,6 @@ impl InlineAssistant {
                 context_store.clone(),
                 project,
                 prompt_store,
-                self.telemetry.clone(),
                 self.prompt_builder.clone(),
                 cx,
             )
@@ -1013,40 +994,6 @@ impl InlineAssistant {
             }
 
             let active_alternative = assist.codegen.read(cx).active_alternative().clone();
-            let message_id = active_alternative.read(cx).message_id.clone();
-
-            if let Some(model) = LanguageModelRegistry::read_global(cx).inline_assistant_model() {
-                let language_name = assist.editor.upgrade().and_then(|editor| {
-                    let multibuffer = editor.read(cx).buffer().read(cx);
-                    let snapshot = multibuffer.snapshot(cx);
-                    let ranges = snapshot.range_to_buffer_ranges(assist.range.clone());
-                    ranges
-                        .first()
-                        .and_then(|(buffer, _, _)| buffer.language())
-                        .map(|language| language.name())
-                });
-                report_assistant_event(
-                    AssistantEventData {
-                        conversation_id: None,
-                        kind: AssistantKind::Inline,
-                        message_id,
-                        phase: if undo {
-                            AssistantPhase::Rejected
-                        } else {
-                            AssistantPhase::Accepted
-                        },
-                        model: model.model.telemetry_id(),
-                        model_provider: model.model.provider_id().to_string(),
-                        response_latency: None,
-                        error_message: None,
-                        language_name: language_name.map(|name| name.to_proto()),
-                    },
-                    Some(self.telemetry.clone()),
-                    cx.http_client(),
-                    model.model.api_key(cx),
-                    cx.background_executor(),
-                );
-            }
 
             if undo {
                 assist.codegen.update(cx, |codegen, cx| codegen.undo(cx));

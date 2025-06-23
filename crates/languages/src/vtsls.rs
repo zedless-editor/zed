@@ -8,7 +8,6 @@ use node_runtime::NodeRuntime;
 use project::{Fs, lsp_store::language_server_settings};
 use serde_json::Value;
 use std::{
-    any::Any,
     ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
@@ -24,10 +23,8 @@ pub struct VtslsLspAdapter {
 }
 
 impl VtslsLspAdapter {
-    const PACKAGE_NAME: &'static str = "@vtsls/language-server";
     const SERVER_PATH: &'static str = "node_modules/@vtsls/language-server/bin/vtsls.js";
 
-    const TYPESCRIPT_PACKAGE_NAME: &'static str = "typescript";
     const TYPESCRIPT_TSDK_PATH: &'static str = "node_modules/typescript/lib";
 
     pub fn new(node: NodeRuntime) -> Self {
@@ -57,30 +54,12 @@ impl VtslsLspAdapter {
     }
 }
 
-struct TypeScriptVersions {
-    typescript_version: String,
-    server_version: String,
-}
-
 const SERVER_NAME: LanguageServerName = LanguageServerName::new_static("vtsls");
 
 #[async_trait(?Send)]
 impl LspAdapter for VtslsLspAdapter {
     fn name(&self) -> LanguageServerName {
         SERVER_NAME.clone()
-    }
-
-    async fn fetch_latest_server_version(
-        &self,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<Box<dyn 'static + Send + Any>> {
-        Ok(Box::new(TypeScriptVersions {
-            typescript_version: self.node.npm_package_latest_version("typescript").await?,
-            server_version: self
-                .node
-                .npm_package_latest_version("@vtsls/language-server")
-                .await?,
-        }) as Box<_>)
     }
 
     async fn check_if_user_installed(
@@ -95,57 +74,6 @@ impl LspAdapter for VtslsLspAdapter {
             path: path.clone(),
             arguments: typescript_server_binary_arguments(&path),
             env: Some(env),
-        })
-    }
-
-    async fn fetch_server_binary(
-        &self,
-        latest_version: Box<dyn 'static + Send + Any>,
-        container_dir: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<LanguageServerBinary> {
-        let latest_version = latest_version.downcast::<TypeScriptVersions>().unwrap();
-        let server_path = container_dir.join(Self::SERVER_PATH);
-
-        let mut packages_to_install = Vec::new();
-
-        if self
-            .node
-            .should_install_npm_package(
-                Self::PACKAGE_NAME,
-                &server_path,
-                &container_dir,
-                &latest_version.server_version,
-            )
-            .await
-        {
-            packages_to_install.push((Self::PACKAGE_NAME, latest_version.server_version.as_str()));
-        }
-
-        if self
-            .node
-            .should_install_npm_package(
-                Self::TYPESCRIPT_PACKAGE_NAME,
-                &container_dir.join(Self::TYPESCRIPT_TSDK_PATH),
-                &container_dir,
-                &latest_version.typescript_version,
-            )
-            .await
-        {
-            packages_to_install.push((
-                Self::TYPESCRIPT_PACKAGE_NAME,
-                latest_version.typescript_version.as_str(),
-            ));
-        }
-
-        self.node
-            .npm_install_packages(&container_dir, &packages_to_install)
-            .await?;
-
-        Ok(LanguageServerBinary {
-            path: self.node.binary_path().await?,
-            env: None,
-            arguments: typescript_server_binary_arguments(&server_path),
         })
     }
 

@@ -1,18 +1,14 @@
 use ::fs::Fs;
 use anyhow::{Context as _, Result, anyhow};
-use async_compression::futures::bufread::GzipDecoder;
-use async_tar::Archive;
 use async_trait::async_trait;
 use collections::HashMap;
 pub use dap_types::{StartDebuggingRequestArguments, StartDebuggingRequestArgumentsRequest};
-use futures::io::BufReader;
 use gpui::{AsyncApp, SharedString};
-pub use http_client::{HttpClient, github::latest_github_release};
+pub use http_client::HttpClient;
 use language::{LanguageName, LanguageToolchainStore};
 use node_runtime::NodeRuntime;
 use serde::{Deserialize, Serialize};
 use settings::WorktreeId;
-use smol::fs::File;
 use std::{
     borrow::Borrow,
     ffi::OsStr,
@@ -23,7 +19,6 @@ use std::{
     sync::Arc,
 };
 use task::{DebugScenario, TcpArgumentsTemplate, ZedDebugConfig};
-use util::archive::extract_zip;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DapStatus {
@@ -258,79 +253,6 @@ pub enum DownloadedFileType {
 pub struct GithubRepo {
     pub repo_name: String,
     pub repo_owner: String,
-}
-
-pub async fn download_adapter_from_github(
-    adapter_name: DebugAdapterName,
-    github_version: AdapterVersion,
-    file_type: DownloadedFileType,
-    delegate: &dyn DapDelegate,
-) -> Result<PathBuf> {
-    let adapter_path = paths::debug_adapters_dir().join(&adapter_name.as_ref());
-    let version_path = adapter_path.join(format!("{}_{}", adapter_name, github_version.tag_name));
-    let fs = delegate.fs();
-
-    if version_path.exists() {
-        return Ok(version_path);
-    }
-
-    if !adapter_path.exists() {
-        fs.create_dir(&adapter_path.as_path())
-            .await
-            .context("Failed creating adapter path")?;
-    }
-
-    log::debug!(
-        "Downloading adapter {} from {}",
-        adapter_name,
-        &github_version.url,
-    );
-    delegate.output_to_console(format!("Downloading from {}...", github_version.url));
-
-    let mut response = delegate
-        .http_client()
-        .get(&github_version.url, Default::default(), true)
-        .await
-        .context("Error downloading release")?;
-    anyhow::ensure!(
-        response.status().is_success(),
-        "download failed with status {}",
-        response.status().to_string()
-    );
-
-    delegate.output_to_console("Download complete".to_owned());
-    match file_type {
-        DownloadedFileType::GzipTar => {
-            let decompressed_bytes = GzipDecoder::new(BufReader::new(response.body_mut()));
-            let archive = Archive::new(decompressed_bytes);
-            archive.unpack(&version_path).await?;
-        }
-        DownloadedFileType::Zip | DownloadedFileType::Vsix => {
-            let zip_path = version_path.with_extension("zip");
-            let mut file = File::create(&zip_path).await?;
-            futures::io::copy(response.body_mut(), &mut file).await?;
-            let file = File::open(&zip_path).await?;
-            extract_zip(&version_path, file)
-                .await
-                // we cannot check the status as some adapter include files with names that trigger `Illegal byte sequence`
-                .ok();
-
-            util::fs::remove_matching(&adapter_path, |entry| {
-                entry
-                    .file_name()
-                    .is_some_and(|file| file.to_string_lossy().ends_with(".zip"))
-            })
-            .await;
-        }
-    }
-
-    // remove older versions
-    util::fs::remove_matching(&adapter_path, |entry| {
-        entry.to_string_lossy() != version_path.to_string_lossy()
-    })
-    .await;
-
-    Ok(version_path)
 }
 
 #[async_trait(?Send)]

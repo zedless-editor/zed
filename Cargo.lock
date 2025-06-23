@@ -7,7 +7,6 @@ name = "activity_indicator"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "auto_update",
  "editor",
  "extension_host",
  "futures 0.3.31",
@@ -117,8 +116,6 @@ dependencies = [
  "smol",
  "sqlez",
  "streaming_diff",
- "telemetry",
- "telemetry_events",
  "terminal",
  "terminal_view",
  "text",
@@ -143,16 +140,12 @@ dependencies = [
 name = "agent_settings"
 version = "0.1.0"
 dependencies = [
- "anthropic",
  "anyhow",
  "collections",
- "deepseek",
  "fs",
  "gpui",
  "language_model",
- "lmstudio",
  "log",
- "mistral",
  "ollama",
  "open_ai",
  "paths",
@@ -354,22 +347,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anthropic"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "futures 0.3.31",
- "http_client",
- "schemars",
- "serde",
- "serde_json",
- "strum 0.27.1",
- "thiserror 2.0.12",
- "workspace-hack",
-]
-
-[[package]]
 name = "any_vec"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -552,7 +529,6 @@ dependencies = [
  "settings",
  "smallvec",
  "smol",
- "telemetry_events",
  "text",
  "theme",
  "tree-sitter-md",
@@ -1147,61 +1123,6 @@ dependencies = [
  "serde",
  "serde_json",
  "topological-sort",
-]
-
-[[package]]
-name = "auto_update"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "client",
- "db",
- "gpui",
- "http_client",
- "log",
- "paths",
- "release_channel",
- "schemars",
- "serde",
- "serde_json",
- "settings",
- "smol",
- "tempfile",
- "which 6.0.3",
- "workspace",
- "workspace-hack",
-]
-
-[[package]]
-name = "auto_update_helper"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "log",
- "simplelog",
- "windows 0.61.1",
- "winresource",
- "workspace-hack",
-]
-
-[[package]]
-name = "auto_update_ui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "auto_update",
- "client",
- "editor",
- "gpui",
- "http_client",
- "markdown_preview",
- "release_channel",
- "serde",
- "serde_json",
- "smol",
- "util",
- "workspace",
- "workspace-hack",
 ]
 
 [[package]]
@@ -2334,7 +2255,6 @@ dependencies = [
  "serde",
  "serde_derive",
  "settings",
- "telemetry",
  "util",
  "workspace-hack",
 ]
@@ -2789,8 +2709,6 @@ dependencies = [
  "settings",
  "sha2",
  "smol",
- "telemetry",
- "telemetry_events",
  "text",
  "thiserror 2.0.12",
  "time",
@@ -3007,9 +2925,7 @@ dependencies = [
  "sqlx",
  "strum 0.27.1",
  "subtle",
- "supermaven_api",
  "task",
- "telemetry_events",
  "text",
  "theme",
  "thiserror 2.0.12",
@@ -3064,7 +2980,6 @@ dependencies = [
  "settings",
  "smallvec",
  "story",
- "telemetry",
  "theme",
  "time",
  "time_format",
@@ -3141,7 +3056,6 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
- "telemetry",
  "theme",
  "time",
  "ui",
@@ -3277,47 +3191,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baaaa0ecca5b51987b9423ccdc971514dd8b0bb7b4060b983d3664dad3f1f89f"
 dependencies = [
  "unicode-segmentation",
-]
-
-[[package]]
-name = "copilot"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-std",
- "chrono",
- "client",
- "clock",
- "collections",
- "command_palette_hooks",
- "ctor",
- "editor",
- "fs",
- "futures 0.3.31",
- "gpui",
- "http_client",
- "indoc",
- "inline_completion",
- "itertools 0.14.0",
- "language",
- "log",
- "lsp",
- "menu",
- "node_runtime",
- "parking_lot",
- "paths",
- "project",
- "rpc",
- "serde",
- "serde_json",
- "settings",
- "task",
- "theme",
- "ui",
- "util",
- "workspace",
- "workspace-hack",
- "zlog",
 ]
 
 [[package]]
@@ -4027,7 +3900,6 @@ dependencies = [
  "smallvec",
  "smol",
  "task",
- "telemetry",
  "tree-sitter",
  "tree-sitter-go",
  "util",
@@ -4251,19 +4123,6 @@ dependencies = [
  "workspace-hack",
  "zed_actions",
  "zlog",
-]
-
-[[package]]
-name = "deepseek"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures 0.3.31",
- "http_client",
- "schemars",
- "serde",
- "serde_json",
- "workspace-hack",
 ]
 
 [[package]]
@@ -4723,7 +4582,6 @@ dependencies = [
  "snippet",
  "sum_tree",
  "task",
- "telemetry",
  "tempfile",
  "text",
  "theme",
@@ -5051,7 +4909,6 @@ dependencies = [
  "settings",
  "shellexpand 2.1.2",
  "smol",
- "telemetry",
  "terminal_view",
  "toml 0.8.20",
  "unindent",
@@ -5206,7 +5063,6 @@ dependencies = [
  "serde_json_lenient",
  "settings",
  "task",
- "telemetry",
  "tempfile",
  "theme",
  "theme_extension",
@@ -5245,7 +5101,6 @@ dependencies = [
  "settings",
  "smallvec",
  "strum 0.27.1",
- "telemetry",
  "theme",
  "ui",
  "util",
@@ -6152,7 +6007,6 @@ dependencies = [
  "serde_json",
  "settings",
  "strum 0.27.1",
- "telemetry",
  "theme",
  "time",
  "time_format",
@@ -6993,20 +6847,6 @@ dependencies = [
  "ui",
  "util",
  "workspace",
- "workspace-hack",
-]
-
-[[package]]
-name = "google_ai"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures 0.3.31",
- "http_client",
- "schemars",
- "serde",
- "serde_json",
- "strum 0.27.1",
  "workspace-hack",
 ]
 
@@ -8172,7 +8012,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "client",
- "copilot",
  "editor",
  "feature_flags",
  "fs",
@@ -8187,8 +8026,6 @@ dependencies = [
  "regex",
  "serde_json",
  "settings",
- "supermaven",
- "telemetry",
  "theme",
  "ui",
  "workspace",
@@ -8891,7 +8728,6 @@ dependencies = [
 name = "language_model"
 version = "0.1.0"
 dependencies = [
- "anthropic",
  "anyhow",
  "base64 0.22.1",
  "client",
@@ -8907,7 +8743,6 @@ dependencies = [
  "serde",
  "serde_json",
  "smol",
- "telemetry_events",
  "thiserror 2.0.12",
  "util",
  "workspace-hack",
@@ -8918,30 +8753,23 @@ dependencies = [
 name = "language_models"
 version = "0.1.0"
 dependencies = [
- "anthropic",
  "anyhow",
  "aws-config",
  "aws-credential-types",
  "client",
  "collections",
- "copilot",
  "credentials_provider",
- "deepseek",
  "editor",
  "fs",
  "futures 0.3.31",
- "google_ai",
  "gpui",
  "gpui_tokio",
  "http_client",
  "language_model",
- "lmstudio",
  "log",
  "menu",
- "mistral",
  "ollama",
  "open_ai",
- "open_router",
  "partial-json-fixer",
  "project",
  "proto",
@@ -8989,7 +8817,6 @@ dependencies = [
  "anyhow",
  "client",
  "collections",
- "copilot",
  "editor",
  "futures 0.3.31",
  "gpui",
@@ -9429,19 +9256,6 @@ dependencies = [
  "cc",
  "doxygen-rs",
  "libc",
-]
-
-[[package]]
-name = "lmstudio"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures 0.3.31",
- "http_client",
- "schemars",
- "serde",
- "serde_json",
- "workspace-hack",
 ]
 
 [[package]]
@@ -10003,20 +9817,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "359f76430b20a79f9e20e115b3428614e654f04fab314482fc0fda0ebd3c6044"
 dependencies = [
  "windows-sys 0.48.0",
-]
-
-[[package]]
-name = "mistral"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures 0.3.31",
- "http_client",
- "schemars",
- "serde",
- "serde_json",
- "strum 0.27.1",
- "workspace-hack",
 ]
 
 [[package]]
@@ -10870,19 +10670,6 @@ dependencies = [
  "serde",
  "serde_json",
  "strum 0.27.1",
- "workspace-hack",
-]
-
-[[package]]
-name = "open_router"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures 0.3.31",
- "http_client",
- "schemars",
- "serde",
- "serde_json",
  "workspace-hack",
 ]
 
@@ -12939,7 +12726,6 @@ name = "recent_projects"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "auto_update",
  "dap",
  "editor",
  "extension_host",
@@ -12963,7 +12749,6 @@ dependencies = [
  "settings",
  "smol",
  "task",
- "telemetry",
  "theme",
  "ui",
  "util",
@@ -13207,7 +12992,6 @@ dependencies = [
  "shellexpand 2.1.2",
  "smol",
  "sysinfo",
- "telemetry_events",
  "toml 0.8.20",
  "unindent",
  "util",
@@ -13263,7 +13047,6 @@ dependencies = [
  "serde_json",
  "settings",
  "smol",
- "telemetry",
  "terminal",
  "terminal_view",
  "theme",
@@ -15389,50 +15172,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "supermaven"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "client",
- "collections",
- "editor",
- "env_logger 0.11.8",
- "futures 0.3.31",
- "gpui",
- "http_client",
- "inline_completion",
- "language",
- "log",
- "postage",
- "project",
- "serde",
- "serde_json",
- "settings",
- "smol",
- "supermaven_api",
- "text",
- "theme",
- "ui",
- "unicode-segmentation",
- "util",
- "workspace-hack",
-]
-
-[[package]]
-name = "supermaven_api"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures 0.3.31",
- "http_client",
- "paths",
- "serde",
- "serde_json",
- "smol",
- "workspace-hack",
-]
-
-[[package]]
 name = "sval"
 version = "2.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15822,27 +15561,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "telemetry"
-version = "0.1.0"
-dependencies = [
- "futures 0.3.31",
- "serde",
- "serde_json",
- "telemetry_events",
- "workspace-hack",
-]
-
-[[package]]
-name = "telemetry_events"
-version = "0.1.0"
-dependencies = [
- "semantic_version",
- "serde",
- "serde_json",
- "workspace-hack",
-]
-
-[[package]]
 name = "tempfile"
 version = "3.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -16048,7 +15766,6 @@ dependencies = [
  "picker",
  "serde",
  "settings",
- "telemetry",
  "theme",
  "ui",
  "util",
@@ -16264,7 +15981,6 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 name = "title_bar"
 version = "0.1.0"
 dependencies = [
- "auto_update",
  "call",
  "chrono",
  "client",
@@ -16282,7 +15998,6 @@ dependencies = [
  "settings",
  "smallvec",
  "story",
- "telemetry",
  "theme",
  "tree-sitter-md",
  "ui",
@@ -18327,7 +18042,6 @@ dependencies = [
  "schemars",
  "serde",
  "settings",
- "telemetry",
  "theme",
  "ui",
  "util",
@@ -19381,7 +19095,6 @@ dependencies = [
  "sqlez",
  "strum 0.27.1",
  "task",
- "telemetry",
  "tempfile",
  "theme",
  "ui",
@@ -19931,8 +19644,6 @@ dependencies = [
  "assistant_tool",
  "assistant_tools",
  "audio",
- "auto_update",
- "auto_update_ui",
  "backtrace",
  "breadcrumbs",
  "call",
@@ -19945,7 +19656,6 @@ dependencies = [
  "collections",
  "command_palette",
  "component",
- "copilot",
  "dap",
  "dap_adapters",
  "db",
@@ -20021,13 +19731,10 @@ dependencies = [
  "smol",
  "snippet_provider",
  "snippets_ui",
- "supermaven",
  "sysinfo",
  "tab_switcher",
  "task",
  "tasks_ui",
- "telemetry",
- "telemetry_events",
  "terminal_view",
  "theme",
  "theme_extension",
@@ -20331,8 +20038,6 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
- "telemetry",
- "telemetry_events",
  "theme",
  "thiserror 2.0.12",
  "tree-sitter-go",

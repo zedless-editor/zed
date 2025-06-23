@@ -22,7 +22,6 @@ use settings::{Settings, SettingsStore};
 use std::pin::Pin;
 use std::str::FromStr as _;
 use std::sync::Arc;
-use strum::IntoEnumIterator;
 use theme::ThemeSettings;
 use ui::{Icon, IconName, List, Tooltip, prelude::*};
 use util::ResultExt;
@@ -756,13 +755,6 @@ impl ConfigurationView {
 
 impl Render for ConfigurationView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        const INSTRUCTIONS: [&str; 4] = [
-            "To use Zed's assistant with an OpenAI-compatible provider, follow these steps:",
-            " - Configure the provider in the config file",
-            " - Paste your API key below and hit enter to start using the assistant",
-            " - If your provider has no authentication, just insert a dummy key",
-        ];
-
         let env_var_set = self.state.read(cx).api_key_from_env;
 
         if self.load_credentials_task.is_some() {
@@ -843,6 +835,7 @@ impl Render for ConfigurationView {
 mod tests {
     use gpui::TestAppContext;
     use language_model::LanguageModelRequestMessage;
+    use strum::IntoEnumIterator as _;
 
     use super::*;
 

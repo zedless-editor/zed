@@ -5,7 +5,6 @@ use crate::headless_project::HeadlessProject;
 use assistant_tool::{Tool as _, ToolResultContent};
 use assistant_tools::{ReadFileTool, ReadFileToolInput};
 use client::{Client, UserStore};
-use clock::FakeSystemClock;
 use language_model::{LanguageModelRequest, fake_provider::FakeLanguageModel};
 
 use extension::ExtensionHostProxy;
@@ -1678,7 +1677,6 @@ fn build_project(ssh: Entity<SshRemoteClient>, cx: &mut TestAppContext) -> Entit
 
     let client = cx.update(|cx| {
         Client::new(
-            Arc::new(FakeSystemClock::new()),
             FakeHttpClient::with_404_response(),
             cx,
         )

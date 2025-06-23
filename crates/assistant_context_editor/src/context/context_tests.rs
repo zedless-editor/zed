@@ -51,7 +51,6 @@ fn test_inserting_and_removing_messages(cx: &mut App) {
         AssistantContext::local(
             registry,
             None,
-            None,
             prompt_builder.clone(),
             Arc::new(SlashCommandWorkingSet::default()),
             cx,
@@ -190,7 +189,6 @@ fn test_message_splitting(cx: &mut App) {
         AssistantContext::local(
             registry.clone(),
             None,
-            None,
             prompt_builder.clone(),
             Arc::new(SlashCommandWorkingSet::default()),
             cx,
@@ -290,7 +288,6 @@ fn test_messages_for_offsets(cx: &mut App) {
     let context = cx.new(|cx| {
         AssistantContext::local(
             registry,
-            None,
             None,
             prompt_builder.clone(),
             Arc::new(SlashCommandWorkingSet::default()),
@@ -401,7 +398,6 @@ async fn test_slash_commands(cx: &mut TestAppContext) {
     let context = cx.new(|cx| {
         AssistantContext::local(
             registry.clone(),
-            None,
             None,
             prompt_builder.clone(),
             Arc::new(SlashCommandWorkingSet::default()),
@@ -674,7 +670,6 @@ async fn test_serialization(cx: &mut TestAppContext) {
         AssistantContext::local(
             registry.clone(),
             None,
-            None,
             prompt_builder.clone(),
             Arc::new(SlashCommandWorkingSet::default()),
             cx,
@@ -720,7 +715,6 @@ async fn test_serialization(cx: &mut TestAppContext) {
             registry.clone(),
             prompt_builder.clone(),
             Arc::new(SlashCommandWorkingSet::default()),
-            None,
             None,
             cx,
         )
@@ -776,7 +770,6 @@ async fn test_random_context_collaboration(cx: &mut TestAppContext, mut rng: Std
                 registry.clone(),
                 prompt_builder.clone(),
                 Arc::new(SlashCommandWorkingSet::default()),
-                None,
                 None,
                 cx,
             )
@@ -1030,7 +1023,6 @@ fn test_mark_cache_anchors(cx: &mut App) {
     let context = cx.new(|cx| {
         AssistantContext::local(
             registry,
-            None,
             None,
             prompt_builder.clone(),
             Arc::new(SlashCommandWorkingSet::default()),
@@ -1343,7 +1335,6 @@ fn setup_context_editor_with_fake_model(
     let context = cx.new(|cx| {
         AssistantContext::local(
             registry,
-            None,
             None,
             prompt_builder.clone(),
             Arc::new(SlashCommandWorkingSet::default()),

@@ -1,12 +1,9 @@
-use anyhow::{Context as _, Result, bail};
-use async_compression::futures::bufread::GzipDecoder;
-use async_tar::Archive;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use collections::HashMap;
 use dap::DapRegistry;
 use futures::StreamExt;
 use gpui::{App, AsyncApp};
-use http_client::github::{GitHubLspBinaryVersion, latest_github_release};
 use language::{LanguageRegistry, LanguageToolchainStore, LspAdapter, LspAdapterDelegate};
 use lsp::{LanguageServerBinary, LanguageServerName};
 use node_runtime::NodeRuntime;
@@ -15,19 +12,17 @@ use serde_json::{Value, json};
 use settings::{KeymapFile, SettingsJsonSchemaParams, SettingsStore};
 use smol::{
     fs::{self},
-    io::BufReader,
     lock::RwLock,
 };
 use std::{
     any::Any,
-    env::consts,
     ffi::OsString,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
 };
 use task::{AdapterSchemas, TaskTemplate, TaskTemplates, VariableName};
-use util::{ResultExt, archive::extract_zip, fs::remove_matching, maybe, merge_json_value_into};
+use util::{ResultExt, maybe, merge_json_value_into};
 
 const SERVER_PATH: &str =
     "node_modules/vscode-langservers-extracted/bin/vscode-json-language-server";
@@ -228,17 +223,6 @@ impl LspAdapter for JsonLspAdapter {
         })
     }
 
-    async fn fetch_latest_server_version(
-        &self,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<Box<dyn 'static + Send + Any>> {
-        Ok(Box::new(
-            self.node
-                .npm_package_latest_version(Self::PACKAGE_NAME)
-                .await?,
-        ) as Box<_>)
-    }
-
     async fn check_if_version_installed(
         &self,
         version: &(dyn 'static + Send + Any),
@@ -262,29 +246,6 @@ impl LspAdapter for JsonLspAdapter {
                 arguments: server_binary_arguments(&server_path),
             })
         }
-    }
-
-    async fn fetch_server_binary(
-        &self,
-        latest_version: Box<dyn 'static + Send + Any>,
-        container_dir: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<LanguageServerBinary> {
-        let latest_version = latest_version.downcast::<String>().unwrap();
-        let server_path = container_dir.join(SERVER_PATH);
-
-        self.node
-            .npm_install_packages(
-                &container_dir,
-                &[(Self::PACKAGE_NAME, latest_version.as_str())],
-            )
-            .await?;
-
-        Ok(LanguageServerBinary {
-            path: self.node.binary_path().await?,
-            env: None,
-            arguments: server_binary_arguments(&server_path),
-        })
     }
 
     async fn cached_server_binary(
@@ -396,40 +357,6 @@ impl LspAdapter for NodeVersionAdapter {
         Self::SERVER_NAME.clone()
     }
 
-    async fn fetch_latest_server_version(
-        &self,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Result<Box<dyn 'static + Send + Any>> {
-        let release = latest_github_release(
-            "zed-industries/package-version-server",
-            true,
-            false,
-            delegate.http_client(),
-        )
-        .await?;
-        let os = match consts::OS {
-            "macos" => "apple-darwin",
-            "linux" => "unknown-linux-gnu",
-            "windows" => "pc-windows-msvc",
-            other => bail!("Running on unsupported os: {other}"),
-        };
-        let suffix = if consts::OS == "windows" {
-            ".zip"
-        } else {
-            ".tar.gz"
-        };
-        let asset_name = format!("{}-{}-{os}{suffix}", Self::SERVER_NAME, consts::ARCH);
-        let asset = release
-            .assets
-            .iter()
-            .find(|asset| asset.name == asset_name)
-            .with_context(|| format!("no asset found matching `{asset_name:?}`"))?;
-        Ok(Box::new(GitHubLspBinaryVersion {
-            name: release.tag_name,
-            url: asset.browser_download_url.clone(),
-        }))
-    }
-
     async fn check_if_user_installed(
         &self,
         delegate: &dyn LspAdapterDelegate,
@@ -439,53 +366,6 @@ impl LspAdapter for NodeVersionAdapter {
         let path = delegate.which(Self::SERVER_NAME.as_ref()).await?;
         Some(LanguageServerBinary {
             path,
-            env: None,
-            arguments: Default::default(),
-        })
-    }
-
-    async fn fetch_server_binary(
-        &self,
-        latest_version: Box<dyn 'static + Send + Any>,
-        container_dir: PathBuf,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Result<LanguageServerBinary> {
-        let version = latest_version.downcast::<GitHubLspBinaryVersion>().unwrap();
-        let destination_path = container_dir.join(format!(
-            "{}-{}{}",
-            Self::SERVER_NAME,
-            version.name,
-            std::env::consts::EXE_SUFFIX
-        ));
-        let destination_container_path =
-            container_dir.join(format!("{}-{}-tmp", Self::SERVER_NAME, version.name));
-        if fs::metadata(&destination_path).await.is_err() {
-            let mut response = delegate
-                .http_client()
-                .get(&version.url, Default::default(), true)
-                .await
-                .context("downloading release")?;
-            if version.url.ends_with(".zip") {
-                extract_zip(&destination_container_path, response.body_mut()).await?;
-            } else if version.url.ends_with(".tar.gz") {
-                let decompressed_bytes = GzipDecoder::new(BufReader::new(response.body_mut()));
-                let archive = Archive::new(decompressed_bytes);
-                archive.unpack(&destination_container_path).await?;
-            }
-
-            fs::copy(
-                destination_container_path.join(format!(
-                    "{}{}",
-                    Self::SERVER_NAME,
-                    std::env::consts::EXE_SUFFIX
-                )),
-                &destination_path,
-            )
-            .await?;
-            remove_matching(&container_dir, |entry| entry != destination_path).await;
-        }
-        Ok(LanguageServerBinary {
-            path: destination_path,
             env: None,
             arguments: Default::default(),
         })

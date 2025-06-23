@@ -2,7 +2,6 @@ mod assertions;
 mod example;
 mod examples;
 mod explorer;
-mod ids;
 mod instance;
 mod tool_metrics;
 
@@ -67,15 +66,7 @@ fn main() {
 
     env_logger::init();
 
-    let system_id = ids::get_or_create_id(&ids::eval_system_id_path()).ok();
-    let installation_id = ids::get_or_create_id(&ids::eval_installation_id_path()).ok();
-    let session_id = uuid::Uuid::new_v4().to_string();
     let run_timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
-    let run_id = match env::var("GITHUB_RUN_ID") {
-        Ok(run_id) => format!("github/{}", run_id),
-        Err(_) => format!("local/{}", run_timestamp),
-    };
-
     let root_dir = Path::new(std::env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -96,8 +87,6 @@ fn main() {
     std::fs::create_dir_all(&examples_dir).unwrap();
     std::fs::create_dir_all(&paths::config_dir()).unwrap();
 
-    let zed_commit_sha = commit_sha_for_path(&root_dir);
-    let zed_branch_name = git_branch_for_path(&root_dir);
     let args = Args::parse();
     let languages: HashSet<String> = args.languages.into_iter().collect();
 
@@ -107,21 +96,6 @@ fn main() {
 
     app.run(move |cx| {
         let app_state = init(cx);
-
-        let telemetry = app_state.client.telemetry();
-        telemetry.start(system_id, installation_id, session_id, cx);
-
-        let enable_telemetry = env::var("ZED_EVAL_TELEMETRY").map_or(false, |value| value == "1")
-            && telemetry.has_checksum_seed();
-        if enable_telemetry {
-            println!("Telemetry enabled");
-            telemetry::event!(
-                "Agent Eval Started",
-                zed_commit_sha = zed_commit_sha,
-                zed_branch_name = zed_branch_name,
-                run_id = run_id,
-            );
-        }
 
         let mut cumulative_tool_metrics = ToolMetrics::default();
 
@@ -270,9 +244,6 @@ fn main() {
                 let app_state = app_state.clone();
                 let model = agent_model.model.clone();
                 let judge_model = judge_model.model.clone();
-                let zed_commit_sha = zed_commit_sha.clone();
-                let zed_branch_name = zed_branch_name.clone();
-                let run_id = run_id.clone();
                 let examples = examples.clone();
                 let results = results_by_example_name.clone();
                 cx.spawn(async move |cx| {
@@ -288,11 +259,7 @@ fn main() {
                             let judge_output = judge_example(
                                 example.clone(),
                                 judge_model.clone(),
-                                &zed_commit_sha,
-                                &zed_branch_name,
-                                &run_id,
                                 &run_output,
-                                enable_telemetry,
                                 cx,
                             )
                             .await;
@@ -314,8 +281,6 @@ fn main() {
                 &mut cumulative_tool_metrics,
                 &run_dir,
             )?;
-
-            app_state.client.telemetry().flush_events().await;
 
             cx.update(|cx| cx.quit())
         })
@@ -417,7 +382,7 @@ pub fn init(cx: &mut App) -> Arc<AgentAppState> {
     debug_adapter_extension::init(extension_host_proxy.clone(), cx);
     language_extension::init(extension_host_proxy.clone(), languages.clone());
     language_model::init(client.clone(), cx);
-    language_models::init(user_store.clone(), client.clone(), fs.clone(), cx);
+    language_models::init(client.clone(), fs.clone(), cx);
     languages::init(languages.clone(), node_runtime.clone(), cx);
     prompt_store::init(cx);
     terminal_view::init(cx);
@@ -507,38 +472,10 @@ pub fn git_branch_for_path(repo_path: &Path) -> String {
 async fn judge_example(
     example: ExampleInstance,
     model: Arc<dyn LanguageModel>,
-    zed_commit_sha: &str,
-    zed_branch_name: &str,
-    run_id: &str,
     run_output: &RunOutput,
-    enable_telemetry: bool,
     cx: &AsyncApp,
 ) -> JudgeOutput {
     let judge_output = example.judge(model.clone(), &run_output, cx).await;
-
-    if enable_telemetry {
-        telemetry::event!(
-            "Agent Example Evaluated",
-            zed_commit_sha = zed_commit_sha,
-            zed_branch_name = zed_branch_name,
-            run_id = run_id,
-            example_name = example.name.clone(),
-            example_repetition = example.repetition,
-            diff_evaluation = judge_output.diff.clone(),
-            thread_evaluation = judge_output.thread.clone(),
-            tool_metrics = run_output.tool_metrics,
-            response_count = run_output.response_count,
-            token_usage = run_output.token_usage,
-            model = model.telemetry_id(),
-            model_provider = model.provider_id().to_string(),
-            repository_url = example.repo_url(),
-            repository_revision = example.revision(),
-            diagnostic_summary_before = run_output.diagnostic_summary_before,
-            diagnostic_summary_after = run_output.diagnostic_summary_after,
-            diagnostics_before = run_output.diagnostics_before,
-            diagnostics_after = run_output.diagnostics_after,
-        );
-    }
 
     judge_output
 }

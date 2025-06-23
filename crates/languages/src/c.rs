@@ -1,15 +1,14 @@
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
 use gpui::{App, AsyncApp};
-use http_client::github::{GitHubLspBinaryVersion, latest_github_release};
 pub use language::*;
 use lsp::{InitializeParams, LanguageServerBinary, LanguageServerName};
 use project::lsp_store::clangd_ext;
 use serde_json::json;
 use smol::fs;
-use std::{any::Any, env::consts, path::PathBuf, sync::Arc};
-use util::{ResultExt, archive::extract_zip, fs::remove_matching, maybe, merge_json_value_into};
+use std::{path::PathBuf, sync::Arc};
+use util::{ResultExt, maybe, merge_json_value_into};
 
 pub struct CLspAdapter;
 
@@ -34,65 +33,6 @@ impl super::LspAdapter for CLspAdapter {
             path,
             arguments: Vec::new(),
             env: None,
-        })
-    }
-
-    async fn fetch_latest_server_version(
-        &self,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Result<Box<dyn 'static + Send + Any>> {
-        let release =
-            latest_github_release("clangd/clangd", true, false, delegate.http_client()).await?;
-        let os_suffix = match consts::OS {
-            "macos" => "mac",
-            "linux" => "linux",
-            "windows" => "windows",
-            other => bail!("Running on unsupported os: {other}"),
-        };
-        let asset_name = format!("clangd-{}-{}.zip", os_suffix, release.tag_name);
-        let asset = release
-            .assets
-            .iter()
-            .find(|asset| asset.name == asset_name)
-            .with_context(|| format!("no asset found matching {asset_name:?}"))?;
-        let version = GitHubLspBinaryVersion {
-            name: release.tag_name,
-            url: asset.browser_download_url.clone(),
-        };
-        Ok(Box::new(version) as Box<_>)
-    }
-
-    async fn fetch_server_binary(
-        &self,
-        version: Box<dyn 'static + Send + Any>,
-        container_dir: PathBuf,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Result<LanguageServerBinary> {
-        let version = version.downcast::<GitHubLspBinaryVersion>().unwrap();
-        let version_dir = container_dir.join(format!("clangd_{}", version.name));
-        let binary_path = version_dir.join("bin/clangd");
-
-        if fs::metadata(&binary_path).await.is_err() {
-            let mut response = delegate
-                .http_client()
-                .get(&version.url, Default::default(), true)
-                .await
-                .context("error downloading release")?;
-            anyhow::ensure!(
-                response.status().is_success(),
-                "download failed with status {}",
-                response.status().to_string()
-            );
-            extract_zip(&container_dir, response.body_mut())
-                .await
-                .with_context(|| format!("unzipping clangd archive to {container_dir:?}"))?;
-            remove_matching(&container_dir, |entry| entry != version_dir).await;
-        }
-
-        Ok(LanguageServerBinary {
-            path: binary_path,
-            env: None,
-            arguments: Vec::new(),
         })
     }
 

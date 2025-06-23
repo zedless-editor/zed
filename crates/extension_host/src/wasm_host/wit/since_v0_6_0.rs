@@ -10,24 +10,22 @@ use crate::wasm_host::{WasmState, wit::ToWasmtimeResult};
 use ::http_client::{AsyncBody, HttpRequestExt};
 use ::settings::{Settings, WorktreeId};
 use anyhow::{Context as _, Result, bail};
-use async_compression::futures::bufread::GzipDecoder;
-use async_tar::Archive;
 use async_trait::async_trait;
 use extension::{
     ExtensionLanguageServerProxy, KeyValueStoreDelegate, ProjectDelegate, WorktreeDelegate,
 };
 use futures::{AsyncReadExt, lock::Mutex};
-use futures::{FutureExt as _, io::BufReader};
+use futures::{FutureExt as _};
 use language::{BinaryStatus, LanguageName, language_settings::AllLanguageSettings};
 use project::project_settings::ProjectSettings;
 use semantic_version::SemanticVersion;
 use std::{
     env,
     net::Ipv4Addr,
-    path::{Path, PathBuf},
+    path::{Path},
     sync::{Arc, OnceLock},
 };
-use util::{archive::extract_zip, maybe};
+use util::{maybe};
 use wasmtime::component::{Linker, Resource};
 use anyhow::anyhow;
 
@@ -588,39 +586,14 @@ impl nodejs::Host for WasmState {
 #[async_trait]
 impl lsp::Host for WasmState {}
 
-impl From<::http_client::github::GithubRelease> for github::GithubRelease {
-    fn from(value: ::http_client::github::GithubRelease) -> Self {
-        Self {
-            version: value.tag_name,
-            assets: value.assets.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<::http_client::github::GithubReleaseAsset> for github::GithubReleaseAsset {
-    fn from(value: ::http_client::github::GithubReleaseAsset) -> Self {
-        Self {
-            name: value.name,
-            download_url: value.browser_download_url,
-        }
-    }
-}
-
 impl github::Host for WasmState {
     async fn latest_github_release(
         &mut self,
-        repo: String,
-        options: github::GithubReleaseOptions,
+        _repo: String,
+        _options: github::GithubReleaseOptions,
     ) -> wasmtime::Result<Result<github::GithubRelease, String>> {
         maybe!(async {
-            let release = ::http_client::github::latest_github_release(
-                &repo,
-                options.require_assets,
-                options.pre_release,
-                self.host.http_client.clone(),
-            )
-            .await?;
-            Ok(release.into())
+            Err(anyhow!("zedless: downloads are disabled"))
         })
         .await
         .to_wasmtime_result()
@@ -628,17 +601,11 @@ impl github::Host for WasmState {
 
     async fn github_release_by_tag_name(
         &mut self,
-        repo: String,
-        tag: String,
+        _repo: String,
+        _tag: String,
     ) -> wasmtime::Result<Result<github::GithubRelease, String>> {
         maybe!(async {
-            let release = ::http_client::github::get_release_by_tag_name(
-                &repo,
-                &tag,
-                self.host.http_client.clone(),
-            )
-            .await?;
-            Ok(release.into())
+            Err(anyhow!("zedless: downloads are disabled"))
         })
         .await
         .to_wasmtime_result()
@@ -824,68 +791,12 @@ impl ExtensionImports for WasmState {
 
     async fn download_file(
         &mut self,
-        url: String,
-        path: String,
-        file_type: DownloadedFileType,
+        _url: String,
+        _path: String,
+        _file_type: DownloadedFileType,
     ) -> wasmtime::Result<Result<(), String>> {
         maybe!(async {
             return Err(anyhow!("zedless: downloads are disabled"));
-            let path = PathBuf::from(path);
-            let extension_work_dir = self.host.work_dir.join(self.manifest.id.as_ref());
-
-            self.host.fs.create_dir(&extension_work_dir).await?;
-
-            let destination_path = self
-                .host
-                .writeable_path_from_extension(&self.manifest.id, &path)?;
-
-            let mut response = self
-                .host
-                .http_client
-                .get(&url, Default::default(), true)
-                .await
-                .context("downloading release")?;
-
-            anyhow::ensure!(
-                response.status().is_success(),
-                "download failed with status {}",
-                response.status().to_string()
-            );
-            let body = BufReader::new(response.body_mut());
-
-            match file_type {
-                DownloadedFileType::Uncompressed => {
-                    futures::pin_mut!(body);
-                    self.host
-                        .fs
-                        .create_file_with(&destination_path, body)
-                        .await?;
-                }
-                DownloadedFileType::Gzip => {
-                    let body = GzipDecoder::new(body);
-                    futures::pin_mut!(body);
-                    self.host
-                        .fs
-                        .create_file_with(&destination_path, body)
-                        .await?;
-                }
-                DownloadedFileType::GzipTar => {
-                    let body = GzipDecoder::new(body);
-                    futures::pin_mut!(body);
-                    self.host
-                        .fs
-                        .extract_tar_file(&destination_path, Archive::new(body))
-                        .await?;
-                }
-                DownloadedFileType::Zip => {
-                    futures::pin_mut!(body);
-                    extract_zip(&destination_path, body)
-                        .await
-                        .with_context(|| format!("unzipping {path:?} archive"))?;
-                }
-            }
-
-            Ok(())
         })
         .await
         .to_wasmtime_result()

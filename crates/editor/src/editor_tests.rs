@@ -45,6 +45,7 @@ use std::{cell::RefCell, future::Future, rc::Rc, sync::atomic::AtomicBool, time:
 use std::{
     iter,
     sync::atomic::{self, AtomicUsize},
+    path::Path,
 };
 use test::{build_editor_with_project, editor_lsp_test_context::rust_lang};
 use text::ToPoint as _;

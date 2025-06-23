@@ -471,9 +471,9 @@ pub async fn stream_completion(
                                                     }).collect())
                                                 }
                                             },
-                                            RequestMessage::User { content } => unimplemented!(),
-                                            RequestMessage::System { content } => unimplemented!(),
-                                            RequestMessage::Tool { content, tool_call_id } => unimplemented!(),
+                                            RequestMessage::User { .. } => unimplemented!(),
+                                            RequestMessage::System { .. } => unimplemented!(),
+                                            RequestMessage::Tool { .. } => unimplemented!(),
                                         },
                                         finish_reason: choice.finish_reason.clone(),
                                     }).collect(),

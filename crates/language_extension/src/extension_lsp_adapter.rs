@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -118,7 +117,6 @@ impl LspAdapter for ExtensionLspAdapter {
         delegate: Arc<dyn LspAdapterDelegate>,
         _: Arc<dyn LanguageToolchainStore>,
         _: LanguageServerBinaryOptions,
-        _: futures::lock::MutexGuard<'a, Option<LanguageServerBinary>>,
         _: &'a mut AsyncApp,
     ) -> Pin<Box<dyn 'a + Future<Output = Result<LanguageServerBinary>>>> {
         async move {
@@ -161,22 +159,6 @@ impl LspAdapter for ExtensionLspAdapter {
             })
         }
         .boxed_local()
-    }
-
-    async fn fetch_latest_server_version(
-        &self,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<Box<dyn 'static + Send + Any>> {
-        unreachable!("get_language_server_command is overridden")
-    }
-
-    async fn fetch_server_binary(
-        &self,
-        _: Box<dyn 'static + Send + Any>,
-        _: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Result<LanguageServerBinary> {
-        unreachable!("get_language_server_command is overridden")
     }
 
     async fn cached_server_binary(

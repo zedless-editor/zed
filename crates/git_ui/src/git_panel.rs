@@ -1423,7 +1423,6 @@ impl GitPanel {
             .focus_handle(cx)
             .contains_focused(window, cx)
         {
-            telemetry::event!("Git Committed", source = "Git Panel");
             self.commit_changes(CommitOptions { amend: false }, window, cx)
         } else {
             cx.propagate();
@@ -1446,7 +1445,6 @@ impl GitPanel {
                     self.set_amend_pending(true, cx);
                     self.load_last_commit_message_if_empty(cx);
                 } else {
-                    telemetry::event!("Git Amended", source = "Git Panel");
                     self.set_amend_pending(false, cx);
                     self.commit_changes(CommitOptions { amend: true }, window, cx);
                 }
@@ -1626,7 +1624,6 @@ impl GitPanel {
         let Some(repo) = self.active_repository.clone() else {
             return;
         };
-        telemetry::event!("Git Uncommitted");
 
         let confirmation = self.check_for_pushed_commits(window, cx);
         let prior_head = self.load_commit_details("HEAD".to_string(), cx);
@@ -1767,7 +1764,6 @@ impl GitPanel {
             return;
         };
 
-        telemetry::event!("Git Commit Message Generated");
 
         let diff = repo.update(cx, |repo, cx| {
             if self.has_staged_changes() {
@@ -1924,7 +1920,6 @@ impl GitPanel {
         let Some(repo) = self.active_repository.clone() else {
             return;
         };
-        telemetry::event!("Git Fetched");
         let askpass = self.askpass_delegate("git fetch", window, cx);
         let this = cx.weak_entity();
 
@@ -2057,7 +2052,6 @@ impl GitPanel {
         let Some(branch) = repo.read(cx).branch.as_ref() else {
             return;
         };
-        telemetry::event!("Git Pulled");
         let branch = branch.clone();
         let remote = self.get_remote(false, window, cx);
         cx.spawn_in(window, async move |this, cx| {
@@ -2120,7 +2114,6 @@ impl GitPanel {
         let Some(branch) = repo.read(cx).branch.as_ref() else {
             return;
         };
-        telemetry::event!("Git Pushed");
         let branch = branch.clone();
 
         let options = if force_push {
@@ -3308,7 +3301,6 @@ impl GitPanel {
                                 .on_click({
                                     let git_panel = cx.weak_entity();
                                     move |_, window, cx| {
-                                        telemetry::event!("Git Amended", source = "Git Panel");
                                         git_panel
                                             .update(cx, |git_panel, cx| {
                                                 git_panel.set_amend_pending(false, cx);
@@ -3340,7 +3332,6 @@ impl GitPanel {
                         .on_click({
                             let git_panel = cx.weak_entity();
                             move |_, window, cx| {
-                                telemetry::event!("Git Committed", source = "Git Panel");
                                 git_panel
                                     .update(cx, |git_panel, cx| {
                                         git_panel.commit_changes(
@@ -3398,7 +3389,6 @@ impl GitPanel {
                             .on_click({
                                 let git_panel = cx.weak_entity();
                                 move |_, window, cx| {
-                                    telemetry::event!("Git Committed", source = "Git Panel");
                                     git_panel
                                         .update(cx, |git_panel, cx| {
                                             git_panel.commit_changes(

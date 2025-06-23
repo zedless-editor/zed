@@ -3491,7 +3491,6 @@ mod tests {
             let mut context = AssistantContext::local(
                 registry,
                 None,
-                None,
                 prompt_builder.clone(),
                 Arc::new(SlashCommandWorkingSet::default()),
                 cx,

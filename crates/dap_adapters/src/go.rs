@@ -2,14 +2,13 @@ use anyhow::{Context as _, bail};
 use dap::{
     StartDebuggingRequestArguments,
     adapters::{
-        DebugTaskDefinition, DownloadedFileType, TcpArguments, download_adapter_from_github,
-        latest_github_release,
+        DebugTaskDefinition, TcpArguments,
     },
 };
 
 use gpui::{AsyncApp, SharedString};
 use language::LanguageName;
-use std::{collections::HashMap, env::consts, ffi::OsStr, path::PathBuf, sync::OnceLock};
+use std::{collections::HashMap, ffi::OsStr, path::PathBuf, sync::OnceLock};
 use task::TcpArgumentsTemplate;
 use util;
 
@@ -22,66 +21,12 @@ pub(crate) struct GoDebugAdapter {
 
 impl GoDebugAdapter {
     const ADAPTER_NAME: &'static str = "Delve";
-    async fn fetch_latest_adapter_version(
-        delegate: &Arc<dyn DapDelegate>,
-    ) -> Result<AdapterVersion> {
-        let release = latest_github_release(
-            &"zed-industries/delve-shim-dap",
-            true,
-            false,
-            delegate.http_client(),
-        )
-        .await?;
-
-        let os = match consts::OS {
-            "macos" => "apple-darwin",
-            "linux" => "unknown-linux-gnu",
-            "windows" => "pc-windows-msvc",
-            other => bail!("Running on unsupported os: {other}"),
-        };
-        let suffix = if consts::OS == "windows" {
-            ".zip"
-        } else {
-            ".tar.gz"
-        };
-        let asset_name = format!("delve-shim-dap-{}-{os}{suffix}", consts::ARCH);
-        let asset = release
-            .assets
-            .iter()
-            .find(|asset| asset.name == asset_name)
-            .with_context(|| format!("no asset found matching `{asset_name:?}`"))?;
-
-        Ok(AdapterVersion {
-            tag_name: release.tag_name,
-            url: asset.browser_download_url.clone(),
-        })
-    }
-    async fn install_shim(&self, delegate: &Arc<dyn DapDelegate>) -> anyhow::Result<PathBuf> {
+    async fn install_shim(&self, _delegate: &Arc<dyn DapDelegate>) -> anyhow::Result<PathBuf> {
         if let Some(path) = self.shim_path.get().cloned() {
             return Ok(path);
         }
 
-        let asset = Self::fetch_latest_adapter_version(delegate).await?;
-        let ty = if consts::OS == "windows" {
-            DownloadedFileType::Zip
-        } else {
-            DownloadedFileType::GzipTar
-        };
-        download_adapter_from_github(
-            "delve-shim-dap".into(),
-            asset.clone(),
-            ty,
-            delegate.as_ref(),
-        )
-        .await?;
-
-        let path = paths::debug_adapters_dir()
-            .join("delve-shim-dap")
-            .join(format!("delve-shim-dap_{}", asset.tag_name))
-            .join(format!("delve-shim-dap{}", std::env::consts::EXE_SUFFIX));
-        self.shim_path.set(path.clone()).ok();
-
-        Ok(path)
+        Err(anyhow::anyhow!("zedless: downloads are disabled"))
     }
 }
 

@@ -3,14 +3,10 @@ mod agent_profile;
 use std::sync::Arc;
 
 use ::open_ai::Model as OpenAiModel;
-use anthropic::Model as AnthropicModel;
 use anyhow::{Result, bail};
 use collections::IndexMap;
-use deepseek::Model as DeepseekModel;
 use gpui::{App, Pixels, SharedString};
 use language_model::LanguageModel;
-use lmstudio::Model as LmStudioModel;
-use mistral::Model as MistralModel;
 use ollama::Model as OllamaModel;
 use schemars::{JsonSchema, schema::Schema};
 use serde::{Deserialize, Serialize};
@@ -52,37 +48,15 @@ pub enum NotifyWhenAgentWaiting {
 #[serde(tag = "name", rename_all = "snake_case")]
 #[schemars(deny_unknown_fields)]
 pub enum AgentProviderContentV1 {
-    #[serde(rename = "zed.dev")]
-    ZedDotDev { default_model: Option<String> },
     #[serde(rename = "openai")]
     OpenAi {
         default_model: Option<OpenAiModel>,
         api_url: Option<String>,
         available_models: Option<Vec<OpenAiModel>>,
     },
-    #[serde(rename = "anthropic")]
-    Anthropic {
-        default_model: Option<AnthropicModel>,
-        api_url: Option<String>,
-    },
     #[serde(rename = "ollama")]
     Ollama {
         default_model: Option<OllamaModel>,
-        api_url: Option<String>,
-    },
-    #[serde(rename = "lmstudio")]
-    LmStudio {
-        default_model: Option<LmStudioModel>,
-        api_url: Option<String>,
-    },
-    #[serde(rename = "deepseek")]
-    DeepSeek {
-        default_model: Option<DeepseekModel>,
-        api_url: Option<String>,
-    },
-    #[serde(rename = "mistral")]
-    Mistral {
-        default_model: Option<MistralModel>,
         api_url: Option<String>,
     },
 }
@@ -227,40 +201,14 @@ impl AgentSettingsContent {
                         .provider
                         .clone()
                         .and_then(|provider| match provider {
-                            AgentProviderContentV1::ZedDotDev { default_model } => default_model
-                                .map(|model| LanguageModelSelection {
-                                    provider: "zed.dev".into(),
-                                    model,
-                                }),
                             AgentProviderContentV1::OpenAi { default_model, .. } => default_model
                                 .map(|model| LanguageModelSelection {
                                     provider: "openai".into(),
                                     model: model.id().to_string(),
                                 }),
-                            AgentProviderContentV1::Anthropic { default_model, .. } => {
-                                default_model.map(|model| LanguageModelSelection {
-                                    provider: "anthropic".into(),
-                                    model: model.id().to_string(),
-                                })
-                            }
                             AgentProviderContentV1::Ollama { default_model, .. } => default_model
                                 .map(|model| LanguageModelSelection {
                                     provider: "ollama".into(),
-                                    model: model.id().to_string(),
-                                }),
-                            AgentProviderContentV1::LmStudio { default_model, .. } => default_model
-                                .map(|model| LanguageModelSelection {
-                                    provider: "lmstudio".into(),
-                                    model: model.id().to_string(),
-                                }),
-                            AgentProviderContentV1::DeepSeek { default_model, .. } => default_model
-                                .map(|model| LanguageModelSelection {
-                                    provider: "deepseek".into(),
-                                    model: model.id().to_string(),
-                                }),
-                            AgentProviderContentV1::Mistral { default_model, .. } => default_model
-                                .map(|model| LanguageModelSelection {
-                                    provider: "mistral".into(),
                                     model: model.id().to_string(),
                                 }),
                         }),
@@ -346,21 +294,6 @@ impl AgentSettingsContent {
         match &mut self.inner {
             Some(AgentSettingsContentInner::Versioned(settings)) => match **settings {
                 VersionedAgentSettingsContent::V1(ref mut settings) => match provider.as_ref() {
-                    "zed.dev" => {
-                        log::warn!("attempted to set zed.dev model on outdated settings");
-                    }
-                    "anthropic" => {
-                        let api_url = match &settings.provider {
-                            Some(AgentProviderContentV1::Anthropic { api_url, .. }) => {
-                                api_url.clone()
-                            }
-                            _ => None,
-                        };
-                        settings.provider = Some(AgentProviderContentV1::Anthropic {
-                            default_model: AnthropicModel::from_id(&model).ok(),
-                            api_url,
-                        });
-                    }
                     "ollama" => {
                         let api_url = match &settings.provider {
                             Some(AgentProviderContentV1::Ollama { api_url, .. }) => api_url.clone(),
@@ -378,18 +311,6 @@ impl AgentSettingsContent {
                             api_url,
                         });
                     }
-                    "lmstudio" => {
-                        let api_url = match &settings.provider {
-                            Some(AgentProviderContentV1::LmStudio { api_url, .. }) => {
-                                api_url.clone()
-                            }
-                            _ => None,
-                        };
-                        settings.provider = Some(AgentProviderContentV1::LmStudio {
-                            default_model: Some(lmstudio::Model::new(&model, None, None, false)),
-                            api_url,
-                        });
-                    }
                     "openai" => {
                         let (api_url, available_models) = match &settings.provider {
                             Some(AgentProviderContentV1::OpenAi {
@@ -403,18 +324,6 @@ impl AgentSettingsContent {
                             default_model: OpenAiModel::from_id(&model).ok(),
                             api_url,
                             available_models,
-                        });
-                    }
-                    "deepseek" => {
-                        let api_url = match &settings.provider {
-                            Some(AgentProviderContentV1::DeepSeek { api_url, .. }) => {
-                                api_url.clone()
-                            }
-                            _ => None,
-                        };
-                        settings.provider = Some(AgentProviderContentV1::DeepSeek {
-                            default_model: DeepseekModel::from_id(&model).ok(),
-                            api_url,
                         });
                     }
                     _ => {}

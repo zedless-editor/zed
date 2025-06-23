@@ -3,7 +3,7 @@ use ui::{IconPosition, prelude::*};
 use workspace::{ModalView, Workspace};
 use zed_actions::feedback::GiveFeedback;
 
-use crate::{EmailZed, FileBugReport, OpenZedRepo, RequestFeature};
+use crate::{FileBugReport, OpenZedRepo, RequestFeature};
 
 pub struct FeedbackModal {
     focus_handle: FocusHandle,
@@ -87,17 +87,6 @@ impl Render for FeedbackModal {
                     .icon_position(IconPosition::Start)
                     .on_click(cx.listener(|_, _, window, cx| {
                         window.dispatch_action(Box::new(RequestFeature), cx);
-                    })),
-            )
-            .child(
-                Button::new("send-us_an-email", "Send an Email")
-                    .full_width()
-                    .icon(IconName::Envelope)
-                    .icon_size(IconSize::XSmall)
-                    .icon_color(Color::Muted)
-                    .icon_position(IconPosition::Start)
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        window.dispatch_action(Box::new(EmailZed), cx);
                     })),
             )
             .child(

@@ -231,10 +231,10 @@ in
           export DO_STARTUP_NOTIFY="true"
           export APP_CLI="zeditor"
           export APP_ICON="zed"
-          export APP_NAME="Zed"
+          export APP_NAME="Zedless"
           export APP_ARGS="%U"
           mkdir -p "$out/share/applications"
-          ${lib.getExe envsubst} < "crates/zed/resources/zed.desktop.in" > "$out/share/applications/dev.zed.Zed.desktop"
+          ${lib.getExe envsubst} < "crates/zed/resources/zed.desktop.in" > "$out/share/applications/cooking.schizo.Zedless.desktop"
         )
       ''
       + lib.optionalString buildRemoteServer ''

@@ -152,6 +152,7 @@ workspace.workspace = true
 zed_actions.workspace = true
 zeta.workspace = true
 title_bar.workspace = true
+zedless_settings.workspace = true
 zlog.workspace = true
 zlog_settings.workspace = true
 

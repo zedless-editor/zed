@@ -417,6 +417,9 @@ Error: Running Zed as root or via sudo is unsupported.
             tx.send(Some(options)).log_err();
         })
         .detach();
+
+        project::Project::init(&client, cx);
+
         let node_runtime = NodeRuntime::new(client.http_client(), Some(shell_env_loaded_rx), rx);
 
         debug_adapter_extension::init(extension_host_proxy.clone(), cx);
@@ -429,7 +432,6 @@ Error: Running Zed as root or via sudo is unsupported.
         Client::set_global(client.clone(), cx);
 
         zed::init(cx);
-        project::Project::init(&client, cx);
         debugger_ui::init(cx);
         debugger_tools::init(cx);
         client::init(&client, cx);

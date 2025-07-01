@@ -32,7 +32,6 @@ language.workspace = true
 log.workspace = true
 lsp.workspace = true
 moka.workspace = true
-node_runtime.workspace = true
 paths.workspace = true
 project.workspace = true
 remote.workspace = true

@@ -9,6 +9,7 @@
   cargo-hakari,
   cargo-machete,
   nixfmt-rfc-style,
+  rustfmt,
   protobuf,
 }:
 (mkShell.override { inherit (zed-editor) stdenv; }) {
@@ -19,6 +20,7 @@
     cargo-hakari
     cargo-machete
     nixfmt-rfc-style
+    rustfmt
   ];
 
   env =

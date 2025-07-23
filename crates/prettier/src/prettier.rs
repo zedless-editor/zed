@@ -1,4 +1,4 @@
-use anyhow::Context as _;
+use anyhow::{anyhow, Context as _};
 use collections::{HashMap, HashSet};
 use fs::Fs;
 use gpui::{AsyncApp, Entity};
@@ -235,70 +235,25 @@ impl Prettier {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub async fn start(
-        _: LanguageServerId,
-        prettier_dir: PathBuf,
-        _: AsyncApp,
-    ) -> anyhow::Result<Self> {
-        Ok(Self::Test(TestPrettier {
-            default: prettier_dir == default_prettier_dir().as_path(),
-            prettier_dir,
-        }))
-    }
+    // #[cfg(any(test, feature = "test-support"))]
+    // pub async fn start(
+    //     _: LanguageServerId,
+    //     prettier_dir: PathBuf,
+    //     _: AsyncApp,
+    // ) -> anyhow::Result<Self> {
+    //     Ok(Self::Test(TestPrettier {
+    //         default: prettier_dir == default_prettier_dir().as_path(),
+    //         prettier_dir,
+    //     }))
+    // }
 
-    #[cfg(not(any(test, feature = "test-support")))]
+    // #[cfg(not(any(test, feature = "test-support")))]
     pub async fn start(
         server_id: LanguageServerId,
         prettier_dir: PathBuf,
         mut cx: AsyncApp,
     ) -> anyhow::Result<Self> {
-        use lsp::{LanguageServerBinary, LanguageServerName};
-
-        let executor = cx.background_executor().clone();
-        anyhow::ensure!(
-            prettier_dir.is_dir(),
-            "Prettier dir {prettier_dir:?} is not a directory"
-        );
-        let prettier_server = default_prettier_dir().join(PRETTIER_SERVER_FILE);
-        anyhow::ensure!(
-            prettier_server.is_file(),
-            "no prettier server package found at {prettier_server:?}"
-        );
-
-        let server_name = LanguageServerName("prettier".into());
-        let server_binary = LanguageServerBinary {
-            path: node_path,
-            arguments: vec![prettier_server.into(), prettier_dir.as_path().into()],
-            env: None,
-        };
-        let server = LanguageServer::new(
-            Arc::new(parking_lot::Mutex::new(None)),
-            server_id,
-            server_name,
-            server_binary,
-            &prettier_dir,
-            None,
-            Default::default(),
-            &mut cx,
-        )
-        .context("prettier server creation")?;
-
-        let server = cx
-            .update(|cx| {
-                let params = server.default_initialize_params(false, cx);
-                let configuration = lsp::DidChangeConfigurationParams {
-                    settings: Default::default(),
-                };
-                executor.spawn(server.initialize(params, configuration.into(), cx))
-            })?
-            .await
-            .context("prettier server initialization")?;
-        Ok(Self::Real(RealPrettier {
-            server,
-            default: prettier_dir == default_prettier_dir().as_path(),
-            prettier_dir,
-        }))
+        Err(anyhow!("zedless: prettier is disabled"))
     }
 
     pub async fn format(

@@ -1,7 +1,6 @@
 use anyhow::Context as _;
 use gpui::{App, UpdateGlobal};
 use json::json_task_context;
-use node_runtime::NodeRuntime;
 use python::PyprojectTomlManifestProvider;
 use rust::CargoManifestProvider;
 use rust_embed::RustEmbed;
@@ -48,7 +47,7 @@ pub static LANGUAGE_GIT_COMMIT: std::sync::LazyLock<Arc<Language>> =
         ))
     });
 
-pub fn init(languages: Arc<LanguageRegistry>, node: NodeRuntime, cx: &mut App) {
+pub fn init(languages: Arc<LanguageRegistry>, cx: &mut App) {
     #[cfg(feature = "load-grammars")]
     languages.register_native_grammars([
         ("bash", tree_sitter_bash::LANGUAGE),
@@ -74,24 +73,24 @@ pub fn init(languages: Arc<LanguageRegistry>, node: NodeRuntime, cx: &mut App) {
     ]);
 
     let c_lsp_adapter = Arc::new(c::CLspAdapter);
-    let css_lsp_adapter = Arc::new(css::CssLspAdapter::new(node.clone()));
-    let eslint_adapter = Arc::new(typescript::EsLintLspAdapter::new(node.clone()));
+    let css_lsp_adapter = Arc::new(css::CssLspAdapter::new());
+    let eslint_adapter = Arc::new(typescript::EsLintLspAdapter::new());
     let go_context_provider = Arc::new(go::GoContextProvider);
     let go_lsp_adapter = Arc::new(go::GoLspAdapter);
     let json_context_provider = Arc::new(json_task_context());
-    let json_lsp_adapter = Arc::new(json::JsonLspAdapter::new(node.clone(), languages.clone()));
+    let json_lsp_adapter = Arc::new(json::JsonLspAdapter::new(languages.clone()));
     let node_version_lsp_adapter = Arc::new(json::NodeVersionAdapter);
     let py_lsp_adapter = Arc::new(python::PyLspAdapter::new());
     let python_context_provider = Arc::new(python::PythonContextProvider);
-    let python_lsp_adapter = Arc::new(python::PythonLspAdapter::new(node.clone()));
+    let python_lsp_adapter = Arc::new(python::PythonLspAdapter::new());
     let python_toolchain_provider = Arc::new(python::PythonToolchainProvider::default());
     let rust_context_provider = Arc::new(rust::RustContextProvider);
     let rust_lsp_adapter = Arc::new(rust::RustLspAdapter);
-    let tailwind_adapter = Arc::new(tailwind::TailwindLspAdapter::new(node.clone()));
+    let tailwind_adapter = Arc::new(tailwind::TailwindLspAdapter::new());
     let typescript_context = Arc::new(typescript::TypeScriptContextProvider::new());
-    let typescript_lsp_adapter = Arc::new(typescript::TypeScriptLspAdapter::new(node.clone()));
-    let vtsls_adapter = Arc::new(vtsls::VtslsLspAdapter::new(node.clone()));
-    let yaml_lsp_adapter = Arc::new(yaml::YamlLspAdapter::new(node.clone()));
+    let typescript_lsp_adapter = Arc::new(typescript::TypeScriptLspAdapter::new());
+    let vtsls_adapter = Arc::new(vtsls::VtslsLspAdapter::new());
+    let yaml_lsp_adapter = Arc::new(yaml::YamlLspAdapter::new());
 
     let built_in_languages = [
         LanguageInfo {

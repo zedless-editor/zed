@@ -540,46 +540,29 @@ async fn convert_response(
 
 impl nodejs::Host for WasmState {
     async fn node_binary_path(&mut self) -> wasmtime::Result<Result<String, String>> {
-        self.host
-            .node_runtime
-            .binary_path()
-            .await
-            .map(|path| path.to_string_lossy().to_string())
-            .to_wasmtime_result()
+        Err(anyhow::anyhow!("zedless: node runtime is disabled"))
     }
 
     async fn npm_package_latest_version(
         &mut self,
-        package_name: String,
+        _package_name: String,
     ) -> wasmtime::Result<Result<String, String>> {
-        self.host
-            .node_runtime
-            .npm_package_latest_version(&package_name)
-            .await
-            .to_wasmtime_result()
+        Err(anyhow::anyhow!("zedless: node runtime is disabled"))
     }
 
     async fn npm_package_installed_version(
         &mut self,
-        package_name: String,
+        _package_name: String,
     ) -> wasmtime::Result<Result<Option<String>, String>> {
-        self.host
-            .node_runtime
-            .npm_package_installed_version(&self.work_dir(), &package_name)
-            .await
-            .to_wasmtime_result()
+        Err(anyhow::anyhow!("zedless: node runtime is disabled"))
     }
 
     async fn npm_install_package(
         &mut self,
-        package_name: String,
-        version: String,
+        _package_name: String,
+        _version: String,
     ) -> wasmtime::Result<Result<(), String>> {
-        self.host
-            .node_runtime
-            .npm_install_packages(&self.work_dir(), &[(&package_name, &version)])
-            .await
-            .to_wasmtime_result()
+        Err(anyhow::anyhow!("zedless: node runtime is disabled"))
     }
 }
 

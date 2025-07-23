@@ -4,7 +4,6 @@ use collections::HashMap;
 use gpui::AsyncApp;
 use language::{LanguageToolchainStore, LspAdapter, LspAdapterDelegate};
 use lsp::{CodeActionKind, LanguageServerBinary, LanguageServerName};
-use node_runtime::NodeRuntime;
 use project::{Fs, lsp_store::language_server_settings};
 use serde_json::Value;
 use std::{
@@ -12,23 +11,21 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use util::{ResultExt, maybe, merge_json_value_into};
+use util::{merge_json_value_into};
 
 fn typescript_server_binary_arguments(server_path: &Path) -> Vec<OsString> {
     vec![server_path.into(), "--stdio".into()]
 }
 
 pub struct VtslsLspAdapter {
-    node: NodeRuntime,
 }
 
 impl VtslsLspAdapter {
-    const SERVER_PATH: &'static str = "node_modules/@vtsls/language-server/bin/vtsls.js";
 
     const TYPESCRIPT_TSDK_PATH: &'static str = "node_modules/typescript/lib";
 
-    pub fn new(node: NodeRuntime) -> Self {
-        VtslsLspAdapter { node }
+    pub fn new() -> Self {
+        VtslsLspAdapter { }
     }
 
     async fn tsdk_path(fs: &dyn Fs, adapter: &Arc<dyn LspAdapterDelegate>) -> Option<&'static str> {
@@ -75,14 +72,6 @@ impl LspAdapter for VtslsLspAdapter {
             arguments: typescript_server_binary_arguments(&path),
             env: Some(env),
         })
-    }
-
-    async fn cached_server_binary(
-        &self,
-        container_dir: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        get_cached_ts_server_binary(container_dir, &self.node).await
     }
 
     fn code_action_kinds(&self) -> Option<Vec<CodeActionKind>> {
@@ -204,24 +193,4 @@ impl LspAdapter for VtslsLspAdapter {
             ("TSX".into(), "typescriptreact".into()),
         ])
     }
-}
-
-async fn get_cached_ts_server_binary(
-    container_dir: PathBuf,
-    node: &NodeRuntime,
-) -> Option<LanguageServerBinary> {
-    maybe!(async {
-        let server_path = container_dir.join(VtslsLspAdapter::SERVER_PATH);
-        anyhow::ensure!(
-            server_path.exists(),
-            "missing executable in directory {container_dir:?}"
-        );
-        Ok(LanguageServerBinary {
-            path: node.binary_path().await?,
-            env: None,
-            arguments: typescript_server_binary_arguments(&server_path),
-        })
-    })
-    .await
-    .log_err()
 }

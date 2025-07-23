@@ -7,22 +7,19 @@ use gpui::{App, AppContext, AsyncApp, Task};
 use language::{
     ContextLocation, ContextProvider, File, LanguageToolchainStore, LspAdapter, LspAdapterDelegate,
 };
-use lsp::{CodeActionKind, LanguageServerBinary, LanguageServerName};
-use node_runtime::NodeRuntime;
+use lsp::{CodeActionKind, LanguageServerName};
 use project::{Fs, lsp_store::language_server_settings};
 use serde_json::{Value, json};
 use smol::lock::RwLock;
 use std::{
-    any::Any,
     borrow::Cow,
     collections::BTreeSet,
-    ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
 };
 use task::{TaskTemplate, TaskTemplates, VariableName};
 use util::merge_json_value_into;
-use util::{ResultExt, maybe};
+use util::{ResultExt};
 
 #[derive(Debug)]
 pub(crate) struct TypeScriptContextProvider {
@@ -551,18 +548,6 @@ impl ContextProvider for TypeScriptContextProvider {
     }
 }
 
-fn typescript_server_binary_arguments(server_path: &Path) -> Vec<OsString> {
-    vec![server_path.into(), "--stdio".into()]
-}
-
-fn eslint_server_binary_arguments(server_path: &Path) -> Vec<OsString> {
-    vec![
-        "--max-old-space-size=8192".into(),
-        server_path.into(),
-        "--stdio".into(),
-    ]
-}
-
 fn replace_test_name_parameters(test_name: &str) -> String {
     let pattern = regex::Regex::new(r"(%|\$)[0-9a-zA-Z]+").unwrap();
 
@@ -570,17 +555,13 @@ fn replace_test_name_parameters(test_name: &str) -> String {
 }
 
 pub struct TypeScriptLspAdapter {
-    node: NodeRuntime,
 }
 
 impl TypeScriptLspAdapter {
-    const OLD_SERVER_PATH: &'static str = "node_modules/typescript-language-server/lib/cli.js";
-    const NEW_SERVER_PATH: &'static str = "node_modules/typescript-language-server/lib/cli.mjs";
     const SERVER_NAME: LanguageServerName =
         LanguageServerName::new_static("typescript-language-server");
-    const PACKAGE_NAME: &str = "typescript";
-    pub fn new(node: NodeRuntime) -> Self {
-        TypeScriptLspAdapter { node }
+    pub fn new() -> Self {
+        TypeScriptLspAdapter { }
     }
     async fn tsdk_path(fs: &dyn Fs, adapter: &Arc<dyn LspAdapterDelegate>) -> Option<&'static str> {
         let is_yarn = adapter
@@ -605,52 +586,10 @@ impl TypeScriptLspAdapter {
     }
 }
 
-struct TypeScriptVersions {
-    typescript_version: String,
-}
-
 #[async_trait(?Send)]
 impl LspAdapter for TypeScriptLspAdapter {
     fn name(&self) -> LanguageServerName {
         Self::SERVER_NAME.clone()
-    }
-
-    async fn check_if_version_installed(
-        &self,
-        version: &(dyn 'static + Send + Any),
-        container_dir: &PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        let version = version.downcast_ref::<TypeScriptVersions>().unwrap();
-        let server_path = container_dir.join(Self::NEW_SERVER_PATH);
-
-        let should_install_language_server = self
-            .node
-            .should_install_npm_package(
-                Self::PACKAGE_NAME,
-                &server_path,
-                &container_dir,
-                version.typescript_version.as_str(),
-            )
-            .await;
-
-        if should_install_language_server {
-            None
-        } else {
-            Some(LanguageServerBinary {
-                path: self.node.binary_path().await.ok()?,
-                env: None,
-                arguments: typescript_server_binary_arguments(&server_path),
-            })
-        }
-    }
-
-    async fn cached_server_binary(
-        &self,
-        container_dir: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        get_cached_ts_server_binary(container_dir, &self.node).await
     }
 
     fn code_action_kinds(&self) -> Option<Vec<CodeActionKind>> {
@@ -754,41 +693,10 @@ impl LspAdapter for TypeScriptLspAdapter {
     }
 }
 
-async fn get_cached_ts_server_binary(
-    container_dir: PathBuf,
-    node: &NodeRuntime,
-) -> Option<LanguageServerBinary> {
-    maybe!(async {
-        let old_server_path = container_dir.join(TypeScriptLspAdapter::OLD_SERVER_PATH);
-        let new_server_path = container_dir.join(TypeScriptLspAdapter::NEW_SERVER_PATH);
-        if new_server_path.exists() {
-            Ok(LanguageServerBinary {
-                path: node.binary_path().await?,
-                env: None,
-                arguments: typescript_server_binary_arguments(&new_server_path),
-            })
-        } else if old_server_path.exists() {
-            Ok(LanguageServerBinary {
-                path: node.binary_path().await?,
-                env: None,
-                arguments: typescript_server_binary_arguments(&old_server_path),
-            })
-        } else {
-            anyhow::bail!("missing executable in directory {container_dir:?}")
-        }
-    })
-    .await
-    .log_err()
-}
-
 pub struct EsLintLspAdapter {
-    node: NodeRuntime,
 }
 
 impl EsLintLspAdapter {
-    const CURRENT_VERSION: &'static str = "2.4.4";
-
-    const SERVER_PATH: &'static str = "vscode-eslint/server/out/eslintServer.js";
     const SERVER_NAME: LanguageServerName = LanguageServerName::new_static("eslint");
 
     const FLAT_CONFIG_FILE_NAMES: &'static [&'static str] = &[
@@ -800,12 +708,8 @@ impl EsLintLspAdapter {
         "eslint.config.mts",
     ];
 
-    pub fn new(node: NodeRuntime) -> Self {
-        EsLintLspAdapter { node }
-    }
-
-    fn build_destination_path(container_dir: &Path) -> PathBuf {
-        container_dir.join(format!("vscode-eslint-{}", Self::CURRENT_VERSION))
+    pub fn new() -> Self {
+        EsLintLspAdapter { }
     }
 }
 
@@ -880,20 +784,6 @@ impl LspAdapter for EsLintLspAdapter {
 
     fn name(&self) -> LanguageServerName {
         Self::SERVER_NAME.clone()
-    }
-
-    async fn cached_server_binary(
-        &self,
-        container_dir: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        let server_path =
-            Self::build_destination_path(&container_dir).join(EsLintLspAdapter::SERVER_PATH);
-        Some(LanguageServerBinary {
-            path: self.node.binary_path().await.ok()?,
-            env: None,
-            arguments: eslint_server_binary_arguments(&server_path),
-        })
     }
 }
 

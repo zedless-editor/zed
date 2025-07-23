@@ -4,7 +4,6 @@ use fs::Fs;
 use gpui::{AsyncApp, Entity};
 use language::{Buffer, Diff, language_settings::language_settings};
 use lsp::{LanguageServer, LanguageServerId};
-use node_runtime::NodeRuntime;
 use paths::default_prettier_dir;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -240,7 +239,6 @@ impl Prettier {
     pub async fn start(
         _: LanguageServerId,
         prettier_dir: PathBuf,
-        _: NodeRuntime,
         _: AsyncApp,
     ) -> anyhow::Result<Self> {
         Ok(Self::Test(TestPrettier {
@@ -253,7 +251,6 @@ impl Prettier {
     pub async fn start(
         server_id: LanguageServerId,
         prettier_dir: PathBuf,
-        node: NodeRuntime,
         mut cx: AsyncApp,
     ) -> anyhow::Result<Self> {
         use lsp::{LanguageServerBinary, LanguageServerName};
@@ -269,9 +266,6 @@ impl Prettier {
             "no prettier server package found at {prettier_server:?}"
         );
 
-        let node_path = executor
-            .spawn(async move { node.binary_path().await })
-            .await?;
         let server_name = LanguageServerName("prettier".into());
         let server_binary = LanguageServerBinary {
             path: node_path,

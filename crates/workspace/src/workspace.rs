@@ -50,7 +50,6 @@ pub use item::{
 use itertools::Itertools;
 use language::{Buffer, LanguageRegistry, Rope};
 pub use modal_layer::*;
-use node_runtime::NodeRuntime;
 use notifications::{
     DetachAndPromptErr, Notifications, dismiss_app_notification,
     simple_message_notification::MessageNotification,
@@ -722,7 +721,6 @@ pub struct AppState {
     pub workspace_store: Entity<WorkspaceStore>,
     pub fs: Arc<dyn fs::Fs>,
     pub build_window_options: fn(Option<Uuid>, &mut App) -> WindowOptions,
-    pub node_runtime: NodeRuntime,
     pub session: Entity<AppSession>,
 }
 
@@ -775,7 +773,6 @@ impl AppState {
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn test(cx: &mut App) -> Arc<Self> {
-        use node_runtime::NodeRuntime;
         use session::Session;
         use settings::SettingsStore;
 
@@ -802,7 +799,6 @@ impl AppState {
             languages,
             user_store,
             workspace_store,
-            node_runtime: NodeRuntime::unavailable(),
             build_window_options: |_, _| Default::default(),
             session,
         })
@@ -1316,7 +1312,6 @@ impl Workspace {
     > {
         let project_handle = Project::local(
             app_state.client.clone(),
-            app_state.node_runtime.clone(),
             app_state.user_store.clone(),
             app_state.languages.clone(),
             app_state.fs.clone(),
@@ -5407,7 +5402,6 @@ impl Workspace {
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn test_new(project: Entity<Project>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        use node_runtime::NodeRuntime;
         use session::Session;
 
         let client = project.read(cx).client();
@@ -5423,7 +5417,6 @@ impl Workspace {
             user_store,
             fs: project.read(cx).fs().clone(),
             build_window_options: |_, _| Default::default(),
-            node_runtime: NodeRuntime::unavailable(),
             session,
         });
         let workspace = Self::new(Default::default(), project, app_state, window, cx);
@@ -6959,7 +6952,6 @@ pub fn open_ssh_project_with_new_connection(
             project::Project::ssh(
                 session,
                 app_state.client.clone(),
-                app_state.node_runtime.clone(),
                 app_state.user_store.clone(),
                 app_state.languages.clone(),
                 app_state.fs.clone(),

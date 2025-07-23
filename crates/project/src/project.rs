@@ -84,7 +84,6 @@ use lsp::{
 use lsp_command::*;
 use lsp_store::{CompletionDocumentation, LspFormatTarget, OpenLspBufferHandle};
 pub use manifest_tree::ManifestProviders;
-use node_runtime::NodeRuntime;
 use parking_lot::Mutex;
 pub use prettier_store::PrettierStore;
 use project_settings::{ProjectSettings, SettingsObserver, SettingsObserverEvent};
@@ -195,7 +194,6 @@ pub struct Project {
     git_diff_debouncer: DebouncedDelay<Self>,
     remotely_created_models: Arc<Mutex<RemotelyCreatedModels>>,
     terminals: Terminals,
-    node: Option<NodeRuntime>,
     search_history: SearchHistory,
     search_included_history: SearchHistory,
     search_excluded_history: SearchHistory,
@@ -930,7 +928,6 @@ impl Project {
 
     pub fn local(
         client: Arc<Client>,
-        node: NodeRuntime,
         user_store: Entity<UserStore>,
         languages: Arc<LanguageRegistry>,
         fs: Arc<dyn Fs>,
@@ -971,7 +968,6 @@ impl Project {
             let dap_store = cx.new(|cx| {
                 DapStore::new_local(
                     client.http_client(),
-                    node.clone(),
                     fs.clone(),
                     environment.clone(),
                     toolchain_store.read(cx).as_language_toolchain_store(),
@@ -988,7 +984,6 @@ impl Project {
 
             let prettier_store = cx.new(|cx| {
                 PrettierStore::new(
-                    node.clone(),
                     fs.clone(),
                     languages.clone(),
                     worktree_store.clone(),
@@ -1075,7 +1070,7 @@ impl Project {
                 terminals: Terminals {
                     local_handles: Vec::new(),
                 },
-                node: Some(node),
+
                 search_history: Self::new_search_history(),
                 environment,
                 remotely_created_models: Default::default(),
@@ -1093,7 +1088,6 @@ impl Project {
     pub fn ssh(
         ssh: Entity<SshRemoteClient>,
         client: Arc<Client>,
-        node: NodeRuntime,
         user_store: Entity<UserStore>,
         languages: Arc<LanguageRegistry>,
         fs: Arc<dyn Fs>,
@@ -1239,7 +1233,6 @@ impl Project {
                 terminals: Terminals {
                     local_handles: Vec::new(),
                 },
-                node: Some(node),
                 search_history: Self::new_search_history(),
                 environment,
                 remotely_created_models: Default::default(),
@@ -1491,7 +1484,6 @@ impl Project {
                 terminals: Terminals {
                     local_handles: Vec::new(),
                 },
-                node: None,
                 search_history: Self::new_search_history(),
                 search_included_history: Self::new_search_history(),
                 search_excluded_history: Self::new_search_history(),
@@ -1606,7 +1598,6 @@ impl Project {
             .update(|cx| {
                 Project::local(
                     client,
-                    node_runtime::NodeRuntime::unavailable(),
                     user_store,
                     Arc::new(languages),
                     fs,
@@ -1644,7 +1635,6 @@ impl Project {
         let project = cx.update(|cx| {
             Project::local(
                 client,
-                node_runtime::NodeRuntime::unavailable(),
                 user_store,
                 Arc::new(languages),
                 fs,
@@ -1713,10 +1703,6 @@ impl Project {
 
     pub fn user_store(&self) -> Entity<UserStore> {
         self.user_store.clone()
-    }
-
-    pub fn node_runtime(&self) -> Option<&NodeRuntime> {
-        self.node.as_ref()
     }
 
     pub fn opened_buffers(&self, cx: &App) -> Vec<Entity<Buffer>> {

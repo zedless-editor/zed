@@ -12,9 +12,7 @@ use gpui::{App, AppContext as _, Context, SemanticVersion, UpdateGlobal as _};
 use gpui_tokio::Tokio;
 use http_client::{Url, read_proxy_from_env};
 use language::LanguageRegistry;
-use node_runtime::{NodeBinaryOptions, NodeRuntime};
 use paths::logs_dir;
-use project::project_settings::ProjectSettings;
 
 use release_channel::{AppVersion};
 use remote::proxy::ProxyLaunchError;
@@ -316,7 +314,7 @@ pub fn execute_run(
 
         let project = cx.new(|cx| {
             let fs = Arc::new(RealFs::new(None, cx.background_executor().clone()));
-            let node_settings_rx = initialize_settings(session.clone(), fs.clone(), cx);
+            initialize_settings(session.clone(), fs.clone(), cx);
 
             let proxy_url = read_proxy_settings(cx);
 
@@ -336,7 +334,6 @@ pub fn execute_run(
                 )
             };
 
-            let node_runtime = NodeRuntime::new(http_client.clone(), None, node_settings_rx);
 
             let mut languages = LanguageRegistry::new(cx.background_executor().clone());
             languages.set_language_server_download_dir(paths::languages_dir().clone());
@@ -347,7 +344,6 @@ pub fn execute_run(
                     session: session.clone(),
                     fs,
                     http_client,
-                    node_runtime,
                     languages,
                     extension_host_proxy,
                 },
@@ -622,7 +618,7 @@ fn initialize_settings(
     session: Arc<ChannelClient>,
     fs: Arc<dyn Fs>,
     cx: &mut App,
-) -> watch::Receiver<Option<NodeBinaryOptions>> {
+) {
     let user_settings_file_rx = watch_config_file(
         &cx.background_executor(),
         fs,
@@ -656,35 +652,6 @@ fn initialize_settings(
             }
         }
     });
-
-    let (mut tx, rx) = watch::channel(None);
-    cx.observe_global::<SettingsStore>(move |cx| {
-        let settings = &ProjectSettings::get_global(cx).node;
-        log::info!("Got new node settings: {:?}", settings);
-        let options = NodeBinaryOptions {
-            allow_path_lookup: !settings.ignore_system_version,
-            // TODO: Implement this setting
-            allow_binary_download: false,
-            use_paths: settings.path.as_ref().map(|node_path| {
-                let node_path = PathBuf::from(shellexpand::tilde(node_path).as_ref());
-                let npm_path = settings
-                    .npm_path
-                    .as_ref()
-                    .map(|path| PathBuf::from(shellexpand::tilde(&path).as_ref()));
-                (
-                    node_path.clone(),
-                    npm_path.unwrap_or_else(|| {
-                        let base_path = PathBuf::new();
-                        node_path.parent().unwrap_or(&base_path).join("npm")
-                    }),
-                )
-            }),
-        };
-        tx.send(Some(options)).log_err();
-    })
-    .detach();
-
-    rx
 }
 
 pub fn handle_settings_file_changes(

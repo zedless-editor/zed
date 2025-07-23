@@ -383,8 +383,7 @@ mod tests {
 
         let project_index = cx.update(|cx| {
             let language_registry = project.read(cx).languages().clone();
-            let node_runtime = project.read(cx).node_runtime().unwrap().clone();
-            languages::init(language_registry, node_runtime, cx);
+            languages::init(language_registry, cx);
             semantic_index.create_project_index(project.clone(), cx)
         });
 

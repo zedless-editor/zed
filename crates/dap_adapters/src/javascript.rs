@@ -13,7 +13,7 @@ pub(crate) struct JsDebugAdapter {
 
 impl JsDebugAdapter {
     const ADAPTER_NAME: &'static str = "JavaScript";
-    const ADAPTER_PATH: &'static str = "js-debug/src/dapDebugServer.js";
+    const ADAPTER_EXECUTABLE: &'static str = "js-debug";
 
     async fn get_installed_binary(
         &self,
@@ -25,15 +25,7 @@ impl JsDebugAdapter {
         let adapter_path = if let Some(user_installed_path) = user_installed_path {
             user_installed_path
         } else {
-            let adapter_path = paths::debug_adapters_dir().join(self.name().as_ref());
-
-            let file_name_prefix = format!("{}_", self.name());
-
-            util::fs::find_file_name_in_dir(adapter_path.as_path(), |file_name| {
-                file_name.starts_with(&file_name_prefix)
-            })
-            .await
-            .context("Couldn't find JavaScript dap directory")?
+            delegate.which(Self::ADAPTER_EXECUTABLE.as_ref()).await.context("Couldn't find JavaScript DAP server executable")?
         };
 
         let tcp_connection = task_definition.tcp_connection.clone().unwrap_or_default();
@@ -70,18 +62,9 @@ impl JsDebugAdapter {
 
         Ok(DebugAdapterBinary {
             command: Some(
-                delegate
-                    .node_runtime()
-                    .binary_path()
-                    .await?
-                    .to_string_lossy()
-                    .into_owned(),
+                adapter_path.to_string_lossy().to_string()
             ),
             arguments: vec![
-                adapter_path
-                    .join(Self::ADAPTER_PATH)
-                    .to_string_lossy()
-                    .to_string(),
                 port.to_string(),
                 host.to_string(),
             ],

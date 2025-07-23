@@ -47,7 +47,6 @@ use serde_json::Value;
 use settings::WorktreeId;
 use smol::future::FutureExt as _;
 use std::{
-    any::Any,
     ffi::OsStr,
     fmt::Debug,
     hash::Hash,
@@ -323,11 +322,6 @@ pub trait LspAdapterDelegate: Send + Sync {
     fn update_status(&self, language: LanguageServerName, status: BinaryStatus);
     fn registered_lsp_adapters(&self) -> Vec<Arc<dyn LspAdapter>>;
     async fn language_server_download_dir(&self, name: &LanguageServerName) -> Option<Arc<Path>>;
-
-    async fn npm_package_installed_version(
-        &self,
-        package_name: &str,
-    ) -> Result<Option<(PathBuf, String)>>;
     async fn which(&self, command: &OsStr) -> Option<PathBuf>;
     async fn shell_env(&self) -> HashMap<String, String>;
     async fn read_text_file(&self, path: PathBuf) -> Result<String>;
@@ -390,21 +384,6 @@ pub trait LspAdapter: 'static + Send + Sync {
     ) -> Option<Task<Result<()>>> {
         None
     }
-
-    async fn check_if_version_installed(
-        &self,
-        _version: &(dyn 'static + Send + Any),
-        _container_dir: &PathBuf,
-        _delegate: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        None
-    }
-
-    async fn cached_server_binary(
-        &self,
-        container_dir: PathBuf,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary>;
 
     fn process_diagnostics(
         &self,
@@ -2012,14 +1991,6 @@ impl LspAdapter for FakeLspAdapter {
         _: &'a mut AsyncApp,
     ) -> Pin<Box<dyn 'a + Future<Output = Result<LanguageServerBinary>>>> {
         async move { Ok(self.language_server_binary.clone()) }.boxed_local()
-    }
-
-    async fn cached_server_binary(
-        &self,
-        _: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        unreachable!();
     }
 
     fn disk_based_diagnostic_sources(&self) -> Vec<String> {

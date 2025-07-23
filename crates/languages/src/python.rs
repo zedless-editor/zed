@@ -1,4 +1,3 @@
-use anyhow::{Context as _};
 use anyhow::{Result};
 use async_trait::async_trait;
 use collections::HashMap;
@@ -13,22 +12,18 @@ use language::{ContextProvider, LspAdapter, LspAdapterDelegate};
 use language::{LanguageName, ManifestName, ManifestProvider, ManifestQuery};
 use lsp::LanguageServerBinary;
 use lsp::LanguageServerName;
-use node_runtime::NodeRuntime;
 use pet_core::Configuration;
 use pet_core::os_environment::Environment;
 use pet_core::python_environment::PythonEnvironmentKind;
 use project::Fs;
 use project::lsp_store::language_server_settings;
 use serde_json::{Value, json};
-use smol::lock::OnceCell;
 use std::cmp::Ordering;
 
 use parking_lot::Mutex;
 use std::str::FromStr;
 use std::{
-    any::Any,
     borrow::Cow,
-    ffi::OsString,
     fmt::Write,
     fs,
     io::{self, BufRead},
@@ -36,7 +31,6 @@ use std::{
     sync::Arc,
 };
 use task::{TaskTemplate, TaskTemplates, VariableName};
-use util::ResultExt;
 
 pub(crate) struct PyprojectTomlManifestProvider;
 
@@ -64,9 +58,6 @@ impl ManifestProvider for PyprojectTomlManifestProvider {
     }
 }
 
-const SERVER_PATH: &str = "node_modules/pyright/langserver.index.js";
-const NODE_MODULE_RELATIVE_SERVER_PATH: &str = "pyright/langserver.index.js";
-
 enum TestRunner {
     UNITTEST,
     PYTEST,
@@ -84,19 +75,15 @@ impl FromStr for TestRunner {
     }
 }
 
-fn server_binary_arguments(server_path: &Path) -> Vec<OsString> {
-    vec![server_path.into(), "--stdio".into()]
-}
 
 pub struct PythonLspAdapter {
-    node: NodeRuntime,
 }
 
 impl PythonLspAdapter {
     const SERVER_NAME: LanguageServerName = LanguageServerName::new_static("pyright");
 
-    pub fn new(node: NodeRuntime) -> Self {
-        PythonLspAdapter { node }
+    pub fn new() -> Self {
+        PythonLspAdapter { }
     }
 }
 
@@ -138,62 +125,8 @@ impl LspAdapter for PythonLspAdapter {
                 arguments: vec!["--stdio".into()],
             })
         } else {
-            let node = delegate.which("node".as_ref()).await?;
-            let (node_modules_path, _) = delegate
-                .npm_package_installed_version(Self::SERVER_NAME.as_ref())
-                .await
-                .log_err()??;
-
-            let path = node_modules_path.join(NODE_MODULE_RELATIVE_SERVER_PATH);
-
-            let env = delegate.shell_env().await;
-            Some(LanguageServerBinary {
-                path: node,
-                env: Some(env),
-                arguments: server_binary_arguments(&path),
-            })
-        }
-    }
-
-    async fn check_if_version_installed(
-        &self,
-        version: &(dyn 'static + Send + Any),
-        container_dir: &PathBuf,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        let version = version.downcast_ref::<String>().unwrap();
-        let server_path = container_dir.join(SERVER_PATH);
-
-        let should_install_language_server = self
-            .node
-            .should_install_npm_package(
-                Self::SERVER_NAME.as_ref(),
-                &server_path,
-                &container_dir,
-                &version,
-            )
-            .await;
-
-        if should_install_language_server {
             None
-        } else {
-            let env = delegate.shell_env().await;
-            Some(LanguageServerBinary {
-                path: self.node.binary_path().await.ok()?,
-                env: Some(env),
-                arguments: server_binary_arguments(&server_path),
-            })
         }
-    }
-
-    async fn cached_server_binary(
-        &self,
-        container_dir: PathBuf,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        let mut binary = get_cached_server_binary(container_dir, &self.node).await?;
-        binary.env = Some(delegate.shell_env().await);
-        Some(binary)
     }
 
     async fn process_completions(&self, items: &mut [lsp::CompletionItem]) {
@@ -359,23 +292,6 @@ impl LspAdapter for PythonLspAdapter {
     }
     fn manifest_name(&self) -> Option<ManifestName> {
         Some(SharedString::new_static("pyproject.toml").into())
-    }
-}
-
-async fn get_cached_server_binary(
-    container_dir: PathBuf,
-    node: &NodeRuntime,
-) -> Option<LanguageServerBinary> {
-    let server_path = container_dir.join(SERVER_PATH);
-    if server_path.exists() {
-        Some(LanguageServerBinary {
-            path: node.binary_path().await.log_err()?,
-            env: None,
-            arguments: server_binary_arguments(&server_path),
-        })
-    } else {
-        log::error!("missing executable in directory {:?}", server_path);
-        None
     }
 }
 
@@ -934,65 +850,14 @@ impl pet_core::os_environment::Environment for EnvironmentApi<'_> {
 }
 
 pub(crate) struct PyLspAdapter {
-    python_venv_base: OnceCell<Result<Arc<Path>, String>>,
 }
 impl PyLspAdapter {
     const SERVER_NAME: LanguageServerName = LanguageServerName::new_static("pylsp");
     pub(crate) fn new() -> Self {
         Self {
-            python_venv_base: OnceCell::new(),
         }
-    }
-    async fn ensure_venv(delegate: &dyn LspAdapterDelegate) -> Result<Arc<Path>> {
-        let python_path = Self::find_base_python(delegate)
-            .await
-            .context("Could not find Python installation for PyLSP")?;
-        let work_dir = delegate
-            .language_server_download_dir(&Self::SERVER_NAME)
-            .await
-            .context("Could not get working directory for PyLSP")?;
-        let mut path = PathBuf::from(work_dir.as_ref());
-        path.push("pylsp-venv");
-        if !path.exists() {
-            util::command::new_smol_command(python_path)
-                .arg("-m")
-                .arg("venv")
-                .arg("pylsp-venv")
-                .current_dir(work_dir)
-                .spawn()?
-                .output()
-                .await?;
-        }
-
-        Ok(path.into())
-    }
-    // Find "baseline", user python version from which we'll create our own venv.
-    async fn find_base_python(delegate: &dyn LspAdapterDelegate) -> Option<PathBuf> {
-        for path in ["python3", "python"] {
-            if let Some(path) = delegate.which(path.as_ref()).await {
-                return Some(path);
-            }
-        }
-        None
-    }
-
-    async fn base_venv(&self, delegate: &dyn LspAdapterDelegate) -> Result<Arc<Path>, String> {
-        self.python_venv_base
-            .get_or_init(move || async move {
-                Self::ensure_venv(delegate)
-                    .await
-                    .map_err(|e| format!("{e}"))
-            })
-            .await
-            .clone()
     }
 }
-
-const BINARY_DIR: &str = if cfg!(target_os = "windows") {
-    "Scripts"
-} else {
-    "bin"
-};
 
 #[async_trait(?Send)]
 impl LspAdapter for PyLspAdapter {
@@ -1029,20 +894,6 @@ impl LspAdapter for PyLspAdapter {
                 env: None,
             })
         }
-    }
-
-    async fn cached_server_binary(
-        &self,
-        _: PathBuf,
-        delegate: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        let venv = self.base_venv(delegate).await.ok()?;
-        let pylsp = venv.join(BINARY_DIR).join("pylsp");
-        Some(LanguageServerBinary {
-            path: pylsp,
-            env: None,
-            arguments: vec![],
-        })
     }
 
     async fn process_completions(&self, _items: &mut [lsp::CompletionItem]) {}

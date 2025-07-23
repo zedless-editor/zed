@@ -2,7 +2,7 @@ use assets::Assets;
 use gpui::{Application, Entity, KeyBinding, StyleRefinement, WindowOptions, prelude::*, rgb};
 use language::{LanguageRegistry, language_settings::AllLanguageSettings};
 use markdown::{Markdown, MarkdownElement, MarkdownStyle};
-use node_runtime::NodeRuntime;
+
 use settings::SettingsStore;
 use std::sync::Arc;
 use theme::LoadThemes;
@@ -44,13 +44,12 @@ pub fn main() {
         });
         cx.bind_keys([KeyBinding::new("cmd-c", markdown::Copy, None)]);
 
-        let node_runtime = NodeRuntime::unavailable();
         theme::init(LoadThemes::JustBase, cx);
 
         let language_registry = LanguageRegistry::new(cx.background_executor().clone());
         language_registry.set_theme(cx.theme().clone());
         let language_registry = Arc::new(language_registry);
-        languages::init(language_registry.clone(), node_runtime, cx);
+        languages::init(language_registry.clone(), cx);
         Assets.load_fonts(cx).unwrap();
 
         cx.activate(true);

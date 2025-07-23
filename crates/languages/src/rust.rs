@@ -1,7 +1,7 @@
-use anyhow::{Context as _, Result};
+use anyhow::{Result};
 use async_trait::async_trait;
 use collections::HashMap;
-use futures::{StreamExt};
+
 use gpui::{App, AppContext, AsyncApp, SharedString, Task};
 pub use language::*;
 use lsp::{InitializeParams, LanguageServerBinary};
@@ -11,7 +11,6 @@ use project::project_settings::ProjectSettings;
 use regex::Regex;
 use serde_json::json;
 use settings::Settings as _;
-use smol::fs::{self};
 use std::fmt::Display;
 use std::{
     borrow::Cow,
@@ -120,14 +119,6 @@ impl LspAdapter for RustLspAdapter {
             env: Some(env),
             arguments: vec![],
         })
-    }
-
-    async fn cached_server_binary(
-        &self,
-        container_dir: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        get_cached_server_binary(container_dir).await
     }
 
     fn disk_based_diagnostic_sources(&self) -> Vec<String> {
@@ -843,24 +834,6 @@ fn package_name_from_pkgid(pkgid: &str) -> Option<&str> {
         }
     };
     Some(package_name)
-}
-
-async fn get_cached_server_binary(container_dir: PathBuf) -> Option<LanguageServerBinary> {
-    maybe!(async {
-        let mut last = None;
-        let mut entries = fs::read_dir(&container_dir).await?;
-        while let Some(entry) = entries.next().await {
-            last = Some(entry?.path());
-        }
-
-        anyhow::Ok(LanguageServerBinary {
-            path: last.context("no cached binary")?,
-            env: None,
-            arguments: Default::default(),
-        })
-    })
-    .await
-    .log_err()
 }
 
 fn test_fragment(variables: &TaskVariables, path: &Path, stem: &str) -> String {

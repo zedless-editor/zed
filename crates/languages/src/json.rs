@@ -1,31 +1,24 @@
-use anyhow::{Context as _, Result};
+use anyhow::{Result};
 use async_trait::async_trait;
 use collections::HashMap;
 use dap::DapRegistry;
-use futures::StreamExt;
+
 use gpui::{App, AsyncApp};
 use language::{LanguageRegistry, LanguageToolchainStore, LspAdapter, LspAdapterDelegate};
 use lsp::{LanguageServerBinary, LanguageServerName};
-use node_runtime::NodeRuntime;
 use project::{ContextProviderWithTasks, Fs, lsp_store::language_server_settings};
 use serde_json::{Value, json};
 use settings::{KeymapFile, SettingsJsonSchemaParams, SettingsStore};
 use smol::{
-    fs::{self},
     lock::RwLock,
 };
 use std::{
-    any::Any,
-    ffi::OsString,
-    path::{Path, PathBuf},
+    path::{Path},
     str::FromStr,
     sync::Arc,
 };
 use task::{AdapterSchemas, TaskTemplate, TaskTemplates, VariableName};
-use util::{ResultExt, maybe, merge_json_value_into};
-
-const SERVER_PATH: &str =
-    "node_modules/vscode-langservers-extracted/bin/vscode-json-language-server";
+use util::{merge_json_value_into};
 
 // Origin: https://github.com/SchemaStore/schemastore
 const TSCONFIG_SCHEMA: &str = include_str!("json/schemas/tsconfig.json");
@@ -50,22 +43,14 @@ pub(super) fn json_task_context() -> ContextProviderWithTasks {
     ]))
 }
 
-fn server_binary_arguments(server_path: &Path) -> Vec<OsString> {
-    vec![server_path.into(), "--stdio".into()]
-}
-
 pub struct JsonLspAdapter {
-    node: NodeRuntime,
     languages: Arc<LanguageRegistry>,
     workspace_config: RwLock<Option<Value>>,
 }
 
 impl JsonLspAdapter {
-    const PACKAGE_NAME: &str = "vscode-langservers-extracted";
-
-    pub fn new(node: NodeRuntime, languages: Arc<LanguageRegistry>) -> Self {
+    pub fn new(languages: Arc<LanguageRegistry>) -> Self {
         Self {
-            node,
             languages,
             workspace_config: Default::default(),
         }
@@ -223,39 +208,6 @@ impl LspAdapter for JsonLspAdapter {
         })
     }
 
-    async fn check_if_version_installed(
-        &self,
-        version: &(dyn 'static + Send + Any),
-        container_dir: &PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        let version = version.downcast_ref::<String>().unwrap();
-        let server_path = container_dir.join(SERVER_PATH);
-
-        let should_install_language_server = self
-            .node
-            .should_install_npm_package(Self::PACKAGE_NAME, &server_path, &container_dir, &version)
-            .await;
-
-        if should_install_language_server {
-            None
-        } else {
-            Some(LanguageServerBinary {
-                path: self.node.binary_path().await.ok()?,
-                env: None,
-                arguments: server_binary_arguments(&server_path),
-            })
-        }
-    }
-
-    async fn cached_server_binary(
-        &self,
-        container_dir: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        get_cached_server_binary(container_dir, &self.node).await
-    }
-
     async fn initialization_options(
         self: Arc<Self>,
         _: &dyn Fs,
@@ -305,36 +257,6 @@ impl LspAdapter for JsonLspAdapter {
     }
 }
 
-async fn get_cached_server_binary(
-    container_dir: PathBuf,
-    node: &NodeRuntime,
-) -> Option<LanguageServerBinary> {
-    maybe!(async {
-        let mut last_version_dir = None;
-        let mut entries = fs::read_dir(&container_dir).await?;
-        while let Some(entry) = entries.next().await {
-            let entry = entry?;
-            if entry.file_type().await?.is_dir() {
-                last_version_dir = Some(entry.path());
-            }
-        }
-
-        let last_version_dir = last_version_dir.context("no cached binary")?;
-        let server_path = last_version_dir.join(SERVER_PATH);
-        anyhow::ensure!(
-            server_path.exists(),
-            "missing executable in directory {last_version_dir:?}"
-        );
-        Ok(LanguageServerBinary {
-            path: node.binary_path().await?,
-            env: None,
-            arguments: server_binary_arguments(&server_path),
-        })
-    })
-    .await
-    .log_err()
-}
-
 #[inline]
 fn schema_file_match(path: &Path) -> String {
     path.strip_prefix(path.parent().unwrap().parent().unwrap())
@@ -370,30 +292,4 @@ impl LspAdapter for NodeVersionAdapter {
             arguments: Default::default(),
         })
     }
-
-    async fn cached_server_binary(
-        &self,
-        container_dir: PathBuf,
-        _delegate: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        get_cached_version_server_binary(container_dir).await
-    }
-}
-
-async fn get_cached_version_server_binary(container_dir: PathBuf) -> Option<LanguageServerBinary> {
-    maybe!(async {
-        let mut last = None;
-        let mut entries = fs::read_dir(&container_dir).await?;
-        while let Some(entry) = entries.next().await {
-            last = Some(entry?.path());
-        }
-
-        anyhow::Ok(LanguageServerBinary {
-            path: last.context("no cached binary")?,
-            env: None,
-            arguments: Default::default(),
-        })
-    })
-    .await
-    .log_err()
 }

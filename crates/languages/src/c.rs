@@ -1,14 +1,12 @@
-use anyhow::{Context as _, Result};
+use anyhow::{Result};
 use async_trait::async_trait;
-use futures::StreamExt;
 use gpui::{App, AsyncApp};
 pub use language::*;
 use lsp::{InitializeParams, LanguageServerBinary, LanguageServerName};
 use project::lsp_store::clangd_ext;
 use serde_json::json;
-use smol::fs;
-use std::{path::PathBuf, sync::Arc};
-use util::{ResultExt, maybe, merge_json_value_into};
+use std::{sync::Arc};
+use util::{merge_json_value_into};
 
 pub struct CLspAdapter;
 
@@ -34,14 +32,6 @@ impl super::LspAdapter for CLspAdapter {
             arguments: Vec::new(),
             env: None,
         })
-    }
-
-    async fn cached_server_binary(
-        &self,
-        container_dir: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        get_cached_server_binary(container_dir).await
     }
 
     async fn label_for_completion(
@@ -229,32 +219,6 @@ impl super::LspAdapter for CLspAdapter {
     fn underline_diagnostic(&self, diagnostic: &lsp::Diagnostic) -> bool {
         !clangd_ext::is_lsp_inactive_region(diagnostic)
     }
-}
-
-async fn get_cached_server_binary(container_dir: PathBuf) -> Option<LanguageServerBinary> {
-    maybe!(async {
-        let mut last_clangd_dir = None;
-        let mut entries = fs::read_dir(&container_dir).await?;
-        while let Some(entry) = entries.next().await {
-            let entry = entry?;
-            if entry.file_type().await?.is_dir() {
-                last_clangd_dir = Some(entry.path());
-            }
-        }
-        let clangd_dir = last_clangd_dir.context("no cached binary")?;
-        let clangd_bin = clangd_dir.join("bin/clangd");
-        anyhow::ensure!(
-            clangd_bin.exists(),
-            "missing clangd binary in directory {clangd_dir:?}"
-        );
-        Ok(LanguageServerBinary {
-            path: clangd_bin,
-            env: None,
-            arguments: Vec::new(),
-        })
-    })
-    .await
-    .log_err()
 }
 
 #[cfg(test)]

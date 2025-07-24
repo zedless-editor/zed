@@ -161,14 +161,6 @@ impl LspAdapter for ExtensionLspAdapter {
         .boxed_local()
     }
 
-    async fn cached_server_binary(
-        &self,
-        _: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        unreachable!("get_language_server_command is overridden")
-    }
-
     fn code_action_kinds(&self) -> Option<Vec<CodeActionKind>> {
         let code_action_kinds = self
             .extension

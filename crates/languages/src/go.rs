@@ -1,19 +1,17 @@
-use anyhow::{Context as _, Result};
+use anyhow::{Result};
 use async_trait::async_trait;
 use collections::HashMap;
-use futures::StreamExt;
+
 use gpui::{App, AsyncApp, Task};
 pub use language::*;
 use lsp::{LanguageServerBinary, LanguageServerName};
 use project::Fs;
 use regex::Regex;
 use serde_json::json;
-use smol::fs;
 use std::{
     borrow::Cow,
     ffi::OsString,
     ops::Range,
-    path::PathBuf,
     str,
     sync::{
         Arc, LazyLock,
@@ -21,7 +19,6 @@ use std::{
     },
 };
 use task::{TaskTemplate, TaskTemplates, TaskVariables, VariableName};
-use util::{ResultExt, maybe};
 
 fn server_binary_arguments() -> Vec<OsString> {
     vec!["-mode=stdio".into()]
@@ -83,14 +80,6 @@ impl super::LspAdapter for GoLspAdapter {
             }
             Ok(())
         }))
-    }
-
-    async fn cached_server_binary(
-        &self,
-        container_dir: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        get_cached_server_binary(container_dir).await
     }
 
     async fn initialization_options(
@@ -276,33 +265,6 @@ impl super::LspAdapter for GoLspAdapter {
             LazyLock::new(|| Regex::new(r"(?m)\n\s*").expect("Failed to create REGEX"));
         Some(REGEX.replace_all(message, "\n\n").to_string())
     }
-}
-
-async fn get_cached_server_binary(container_dir: PathBuf) -> Option<LanguageServerBinary> {
-    maybe!(async {
-        let mut last_binary_path = None;
-        let mut entries = fs::read_dir(&container_dir).await?;
-        while let Some(entry) = entries.next().await {
-            let entry = entry?;
-            if entry.file_type().await?.is_file()
-                && entry
-                    .file_name()
-                    .to_str()
-                    .map_or(false, |name| name.starts_with("gopls_"))
-            {
-                last_binary_path = Some(entry.path());
-            }
-        }
-
-        let path = last_binary_path.context("no cached binary")?;
-        anyhow::Ok(LanguageServerBinary {
-            path,
-            arguments: server_binary_arguments(),
-            env: None,
-        })
-    })
-    .await
-    .log_err()
 }
 
 fn adjust_runs(

@@ -59,7 +59,6 @@ use lsp::{
     TextEdit, WillRenameFiles, WorkDoneProgressCancelParams, WorkspaceFolder,
     notification::DidRenameFiles,
 };
-use node_runtime::read_package_installed_version;
 use parking_lot::Mutex;
 use postage::{mpsc, sink::Sink, stream::Stream, watch};
 use rand::prelude::*;
@@ -10559,14 +10558,6 @@ impl LspAdapter for SshLspAdapter {
     ) -> Option<LanguageServerBinary> {
         Some(self.binary.clone())
     }
-
-    async fn cached_server_binary(
-        &self,
-        _: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        None
-    }
 }
 
 pub fn language_server_settings<'a>(
@@ -10667,44 +10658,6 @@ impl LspAdapterDelegate for LocalLspAdapterDelegate {
     async fn shell_env(&self) -> HashMap<String, String> {
         let task = self.load_shell_env_task.clone();
         task.await.unwrap_or_default()
-    }
-
-    async fn npm_package_installed_version(
-        &self,
-        package_name: &str,
-    ) -> Result<Option<(PathBuf, String)>> {
-        let local_package_directory = self.worktree_root_path();
-        let node_modules_directory = local_package_directory.join("node_modules");
-
-        if let Some(version) =
-            read_package_installed_version(node_modules_directory.clone(), package_name).await?
-        {
-            return Ok(Some((node_modules_directory, version)));
-        }
-        let Some(npm) = self.which("npm".as_ref()).await else {
-            log::warn!(
-                "Failed to find npm executable for {:?}",
-                local_package_directory
-            );
-            return Ok(None);
-        };
-
-        let env = self.shell_env().await;
-        let output = util::command::new_smol_command(&npm)
-            .args(["root", "-g"])
-            .envs(env)
-            .current_dir(local_package_directory)
-            .output()
-            .await?;
-        let global_node_modules =
-            PathBuf::from(String::from_utf8_lossy(&output.stdout).to_string());
-
-        if let Some(version) =
-            read_package_installed_version(global_node_modules.clone(), package_name).await?
-        {
-            return Ok(Some((global_node_modules, version)));
-        }
-        return Ok(None);
     }
 
     #[cfg(not(target_os = "windows"))]

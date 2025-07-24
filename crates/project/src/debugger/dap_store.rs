@@ -33,7 +33,7 @@ use futures::{
 use gpui::{App, AppContext, AsyncApp, Context, Entity, EventEmitter, SharedString, Task};
 use http_client::HttpClient;
 use language::{Buffer, LanguageToolchainStore, language_settings::InlayHintKind};
-use node_runtime::NodeRuntime;
+
 
 use remote::SshRemoteClient;
 use rpc::{
@@ -74,7 +74,6 @@ enum DapStoreMode {
 
 pub struct LocalDapStore {
     fs: Arc<dyn Fs>,
-    node_runtime: NodeRuntime,
     http_client: Arc<dyn HttpClient>,
     environment: Entity<ProjectEnvironment>,
     toolchain_store: Arc<dyn LanguageToolchainStore>,
@@ -115,7 +114,6 @@ impl DapStore {
     #[expect(clippy::too_many_arguments)]
     pub fn new_local(
         http_client: Arc<dyn HttpClient>,
-        node_runtime: NodeRuntime,
         fs: Arc<dyn Fs>,
         environment: Entity<ProjectEnvironment>,
         toolchain_store: Arc<dyn LanguageToolchainStore>,
@@ -127,7 +125,6 @@ impl DapStore {
             fs,
             environment,
             http_client,
-            node_runtime,
             toolchain_store,
         });
 
@@ -503,7 +500,6 @@ impl DapStore {
             local_store.fs.clone(),
             worktree.read(cx).snapshot(),
             console,
-            local_store.node_runtime.clone(),
             local_store.http_client.clone(),
             local_store.toolchain_store.clone(),
             local_store.environment.update(cx, |env, cx| {
@@ -833,7 +829,6 @@ pub struct DapAdapterDelegate {
     fs: Arc<dyn Fs>,
     console: mpsc::UnboundedSender<String>,
     worktree: worktree::Snapshot,
-    node_runtime: NodeRuntime,
     http_client: Arc<dyn HttpClient>,
     toolchain_store: Arc<dyn LanguageToolchainStore>,
     load_shell_env_task: Shared<Task<Option<HashMap<String, String>>>>,
@@ -844,7 +839,6 @@ impl DapAdapterDelegate {
         fs: Arc<dyn Fs>,
         worktree: worktree::Snapshot,
         status: mpsc::UnboundedSender<String>,
-        node_runtime: NodeRuntime,
         http_client: Arc<dyn HttpClient>,
         toolchain_store: Arc<dyn LanguageToolchainStore>,
         load_shell_env_task: Shared<Task<Option<HashMap<String, String>>>>,
@@ -854,7 +848,6 @@ impl DapAdapterDelegate {
             console: status,
             worktree,
             http_client,
-            node_runtime,
             toolchain_store,
             load_shell_env_task,
         }
@@ -872,10 +865,6 @@ impl dap::adapters::DapDelegate for DapAdapterDelegate {
     }
     fn http_client(&self) -> Arc<dyn HttpClient> {
         self.http_client.clone()
-    }
-
-    fn node_runtime(&self) -> NodeRuntime {
-        self.node_runtime.clone()
     }
 
     fn fs(&self) -> Arc<dyn Fs> {

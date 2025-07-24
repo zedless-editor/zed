@@ -12,7 +12,6 @@ use gpui::{AppContext as _, SemanticVersion, SharedString, TestAppContext};
 use http_client::{FakeHttpClient, Response};
 use language::{BinaryStatus, LanguageMatcher, LanguageRegistry};
 use lsp::LanguageServerName;
-use node_runtime::NodeRuntime;
 use parking_lot::Mutex;
 use project::{DEFAULT_COMPLETION_CONTEXT, Project};
 use release_channel::AppVersion;
@@ -270,7 +269,6 @@ async fn test_extension_store(cx: &mut TestAppContext) {
     theme_extension::init(proxy.clone(), theme_registry.clone(), cx.executor());
     let language_registry = Arc::new(LanguageRegistry::test(cx.executor()));
     language_extension::init(proxy.clone(), language_registry.clone());
-    let node_runtime = NodeRuntime::unavailable();
 
     let store = cx.new(|cx| {
         ExtensionStore::new(
@@ -280,7 +278,6 @@ async fn test_extension_store(cx: &mut TestAppContext) {
             fs.clone(),
             http_client.clone(),
             http_client.clone(),
-            node_runtime.clone(),
             cx,
         )
     });
@@ -424,7 +421,6 @@ async fn test_extension_store(cx: &mut TestAppContext) {
             fs.clone(),
             http_client.clone(),
             http_client.clone(),
-            node_runtime.clone(),
             cx,
         )
     });
@@ -548,7 +544,6 @@ async fn test_extension_store_with_test_extension(cx: &mut TestAppContext) {
     theme_extension::init(proxy.clone(), theme_registry.clone(), cx.executor());
     let language_registry = project.read_with(cx, |project, _cx| project.languages().clone());
     language_extension::init(proxy.clone(), language_registry.clone());
-    let node_runtime = NodeRuntime::unavailable();
 
     let mut status_updates = language_registry.language_server_binary_statuses();
 
@@ -645,7 +640,6 @@ async fn test_extension_store_with_test_extension(cx: &mut TestAppContext) {
             fs.clone(),
             extension_client.clone(),
             builder_client,
-            node_runtime,
             cx,
         )
     });

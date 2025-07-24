@@ -54,7 +54,6 @@ indexmap.workspace = true
 language.workspace = true
 log.workspace = true
 lsp.workspace = true
-node_runtime.workspace = true
 parking_lot.workspace = true
 pathdiff.workspace = true
 paths.workspace = true

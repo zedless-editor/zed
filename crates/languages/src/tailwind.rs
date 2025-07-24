@@ -1,43 +1,24 @@
-use anyhow::{Context as _, Result};
+use anyhow::{Result};
 use async_trait::async_trait;
 use collections::HashMap;
-use futures::StreamExt;
 use gpui::AsyncApp;
 use language::{LanguageToolchainStore, LspAdapter, LspAdapterDelegate};
 use lsp::{LanguageServerBinary, LanguageServerName};
-use node_runtime::NodeRuntime;
 use project::{Fs, lsp_store::language_server_settings};
 use serde_json::{Value, json};
-use smol::fs;
 use std::{
-    any::Any,
-    ffi::OsString,
-    path::{Path, PathBuf},
     sync::Arc,
 };
-use util::{ResultExt, maybe};
-
-#[cfg(target_os = "windows")]
-const SERVER_PATH: &str =
-    "node_modules/@tailwindcss/language-server/bin/tailwindcss-language-server";
-#[cfg(not(target_os = "windows"))]
-const SERVER_PATH: &str = "node_modules/.bin/tailwindcss-language-server";
-
-fn server_binary_arguments(server_path: &Path) -> Vec<OsString> {
-    vec![server_path.into(), "--stdio".into()]
-}
 
 pub struct TailwindLspAdapter {
-    node: NodeRuntime,
 }
 
 impl TailwindLspAdapter {
     const SERVER_NAME: LanguageServerName =
         LanguageServerName::new_static("tailwindcss-language-server");
-    const PACKAGE_NAME: &str = "@tailwindcss/language-server";
 
-    pub fn new(node: NodeRuntime) -> Self {
-        TailwindLspAdapter { node }
+    pub fn new() -> Self {
+        TailwindLspAdapter { }
     }
 }
 
@@ -61,39 +42,6 @@ impl LspAdapter for TailwindLspAdapter {
             env: Some(env),
             arguments: vec!["--stdio".into()],
         })
-    }
-
-    async fn check_if_version_installed(
-        &self,
-        version: &(dyn 'static + Send + Any),
-        container_dir: &PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        let version = version.downcast_ref::<String>().unwrap();
-        let server_path = container_dir.join(SERVER_PATH);
-
-        let should_install_language_server = self
-            .node
-            .should_install_npm_package(Self::PACKAGE_NAME, &server_path, &container_dir, &version)
-            .await;
-
-        if should_install_language_server {
-            None
-        } else {
-            Some(LanguageServerBinary {
-                path: self.node.binary_path().await.ok()?,
-                env: None,
-                arguments: server_binary_arguments(&server_path),
-            })
-        }
-    }
-
-    async fn cached_server_binary(
-        &self,
-        container_dir: PathBuf,
-        _: &dyn LspAdapterDelegate,
-    ) -> Option<LanguageServerBinary> {
-        get_cached_server_binary(container_dir, &self.node).await
     }
 
     async fn initialization_options(
@@ -149,33 +97,4 @@ impl LspAdapter for TailwindLspAdapter {
             ("Vue.js".to_string(), "vue".to_string()),
         ])
     }
-}
-
-async fn get_cached_server_binary(
-    container_dir: PathBuf,
-    node: &NodeRuntime,
-) -> Option<LanguageServerBinary> {
-    maybe!(async {
-        let mut last_version_dir = None;
-        let mut entries = fs::read_dir(&container_dir).await?;
-        while let Some(entry) = entries.next().await {
-            let entry = entry?;
-            if entry.file_type().await?.is_dir() {
-                last_version_dir = Some(entry.path());
-            }
-        }
-        let last_version_dir = last_version_dir.context("no cached binary")?;
-        let server_path = last_version_dir.join(SERVER_PATH);
-        anyhow::ensure!(
-            server_path.exists(),
-            "missing executable in directory {last_version_dir:?}"
-        );
-        Ok(LanguageServerBinary {
-            path: node.binary_path().await?,
-            env: None,
-            arguments: server_binary_arguments(&server_path),
-        })
-    })
-    .await
-    .log_err()
 }

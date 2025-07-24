@@ -10,7 +10,6 @@ use extension_host::wasm_host::WasmHost;
 use fs::RealFs;
 use gpui::{SemanticVersion, TestAppContext, TestDispatcher};
 use http_client::{FakeHttpClient, Response};
-use node_runtime::NodeRuntime;
 use rand::{SeedableRng, rngs::StdRng};
 use reqwest_client::ReqwestClient;
 use serde_json::json;
@@ -102,7 +101,6 @@ fn wasm_host(cx: &TestAppContext, extensions_dir: &TempTree) -> Arc<WasmHost> {
         WasmHost::new(
             fs,
             http_client,
-            NodeRuntime::unavailable(),
             Arc::new(ExtensionHostProxy::new()),
             work_dir,
             cx,

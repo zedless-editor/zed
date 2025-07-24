@@ -23,7 +23,6 @@ use http_client::HttpClient;
 use language::LanguageName;
 use lsp::LanguageServerName;
 use moka::sync::Cache;
-use node_runtime::NodeRuntime;
 use release_channel::ReleaseChannel;
 use semantic_version::SemanticVersion;
 use std::borrow::Cow;
@@ -43,7 +42,6 @@ pub struct WasmHost {
     engine: Engine,
     release_channel: ReleaseChannel,
     http_client: Arc<dyn HttpClient>,
-    node_runtime: NodeRuntime,
     pub(crate) proxy: Arc<ExtensionHostProxy>,
     fs: Arc<dyn Fs>,
     pub work_dir: PathBuf,
@@ -451,7 +449,6 @@ impl WasmHost {
     pub fn new(
         fs: Arc<dyn Fs>,
         http_client: Arc<dyn HttpClient>,
-        node_runtime: NodeRuntime,
         proxy: Arc<ExtensionHostProxy>,
         work_dir: PathBuf,
         cx: &mut App,
@@ -467,7 +464,6 @@ impl WasmHost {
             fs,
             work_dir,
             http_client,
-            node_runtime,
             proxy,
             release_channel: ReleaseChannel::global(cx),
             _main_thread_message_task: task,

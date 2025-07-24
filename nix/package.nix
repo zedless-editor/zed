@@ -32,8 +32,6 @@
   git,
   apple-sdk_15,
   darwinMinVersionHook,
-  makeWrapper,
-  nodejs,
   libGL,
   libX11,
   libXext,
@@ -83,7 +81,7 @@ in
     '';
 
     useFetchCargoVendor = true;
-    cargoHash = "sha256-lR4MHEJui66yd39oWuCtx22UMvui7VKzDYCuggCJ1WU=";
+    cargoHash = "sha256-9dmmtL6Es4woeuvtw6mjWUZy77qqSVdYe6B0HpzB7nU=";
 
     nativeBuildInputs =
       [
@@ -96,7 +94,6 @@ in
         rustPlatform.bindgenHook
         cargo-about
       ]
-      ++ lib.optionals stdenv.hostPlatform.isLinux [makeWrapper]
       ++ lib.optionals stdenv.hostPlatform.isDarwin [cargo-bundle];
 
     dontUseCmakeConfigure = true;
@@ -167,7 +164,6 @@ in
     postFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
       patchelf --add-rpath ${gpu-lib}/lib $out/libexec/*
       patchelf --add-rpath ${wayland}/lib $out/libexec/*
-      wrapProgram $out/libexec/zed-editor --suffix PATH : ${lib.makeBinPath [nodejs]}
     '';
 
     nativeCheckInputs = [

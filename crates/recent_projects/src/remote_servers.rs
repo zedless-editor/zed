@@ -28,9 +28,8 @@ use paths::user_ssh_config_file;
 use picker::Picker;
 use project::Fs;
 use project::Project;
-use remote::SshConnectionOptions;
-use remote::SshRemoteClient;
 use remote::ssh_session::ConnectionIdentifier;
+use remote::{SshConnectionOptions, SshRemoteClient};
 use settings::Settings;
 use settings::SettingsStore;
 use settings::update_settings_file;
@@ -42,7 +41,10 @@ use ui::{
     IconButtonShape, List, ListItem, ListSeparator, Modal, ModalHeader, Scrollbar, ScrollbarState,
     Section, Tooltip, prelude::*,
 };
-use util::ResultExt;
+use util::{
+    ResultExt,
+    paths::{PathStyle, RemotePathBuf},
+};
 use workspace::OpenOptions;
 use workspace::Toast;
 use workspace::notifications::NotificationId;
@@ -142,20 +144,21 @@ impl ProjectPicker {
         ix: usize,
         connection: SshConnectionOptions,
         project: Entity<Project>,
-        home_dir: PathBuf,
+        home_dir: RemotePathBuf,
+        path_style: PathStyle,
         workspace: WeakEntity<Workspace>,
         window: &mut Window,
         cx: &mut Context<RemoteServerProjects>,
     ) -> Entity<Self> {
         let (tx, rx) = oneshot::channel();
         let lister = project::DirectoryLister::Project(project.clone());
-        let delegate = file_finder::OpenPathDelegate::new(tx, lister, false);
+        let delegate = file_finder::OpenPathDelegate::new(tx, lister, false, path_style);
 
         let picker = cx.new(|cx| {
             let picker = Picker::uniform_list(delegate, window, cx)
                 .width(rems(34.))
                 .modal(false);
-            picker.set_query(home_dir.to_string_lossy().to_string(), window, cx);
+            picker.set_query(home_dir.to_string(), window, cx);
             picker
         });
         let connection_string = connection.connection_string().into();
@@ -421,7 +424,8 @@ impl RemoteServerProjects {
         ix: usize,
         connection_options: remote::SshConnectionOptions,
         project: Entity<Project>,
-        home_dir: PathBuf,
+        home_dir: RemotePathBuf,
+        path_style: PathStyle,
         window: &mut Window,
         cx: &mut Context<Self>,
         workspace: WeakEntity<Workspace>,
@@ -434,6 +438,7 @@ impl RemoteServerProjects {
             connection_options,
             project,
             home_dir,
+            path_style,
             workspace,
             window,
             cx,
@@ -587,14 +592,17 @@ impl RemoteServerProjects {
                         });
                     };
 
-                    let project = cx.update(|_, cx| {
-                        project::Project::ssh(
-                            session,
-                            app_state.client.clone(),
-                            app_state.user_store.clone(),
-                            app_state.languages.clone(),
-                            app_state.fs.clone(),
-                            cx,
+                    let (path_style, project) = cx.update(|_, cx| {
+                        (
+                            session.read(cx).path_style(),
+                            project::Project::ssh(
+                                session,
+                                app_state.client.clone(),
+                                app_state.user_store.clone(),
+                                app_state.languages.clone(),
+                                app_state.fs.clone(),
+                                cx,
+                            ),
                         )
                     })?;
 
@@ -602,7 +610,13 @@ impl RemoteServerProjects {
                         .read_with(cx, |project, cx| project.resolve_abs_path("~", cx))?
                         .await
                         .and_then(|path| path.into_abs_path())
-                        .unwrap_or(PathBuf::from("/"));
+                        .map(|path| RemotePathBuf::new(path, path_style))
+                        .unwrap_or_else(|| match path_style {
+                            PathStyle::Posix => RemotePathBuf::from_str("/", PathStyle::Posix),
+                            PathStyle::Windows => {
+                                RemotePathBuf::from_str("C:\\", PathStyle::Windows)
+                            }
+                        });
 
                     workspace
                         .update_in(cx, |workspace, window, cx| {
@@ -614,6 +628,7 @@ impl RemoteServerProjects {
                                     connection_options,
                                     project,
                                     home_dir,
+                                    path_style,
                                     window,
                                     cx,
                                     weak,

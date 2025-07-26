@@ -1,9 +1,9 @@
 use crate::*;
-use anyhow::Context as _;
+use anyhow::{anyhow, Context as _};
 use dap::{DebugRequest, StartDebuggingRequestArguments, adapters::DebugTaskDefinition};
 use gpui::{AsyncApp, SharedString};
 use json_dotpath::DotPaths;
-use language::{LanguageName, Toolchain};
+use language::LanguageName;
 use serde_json::Value;
 use std::net::Ipv4Addr;
 use std::{
@@ -20,68 +20,54 @@ impl PythonDebugAdapter {
     const ADAPTER_NAME: &'static str = "Debugpy";
     const DEBUG_ADAPTER_NAME: DebugAdapterName =
         DebugAdapterName(SharedString::new_static(Self::ADAPTER_NAME));
-    const ADAPTER_PATH: &'static str = "src/debugpy/adapter";
+    const ADAPTER_PATH: &'static str = if cfg!(target_os = "windows") {
+        "debugpy-venv/Scripts/debugpy-adapter"
+    } else {
+        "debugpy-venv/bin/debugpy-adapter"
+    };
+
     const LANGUAGE_NAME: &'static str = "Python";
 
     async fn generate_debugpy_arguments(
         host: &Ipv4Addr,
         port: u16,
         user_installed_path: Option<&Path>,
+        user_args: Option<Vec<String>>,
         installed_in_venv: bool,
     ) -> Result<Vec<String>> {
-        if let Some(user_installed_path) = user_installed_path {
+        let mut args = if let Some(user_installed_path) = user_installed_path {
             log::debug!(
                 "Using user-installed debugpy adapter from: {}",
                 user_installed_path.display()
             );
-            Ok(vec![
-                user_installed_path
-                    .join(Self::ADAPTER_PATH)
-                    .to_string_lossy()
-                    .to_string(),
-                format!("--host={}", host),
-                format!("--port={}", port),
-            ])
+            vec![user_installed_path.to_string_lossy().to_string()]
         } else if installed_in_venv {
             log::debug!("Using venv-installed debugpy");
-            Ok(vec![
-                "-m".to_string(),
-                "debugpy.adapter".to_string(),
-                format!("--host={}", host),
-                format!("--port={}", port),
-            ])
+            vec!["-m".to_string(), "debugpy.adapter".to_string()]
         } else {
             let adapter_path = paths::debug_adapters_dir().join(Self::DEBUG_ADAPTER_NAME.as_ref());
-            let file_name_prefix = format!("{}_", Self::ADAPTER_NAME);
+            let path = adapter_path
+                .join(Self::ADAPTER_PATH)
+                .to_string_lossy()
+                .into_owned();
+            log::debug!("Using pip debugpy adapter from: {path}");
+            vec![path]
+        };
 
-            let debugpy_dir =
-                util::fs::find_file_name_in_dir(adapter_path.as_path(), |file_name| {
-                    file_name.starts_with(&file_name_prefix)
-                })
-                .await
-                .context("Debugpy directory not found")?;
-
-            log::debug!(
-                "Using GitHub-downloaded debugpy adapter from: {}",
-                debugpy_dir.display()
-            );
-            Ok(vec![
-                debugpy_dir
-                    .join(Self::ADAPTER_PATH)
-                    .to_string_lossy()
-                    .to_string(),
-                format!("--host={}", host),
-                format!("--port={}", port),
-            ])
-        }
+        args.extend(if let Some(args) = user_args {
+            args
+        } else {
+            vec![format!("--host={}", host), format!("--port={}", port)]
+        });
+        Ok(args)
     }
 
-    fn request_args(
+    async fn request_args(
         &self,
         delegate: &Arc<dyn DapDelegate>,
         task_definition: &DebugTaskDefinition,
     ) -> Result<StartDebuggingRequestArguments> {
-        let request = self.request_kind(&task_definition.config)?;
+        let request = self.request_kind(&task_definition.config).await?;
 
         let mut configuration = task_definition.config.clone();
         if let Ok(console) = configuration.dot_get_mut("console") {
@@ -107,15 +93,16 @@ impl PythonDebugAdapter {
         delegate: &Arc<dyn DapDelegate>,
         config: &DebugTaskDefinition,
         user_installed_path: Option<PathBuf>,
-        toolchain: Option<Toolchain>,
+        user_args: Option<Vec<String>>,
+        python_from_toolchain: Option<String>,
         installed_in_venv: bool,
     ) -> Result<DebugAdapterBinary> {
         const BINARY_NAMES: [&str; 3] = ["python3", "python", "py"];
         let tcp_connection = config.tcp_connection.clone().unwrap_or_default();
         let (host, port, timeout) = crate::configure_tcp_connection(tcp_connection).await?;
 
-        let python_path = if let Some(toolchain) = toolchain {
-            Some(toolchain.path.to_string())
+        let python_path = if let Some(toolchain) = python_from_toolchain {
+            Some(toolchain)
         } else {
             let mut name = None;
 
@@ -138,6 +125,7 @@ impl PythonDebugAdapter {
             &host,
             port,
             user_installed_path.as_deref(),
+            user_args,
             installed_in_venv,
         )
         .await?;
@@ -158,7 +146,7 @@ impl PythonDebugAdapter {
             }),
             cwd: Some(delegate.worktree_root_path().to_path_buf()),
             envs: HashMap::default(),
-            request_args: self.request_args(delegate, config)?,
+            request_args: self.request_args(delegate, config).await?,
         })
     }
 }
@@ -173,7 +161,7 @@ impl DebugAdapter for PythonDebugAdapter {
         Some(SharedString::new_static("Python").into())
     }
 
-    fn config_from_zed_format(&self, zed_scenario: ZedDebugConfig) -> Result<DebugScenario> {
+    async fn config_from_zed_format(&self, zed_scenario: ZedDebugConfig) -> Result<DebugScenario> {
         let mut args = json!({
             "request": match zed_scenario.request {
                 DebugRequest::Launch(_) => "launch",
@@ -213,7 +201,7 @@ impl DebugAdapter for PythonDebugAdapter {
         })
     }
 
-    async fn dap_schema(&self) -> serde_json::Value {
+    fn dap_schema(&self) -> serde_json::Value {
         json!({
             "properties": {
                 "request": {
@@ -551,6 +539,7 @@ impl DebugAdapter for PythonDebugAdapter {
         delegate: &Arc<dyn DapDelegate>,
         config: &DebugTaskDefinition,
         user_installed_path: Option<PathBuf>,
+        user_args: Option<Vec<String>>,
         cx: &mut AsyncApp,
     ) -> Result<DebugAdapterBinary> {
         if let Some(local_path) = &user_installed_path {
@@ -559,7 +548,14 @@ impl DebugAdapter for PythonDebugAdapter {
                 local_path.display()
             );
             return self
-                .get_installed_binary(delegate, &config, Some(local_path.clone()), None, false)
+                .get_installed_binary(
+                    delegate,
+                    &config,
+                    Some(local_path.clone()),
+                    user_args,
+                    None,
+                    false,
+                )
                 .await;
         }
 
@@ -586,7 +582,8 @@ impl DebugAdapter for PythonDebugAdapter {
                             delegate,
                             &config,
                             None,
-                            Some(toolchain.clone()),
+                            user_args,
+                            Some(toolchain.path.to_string()),
                             true,
                         )
                         .await;
@@ -594,8 +591,16 @@ impl DebugAdapter for PythonDebugAdapter {
             }
         }
 
-        self.get_installed_binary(delegate, &config, None, toolchain, false)
-            .await
+        return Err(anyhow!("zedless: debugpy not found"));
+    }
+
+    fn label_for_child_session(&self, args: &StartDebuggingRequestArguments) -> Option<String> {
+        let label = args
+            .configuration
+            .get("name")?
+            .as_str()
+            .filter(|label| !label.is_empty())?;
+        Some(label.to_owned())
     }
 }
 
@@ -610,18 +615,24 @@ mod tests {
         let port = 5678;
 
         // Case 1: User-defined debugpy path (highest precedence)
-        let user_path = PathBuf::from("/custom/path/to/debugpy");
-        let user_args =
-            PythonDebugAdapter::generate_debugpy_arguments(&host, port, Some(&user_path), false)
+        let user_path = PathBuf::from("/custom/path/to/debugpy/src/debugpy/adapter");
+        let user_args = PythonDebugAdapter::generate_debugpy_arguments(
+            &host,
+            port,
+            Some(&user_path),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Case 2: Venv-installed debugpy (uses -m debugpy.adapter)
+        let venv_args =
+            PythonDebugAdapter::generate_debugpy_arguments(&host, port, None, None, true)
                 .await
                 .unwrap();
 
-        // Case 2: Venv-installed debugpy (uses -m debugpy.adapter)
-        let venv_args = PythonDebugAdapter::generate_debugpy_arguments(&host, port, None, true)
-            .await
-            .unwrap();
-
-        assert!(user_args[0].ends_with("src/debugpy/adapter"));
+        assert_eq!(user_args[0], "/custom/path/to/debugpy/src/debugpy/adapter");
         assert_eq!(user_args[1], "--host=127.0.0.1");
         assert_eq!(user_args[2], "--port=5678");
 
@@ -629,6 +640,33 @@ mod tests {
         assert_eq!(venv_args[1], "debugpy.adapter");
         assert_eq!(venv_args[2], "--host=127.0.0.1");
         assert_eq!(venv_args[3], "--port=5678");
+
+        // The same cases, with arguments overridden by the user
+        let user_args = PythonDebugAdapter::generate_debugpy_arguments(
+            &host,
+            port,
+            Some(&user_path),
+            Some(vec!["foo".into()]),
+            false,
+        )
+        .await
+        .unwrap();
+        let venv_args = PythonDebugAdapter::generate_debugpy_arguments(
+            &host,
+            port,
+            None,
+            Some(vec!["foo".into()]),
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(user_args[0].ends_with("src/debugpy/adapter"));
+        assert_eq!(user_args[1], "foo");
+
+        assert_eq!(venv_args[0], "-m");
+        assert_eq!(venv_args[1], "debugpy.adapter");
+        assert_eq!(venv_args[2], "foo");
 
         // Note: Case 3 (GitHub-downloaded debugpy) is not tested since this requires mocking the Github API.
     }

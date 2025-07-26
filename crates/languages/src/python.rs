@@ -166,10 +166,15 @@ impl LspAdapter for PythonLspAdapter {
             lsp::CompletionItemKind::CONSTANT => grammar.highlight_id_for_name("constant")?,
             _ => return None,
         };
+        let filter_range = item
+            .filter_text
+            .as_deref()
+            .and_then(|filter| label.find(filter).map(|ix| ix..ix + filter.len()))
+            .unwrap_or(0..label.len());
         Some(language::CodeLabel {
             text: label.clone(),
             runs: vec![(0..label.len(), highlight_id)],
-            filter_range: 0..label.len(),
+            filter_range,
         })
     }
 
@@ -912,10 +917,15 @@ impl LspAdapter for PyLspAdapter {
             lsp::CompletionItemKind::CONSTANT => grammar.highlight_id_for_name("constant")?,
             _ => return None,
         };
+        let filter_range = item
+            .filter_text
+            .as_deref()
+            .and_then(|filter| label.find(filter).map(|ix| ix..ix + filter.len()))
+            .unwrap_or(0..label.len());
         Some(language::CodeLabel {
             text: label.clone(),
             runs: vec![(0..label.len(), highlight_id)],
-            filter_range: 0..label.len(),
+            filter_range,
         })
     }
 
@@ -1145,7 +1155,7 @@ mod tests {
 
             // dedent "else" on the line after a closing paren
             append(&mut buffer, "\n  else:\n", cx);
-            assert_eq!(buffer.text(), "if a:\n  b(\n  )\nelse:\n");
+            assert_eq!(buffer.text(), "if a:\n  b(\n  )\nelse:\n  ");
 
             buffer
         });

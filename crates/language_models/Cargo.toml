@@ -17,11 +17,13 @@ aws-config = { workspace = true, features = ["behavior-version-latest"] }
 aws-credential-types = { workspace = true, features = [
     "hardcoded-credentials",
 ] }
+chrono.workspace = true
 client.workspace = true
 collections.workspace = true
+component.workspace = true
 credentials_provider.workspace = true
+convert_case.workspace = true
 editor.workspace = true
-fs.workspace = true
 futures.workspace = true
 gpui.workspace = true
 gpui_tokio.workspace = true
@@ -32,7 +34,6 @@ menu.workspace = true
 ollama = { workspace = true, features = ["schemars"] }
 open_ai = { workspace = true, features = ["schemars"] }
 partial-json-fixer.workspace = true
-project.workspace = true
 proto.workspace = true
 release_channel.workspace = true
 schemars.workspace = true
@@ -46,9 +47,11 @@ thiserror.workspace = true
 tiktoken-rs.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 ui.workspace = true
+ui_input.workspace = true
 util.workspace = true
 workspace-hack.workspace = true
 zed_llm_client.workspace = true
+language.workspace = true
 
 [dev-dependencies]
 editor = { workspace = true, features = ["test-support"] }

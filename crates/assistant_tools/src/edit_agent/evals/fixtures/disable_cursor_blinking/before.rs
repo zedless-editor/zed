@@ -6357,13 +6357,6 @@ impl Editor {
             true => "Edit Prediction Accepted",
             false => "Edit Prediction Discarded",
         };
-        telemetry::event!(
-            event_type,
-            provider = provider.name(),
-            prediction_id = id,
-            suggestion_accepted = accepted,
-            file_extension = extension,
-        );
     }
 
     pub fn has_active_inline_completion(&self) -> bool {
@@ -18293,15 +18286,6 @@ impl Editor {
             .show_edit_predictions;
 
         let project = project.read(cx);
-        telemetry::event!(
-            event_type,
-            file_extension,
-            vim_mode,
-            copilot_enabled,
-            copilot_enabled_for_language,
-            edit_predictions_provider,
-            is_via_ssh = project.is_via_ssh(),
-        );
     }
 
     /// Copy the highlighted chunks to the clipboard as JSON. The format is an array of lines,

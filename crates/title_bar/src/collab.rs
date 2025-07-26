@@ -1,29 +1,66 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use call::{ActiveCall, ParticipantLocation, Room};
 use client::{User, proto::PeerId};
-use gpui::{AnyElement, Hsla, IntoElement, MouseButton, Path, Styled, canvas, point};
+use gpui::{
+    AnyElement, Hsla, IntoElement, MouseButton, Path, ScreenCaptureSource, Styled,
+    canvas, point,
+};
 use gpui::{App, Task, Window, actions};
 use rpc::proto::{self};
 use theme::ActiveTheme;
-use ui::{Avatar, AvatarAudioStatusIndicator, Facepile, TintColor, Tooltip, prelude::*};
+use ui::{
+    Avatar, AvatarAudioStatusIndicator, Divider, Facepile, TintColor, Tooltip, prelude::*,
+};
+use util::maybe;
 use workspace::notifications::DetachAndPromptErr;
 
 use crate::TitleBar;
 
 actions!(
     collab,
-    [ToggleScreenSharing, ToggleMute, ToggleDeafen, LeaveCall]
+    [
+        /// Toggles screen sharing on or off.
+        ToggleScreenSharing,
+        /// Toggles microphone mute.
+        ToggleMute,
+        /// Toggles deafen mode (mute both microphone and speakers).
+        ToggleDeafen
+    ]
 );
 
-fn toggle_screen_sharing(_: &ToggleScreenSharing, window: &mut Window, cx: &mut App) {
+fn toggle_screen_sharing(
+    screen: Option<Rc<dyn ScreenCaptureSource>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let call = ActiveCall::global(cx).read(cx);
     if let Some(room) = call.room().cloned() {
         let toggle_screen_sharing = room.update(cx, |room, cx| {
-            if room.is_screen_sharing() {
-                Task::ready(room.unshare_screen(cx))
+            let clicked_on_currently_shared_screen =
+                room.shared_screen_id().is_some_and(|screen_id| {
+                    Some(screen_id)
+                        == screen
+                            .as_deref()
+                            .and_then(|s| s.metadata().ok().map(|meta| meta.id))
+                });
+            let should_unshare_current_screen = room.is_sharing_screen();
+            let unshared_current_screen = should_unshare_current_screen.then(|| {
+                room.unshare_screen(clicked_on_currently_shared_screen || screen.is_none(), cx)
+            });
+            if let Some(screen) = screen {
+                cx.spawn(async move |room, cx| {
+                    unshared_current_screen.transpose()?;
+                    if !clicked_on_currently_shared_screen {
+                        room.update(cx, |room, cx| room.share_screen(screen, cx))?
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                })
             } else {
-                room.share_screen(cx)
+                Task::ready(Ok(()))
             }
         });
         toggle_screen_sharing.detach_and_prompt_err("Sharing Screen Failed", window, cx, |e, _, _| Some(format!("{:?}\n\nPlease check that you have given Zed permissions to record your screen in Settings.", e)));
@@ -275,7 +312,7 @@ impl TitleBar {
         let is_muted = room.is_muted();
         let muted_by_user = room.muted_by_user();
         let is_deafened = room.is_deafened().unwrap_or(false);
-        let is_screen_sharing = room.is_screen_sharing();
+        let is_screen_sharing = room.is_sharing_screen();
         let can_use_microphone = room.can_use_microphone();
         let can_share_projects = room.can_share_projects();
         let screen_sharing_supported = cx.is_screen_capture_supported();
@@ -322,6 +359,7 @@ impl TitleBar {
                                 .detach_and_log_err(cx);
                         }),
                 )
+                .child(Divider::vertical())
                 .into_any_element(),
         );
 
@@ -400,26 +438,57 @@ impl TitleBar {
         );
 
         if can_use_microphone && screen_sharing_supported {
-            children.push(
-                IconButton::new("screen-share", ui::IconName::Screen)
-                    .style(ButtonStyle::Subtle)
-                    .icon_size(IconSize::Small)
-                    .toggle_state(is_screen_sharing)
-                    .selected_style(ButtonStyle::Tinted(TintColor::Accent))
-                    .tooltip(Tooltip::text(if is_screen_sharing {
-                        "Stop Sharing Screen"
-                    } else {
-                        "Share Screen"
-                    }))
-                    .on_click(move |_, window, cx| {
-                        toggle_screen_sharing(&Default::default(), window, cx)
-                    })
-                    .into_any_element(),
-            );
+            let trigger = IconButton::new("screen-share", ui::IconName::Screen)
+                .style(ButtonStyle::Subtle)
+                .icon_size(IconSize::Small)
+                .toggle_state(is_screen_sharing)
+                .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+                .tooltip(Tooltip::text(if is_screen_sharing {
+                    "Stop Sharing Screen"
+                } else {
+                    "Share Screen"
+                }))
+                .on_click(move |_, window, cx| {
+                    let should_share = ActiveCall::global(cx)
+                        .read(cx)
+                        .room()
+                        .is_some_and(|room| !room.read(cx).is_sharing_screen());
+
+                    window
+                        .spawn(cx, async move |cx| {
+                            let screen = if should_share {
+                                cx.update(|_, cx| pick_default_screen(cx))?.await
+                            } else {
+                                None
+                            };
+
+                            cx.update(|window, cx| toggle_screen_sharing(screen, window, cx))?;
+
+                            Result::<_, anyhow::Error>::Ok(())
+                        })
+                        .detach();
+                });
         }
 
         children.push(div().pr_2().into_any_element());
 
         children
     }
+}
+
+/// Picks the screen to share when clicking on the main screen sharing button.
+fn pick_default_screen(cx: &App) -> Task<Option<Rc<dyn ScreenCaptureSource>>> {
+    let source = cx.screen_capture_sources();
+    cx.spawn(async move |_| {
+        let available_sources = maybe!(async move { source.await? }).await.ok()?;
+        available_sources
+            .iter()
+            .find(|it| {
+                it.as_ref()
+                    .metadata()
+                    .is_ok_and(|meta| meta.is_main.unwrap_or_default())
+            })
+            .or_else(|| available_sources.iter().next())
+            .cloned()
+    })
 }

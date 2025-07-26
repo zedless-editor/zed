@@ -16,9 +16,6 @@ anyhow.workspace = true
 collections.workspace = true
 gpui.workspace = true
 language_model.workspace = true
-log.workspace = true
-ollama = { workspace = true, features = ["schemars"] }
-open_ai = { workspace = true, features = ["schemars"] }
 schemars.workspace = true
 serde.workspace = true
 settings.workspace = true

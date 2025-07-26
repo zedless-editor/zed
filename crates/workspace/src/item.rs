@@ -298,9 +298,6 @@ pub trait Item: Focusable + EventEmitter<Self::Event> + Render + Sized {
         false
     }
 
-    fn telemetry_event_text(&self) -> Option<&'static str> {
-        None
-    }
 
     /// (model id, Item)
     fn for_each_project_item(
@@ -499,7 +496,6 @@ pub trait ItemHandle: 'static + Send {
     fn tab_icon(&self, window: &Window, cx: &App) -> Option<Icon>;
     fn tab_tooltip_text(&self, cx: &App) -> Option<SharedString>;
     fn tab_tooltip_content(&self, cx: &App) -> Option<TabTooltipContent>;
-    fn telemetry_event_text(&self, cx: &App) -> Option<&'static str>;
     fn dragged_tab_content(
         &self,
         params: TabContentParams,
@@ -618,9 +614,6 @@ impl<T: Item> ItemHandle for Entity<T> {
         self.read(cx).focus_handle(cx)
     }
 
-    fn telemetry_event_text(&self, cx: &App) -> Option<&'static str> {
-        self.read(cx).telemetry_event_text()
-    }
 
     fn tab_content(&self, params: TabContentParams, window: &Window, cx: &App) -> AnyElement {
         self.read(cx).tab_content(params, window, cx)
@@ -1522,10 +1515,6 @@ pub mod test {
                 })
                 .unwrap_or_default()
                 .into()
-        }
-
-        fn telemetry_event_text(&self) -> Option<&'static str> {
-            None
         }
 
         fn tab_content(&self, params: TabContentParams, _window: &Window, _cx: &App) -> AnyElement {

@@ -1,6 +1,5 @@
 use anyhow::Context as _;
 use gpui::{App, UpdateGlobal};
-use json::json_task_context;
 use python::PyprojectTomlManifestProvider;
 use rust::CargoManifestProvider;
 use rust_embed::RustEmbed;
@@ -11,17 +10,22 @@ use util::{ResultExt, asset_str};
 
 pub use language::*;
 
+use crate::json::JsonTaskProvider;
+
 mod bash;
 mod c;
 mod css;
 mod go;
 mod json;
+mod package_json;
 mod python;
 mod rust;
 mod tailwind;
 mod typescript;
 mod vtsls;
 mod yaml;
+
+pub(crate) use package_json::{PackageJson, PackageJsonData};
 
 #[derive(RustEmbed)]
 #[folder = "src/"]
@@ -77,7 +81,7 @@ pub fn init(languages: Arc<LanguageRegistry>, cx: &mut App) {
     let eslint_adapter = Arc::new(typescript::EsLintLspAdapter::new());
     let go_context_provider = Arc::new(go::GoContextProvider);
     let go_lsp_adapter = Arc::new(go::GoLspAdapter);
-    let json_context_provider = Arc::new(json_task_context());
+    let json_context_provider = Arc::new(JsonTaskProvider);
     let json_lsp_adapter = Arc::new(json::JsonLspAdapter::new(languages.clone()));
     let node_version_lsp_adapter = Arc::new(json::NodeVersionAdapter);
     let py_lsp_adapter = Arc::new(python::PyLspAdapter::new());
@@ -207,6 +211,10 @@ pub fn init(languages: Arc<LanguageRegistry>, cx: &mut App) {
             name: "gitcommit",
             ..Default::default()
         },
+        LanguageInfo {
+            name: "zed-keybind-context",
+            ..Default::default()
+        },
     ];
 
     for registration in built_in_languages {
@@ -264,6 +272,7 @@ pub fn init(languages: Arc<LanguageRegistry>, cx: &mut App) {
         "Astro",
         "CSS",
         "ERB",
+        "HTML/ERB",
         "HEEX",
         "HTML",
         "JavaScript",

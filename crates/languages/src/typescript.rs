@@ -13,13 +13,14 @@ use serde_json::{Value, json};
 use smol::lock::RwLock;
 use std::{
     borrow::Cow,
-    collections::BTreeSet,
     path::{Path, PathBuf},
     sync::Arc,
 };
 use task::{TaskTemplate, TaskTemplates, VariableName};
 use util::merge_json_value_into;
 use util::{ResultExt};
+
+use crate::{PackageJson, PackageJsonData};
 
 #[derive(Debug)]
 pub(crate) struct TypeScriptContextProvider {
@@ -50,135 +51,43 @@ const TYPESCRIPT_JASMINE_PACKAGE_PATH_VARIABLE: VariableName =
 #[derive(Clone, Debug, Default)]
 struct PackageJsonContents(Arc<RwLock<HashMap<PathBuf, PackageJson>>>);
 
-#[derive(Clone, Debug)]
-struct PackageJson {
-    mtime: DateTime<Local>,
-    data: PackageJsonData,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct PackageJsonData {
-    jest_package_path: Option<Arc<Path>>,
-    mocha_package_path: Option<Arc<Path>>,
-    vitest_package_path: Option<Arc<Path>>,
-    jasmine_package_path: Option<Arc<Path>>,
-    scripts: BTreeSet<(Arc<Path>, String)>,
-    package_manager: Option<&'static str>,
-}
-
 impl PackageJsonData {
-    fn new(path: Arc<Path>, package_json: HashMap<String, Value>) -> Self {
-        let mut scripts = BTreeSet::new();
-        if let Some(serde_json::Value::Object(package_json_scripts)) = package_json.get("scripts") {
-            scripts.extend(
-                package_json_scripts
-                    .keys()
-                    .cloned()
-                    .map(|name| (path.clone(), name)),
-            );
-        }
-
-        let mut jest_package_path = None;
-        let mut mocha_package_path = None;
-        let mut vitest_package_path = None;
-        let mut jasmine_package_path = None;
-        if let Some(serde_json::Value::Object(dependencies)) = package_json.get("devDependencies") {
-            if dependencies.contains_key("jest") {
-                jest_package_path.get_or_insert_with(|| path.clone());
-            }
-            if dependencies.contains_key("mocha") {
-                mocha_package_path.get_or_insert_with(|| path.clone());
-            }
-            if dependencies.contains_key("vitest") {
-                vitest_package_path.get_or_insert_with(|| path.clone());
-            }
-            if dependencies.contains_key("jasmine") {
-                jasmine_package_path.get_or_insert_with(|| path.clone());
-            }
-        }
-        if let Some(serde_json::Value::Object(dev_dependencies)) = package_json.get("dependencies")
-        {
-            if dev_dependencies.contains_key("jest") {
-                jest_package_path.get_or_insert_with(|| path.clone());
-            }
-            if dev_dependencies.contains_key("mocha") {
-                mocha_package_path.get_or_insert_with(|| path.clone());
-            }
-            if dev_dependencies.contains_key("vitest") {
-                vitest_package_path.get_or_insert_with(|| path.clone());
-            }
-            if dev_dependencies.contains_key("jasmine") {
-                jasmine_package_path.get_or_insert_with(|| path.clone());
-            }
-        }
-
-        let package_manager = package_json
-            .get("packageManager")
-            .and_then(|value| value.as_str())
-            .and_then(|value| {
-                if value.starts_with("pnpm") {
-                    Some("pnpm")
-                } else if value.starts_with("yarn") {
-                    Some("yarn")
-                } else if value.starts_with("npm") {
-                    Some("npm")
-                } else {
-                    None
-                }
-            });
-
-        Self {
-            jest_package_path,
-            mocha_package_path,
-            vitest_package_path,
-            jasmine_package_path,
-            scripts,
-            package_manager,
-        }
-    }
-
-    fn merge(&mut self, other: Self) {
-        self.jest_package_path = self.jest_package_path.take().or(other.jest_package_path);
-        self.mocha_package_path = self.mocha_package_path.take().or(other.mocha_package_path);
-        self.vitest_package_path = self
-            .vitest_package_path
-            .take()
-            .or(other.vitest_package_path);
-        self.jasmine_package_path = self
-            .jasmine_package_path
-            .take()
-            .or(other.jasmine_package_path);
-        self.scripts.extend(other.scripts);
-        self.package_manager = self.package_manager.or(other.package_manager);
-    }
-
     fn fill_task_templates(&self, task_templates: &mut TaskTemplates) {
         if self.jest_package_path.is_some() {
             task_templates.0.push(TaskTemplate {
                 label: "jest file test".to_owned(),
                 command: TYPESCRIPT_RUNNER_VARIABLE.template_value(),
-                args: vec!["jest".to_owned(), VariableName::Filename.template_value()],
-                cwd: Some(VariableName::Dirname.template_value()),
+                args: vec![
+                    "exec".to_owned(),
+                    "--".to_owned(),
+                    "jest".to_owned(),
+                    "--runInBand".to_owned(),
+                    VariableName::File.template_value(),
+                ],
+                cwd: Some(TYPESCRIPT_JEST_PACKAGE_PATH_VARIABLE.template_value()),
                 ..TaskTemplate::default()
             });
             task_templates.0.push(TaskTemplate {
                 label: format!("jest test {}", VariableName::Symbol.template_value()),
                 command: TYPESCRIPT_RUNNER_VARIABLE.template_value(),
                 args: vec![
+                    "exec".to_owned(),
+                    "--".to_owned(),
                     "jest".to_owned(),
+                    "--runInBand".to_owned(),
                     "--testNamePattern".to_owned(),
                     format!(
                         "\"{}\"",
                         TYPESCRIPT_JEST_TEST_NAME_VARIABLE.template_value()
                     ),
-                    VariableName::Filename.template_value(),
+                    VariableName::File.template_value(),
                 ],
                 tags: vec![
                     "ts-test".to_owned(),
                     "js-test".to_owned(),
                     "tsx-test".to_owned(),
                 ],
-                cwd: Some(VariableName::Dirname.template_value()),
+                cwd: Some(TYPESCRIPT_JEST_PACKAGE_PATH_VARIABLE.template_value()),
                 ..TaskTemplate::default()
             });
         }
@@ -188,11 +97,15 @@ impl PackageJsonData {
                 label: format!("{} file test", "vitest".to_owned()),
                 command: TYPESCRIPT_RUNNER_VARIABLE.template_value(),
                 args: vec![
+                    "exec".to_owned(),
+                    "--".to_owned(),
                     "vitest".to_owned(),
                     "run".to_owned(),
-                    VariableName::Filename.template_value(),
+                    "--poolOptions.forks.minForks=0".to_owned(),
+                    "--poolOptions.forks.maxForks=1".to_owned(),
+                    VariableName::File.template_value(),
                 ],
-                cwd: Some(VariableName::Dirname.template_value()),
+                cwd: Some(TYPESCRIPT_VITEST_PACKAGE_PATH_VARIABLE.template_value()),
                 ..TaskTemplate::default()
             });
             task_templates.0.push(TaskTemplate {
@@ -203,21 +116,25 @@ impl PackageJsonData {
                 ),
                 command: TYPESCRIPT_RUNNER_VARIABLE.template_value(),
                 args: vec![
+                    "exec".to_owned(),
+                    "--".to_owned(),
                     "vitest".to_owned(),
                     "run".to_owned(),
+                    "--poolOptions.forks.minForks=0".to_owned(),
+                    "--poolOptions.forks.maxForks=1".to_owned(),
                     "--testNamePattern".to_owned(),
                     format!(
                         "\"{}\"",
                         TYPESCRIPT_VITEST_TEST_NAME_VARIABLE.template_value()
                     ),
-                    VariableName::Filename.template_value(),
+                    VariableName::File.template_value(),
                 ],
                 tags: vec![
                     "ts-test".to_owned(),
                     "js-test".to_owned(),
                     "tsx-test".to_owned(),
                 ],
-                cwd: Some(VariableName::Dirname.template_value()),
+                cwd: Some(TYPESCRIPT_VITEST_PACKAGE_PATH_VARIABLE.template_value()),
                 ..TaskTemplate::default()
             });
         }
@@ -226,8 +143,13 @@ impl PackageJsonData {
             task_templates.0.push(TaskTemplate {
                 label: format!("{} file test", "mocha".to_owned()),
                 command: TYPESCRIPT_RUNNER_VARIABLE.template_value(),
-                args: vec!["mocha".to_owned(), VariableName::Filename.template_value()],
-                cwd: Some(VariableName::Dirname.template_value()),
+                args: vec![
+                    "exec".to_owned(),
+                    "--".to_owned(),
+                    "mocha".to_owned(),
+                    VariableName::File.template_value(),
+                ],
+                cwd: Some(TYPESCRIPT_MOCHA_PACKAGE_PATH_VARIABLE.template_value()),
                 ..TaskTemplate::default()
             });
             task_templates.0.push(TaskTemplate {
@@ -238,17 +160,19 @@ impl PackageJsonData {
                 ),
                 command: TYPESCRIPT_RUNNER_VARIABLE.template_value(),
                 args: vec![
+                    "exec".to_owned(),
+                    "--".to_owned(),
                     "mocha".to_owned(),
                     "--grep".to_owned(),
                     format!("\"{}\"", VariableName::Symbol.template_value()),
-                    VariableName::Filename.template_value(),
+                    VariableName::File.template_value(),
                 ],
                 tags: vec![
                     "ts-test".to_owned(),
                     "js-test".to_owned(),
                     "tsx-test".to_owned(),
                 ],
-                cwd: Some(VariableName::Dirname.template_value()),
+                cwd: Some(TYPESCRIPT_MOCHA_PACKAGE_PATH_VARIABLE.template_value()),
                 ..TaskTemplate::default()
             });
         }
@@ -258,10 +182,12 @@ impl PackageJsonData {
                 label: format!("{} file test", "jasmine".to_owned()),
                 command: TYPESCRIPT_RUNNER_VARIABLE.template_value(),
                 args: vec![
+                    "exec".to_owned(),
+                    "--".to_owned(),
                     "jasmine".to_owned(),
-                    VariableName::Filename.template_value(),
+                    VariableName::File.template_value(),
                 ],
-                cwd: Some(VariableName::Dirname.template_value()),
+                cwd: Some(TYPESCRIPT_JASMINE_PACKAGE_PATH_VARIABLE.template_value()),
                 ..TaskTemplate::default()
             });
             task_templates.0.push(TaskTemplate {
@@ -272,30 +198,46 @@ impl PackageJsonData {
                 ),
                 command: TYPESCRIPT_RUNNER_VARIABLE.template_value(),
                 args: vec![
+                    "exec".to_owned(),
+                    "--".to_owned(),
                     "jasmine".to_owned(),
                     format!("--filter={}", VariableName::Symbol.template_value()),
-                    VariableName::Filename.template_value(),
+                    VariableName::File.template_value(),
                 ],
                 tags: vec![
                     "ts-test".to_owned(),
                     "js-test".to_owned(),
                     "tsx-test".to_owned(),
-                    "jasmine-test".to_owned(),
                 ],
-                cwd: Some(VariableName::Dirname.template_value()),
+                cwd: Some(TYPESCRIPT_JASMINE_PACKAGE_PATH_VARIABLE.template_value()),
                 ..TaskTemplate::default()
             });
         }
 
+        let script_name_counts: HashMap<_, usize> =
+            self.scripts
+                .iter()
+                .fold(HashMap::default(), |mut acc, (_, script)| {
+                    *acc.entry(script).or_default() += 1;
+                    acc
+                });
         for (path, script) in &self.scripts {
+            let label = if script_name_counts.get(script).copied().unwrap_or_default() > 1
+                && let Some(parent) = path.parent().and_then(|parent| parent.file_name())
+            {
+                let parent = parent.to_string_lossy();
+                format!("{parent}/package.json > {script}")
+            } else {
+                format!("package.json > {script}")
+            };
             task_templates.0.push(TaskTemplate {
-                label: format!("package.json > {script}",),
+                label,
                 command: TYPESCRIPT_RUNNER_VARIABLE.template_value(),
                 args: vec!["run".to_owned(), script.to_owned()],
                 tags: vec!["package-script".into()],
                 cwd: Some(
                     path.parent()
-                        .unwrap_or(Path::new(""))
+                        .unwrap_or(Path::new("/"))
                         .to_string_lossy()
                         .to_string(),
                 ),
@@ -366,8 +308,8 @@ impl TypeScriptContextProvider {
                         fs.load(&package_json_path).await.with_context(|| {
                             format!("loading package.json from {package_json_path:?}")
                         })?;
-                    let package_json: HashMap<String, serde_json::Value> =
-                        serde_json::from_str(&package_json_string).with_context(|| {
+                    let package_json: HashMap<String, serde_json_lenient::Value> =
+                        serde_json_lenient::from_str(&package_json_string).with_context(|| {
                             format!("parsing package.json from {package_json_path:?}")
                         })?;
                     let new_data =
@@ -551,7 +493,7 @@ impl ContextProvider for TypeScriptContextProvider {
 fn replace_test_name_parameters(test_name: &str) -> String {
     let pattern = regex::Regex::new(r"(%|\$)[0-9a-zA-Z]+").unwrap();
 
-    pattern.replace_all(test_name, "(.+?)").to_string()
+    regex::escape(&pattern.replace_all(test_name, "(.+?)"))
 }
 
 pub struct TypeScriptLspAdapter {
@@ -630,11 +572,15 @@ impl LspAdapter for TypeScriptLspAdapter {
         } else {
             item.label.clone()
         };
-
+        let filter_range = item
+            .filter_text
+            .as_deref()
+            .and_then(|filter| text.find(filter).map(|ix| ix..ix + filter.len()))
+            .unwrap_or(0..len);
         Some(language::CodeLabel {
             text,
             runs: vec![(0..len, highlight_id)],
-            filter_range: 0..len,
+            filter_range,
         })
     }
 
@@ -765,7 +711,7 @@ impl LspAdapter for EsLintLspAdapter {
             },
             "experimental": {
                 "useFlatConfig": use_flat_config,
-            },
+            }
         });
 
         let override_options = cx.update(|cx| {
@@ -815,6 +761,7 @@ mod tests {
     use language::language_settings;
     use project::{FakeFs, Project};
     use serde_json::json;
+    use task::TaskTemplates;
     use unindent::Unindent;
     use util::path;
 
@@ -856,6 +803,62 @@ mod tests {
                 ("let b", 0),
                 ("function getB()", 0),
                 ("const d", 0),
+            ]
+        );
+    }
+
+    #[gpui::test]
+    async fn test_generator_function_outline(cx: &mut TestAppContext) {
+        let language = crate::language("javascript", tree_sitter_typescript::LANGUAGE_TSX.into());
+
+        let text = r#"
+            function normalFunction() {
+                console.log("normal");
+            }
+
+            function* simpleGenerator() {
+                yield 1;
+                yield 2;
+            }
+
+            async function* asyncGenerator() {
+                yield await Promise.resolve(1);
+            }
+
+            function* generatorWithParams(start, end) {
+                for (let i = start; i <= end; i++) {
+                    yield i;
+                }
+            }
+
+            class TestClass {
+                *methodGenerator() {
+                    yield "method";
+                }
+
+                async *asyncMethodGenerator() {
+                    yield "async method";
+                }
+            }
+        "#
+        .unindent();
+
+        let buffer = cx.new(|cx| language::Buffer::local(text, cx).with_language(language, cx));
+        let outline = buffer.read_with(cx, |buffer, _| buffer.snapshot().outline(None).unwrap());
+        assert_eq!(
+            outline
+                .items
+                .iter()
+                .map(|item| (item.text.as_str(), item.depth))
+                .collect::<Vec<_>>(),
+            &[
+                ("function normalFunction()", 0),
+                ("function* simpleGenerator()", 0),
+                ("async function* asyncGenerator()", 0),
+                ("function* generatorWithParams( )", 0),
+                ("class TestClass", 0),
+                ("*methodGenerator()", 1),
+                ("async *asyncMethodGenerator()", 1),
             ]
         );
     }
@@ -935,6 +938,43 @@ mod tests {
                 .collect(),
                 package_manager: None,
             }
+        );
+
+        let mut task_templates = TaskTemplates::default();
+        package_json_data.fill_task_templates(&mut task_templates);
+        let task_templates = task_templates
+            .0
+            .into_iter()
+            .map(|template| (template.label, template.cwd))
+            .collect::<Vec<_>>();
+        pretty_assertions::assert_eq!(
+            task_templates,
+            [
+                (
+                    "vitest file test".into(),
+                    Some("$ZED_CUSTOM_TYPESCRIPT_VITEST_PACKAGE_PATH".into()),
+                ),
+                (
+                    "vitest test $ZED_SYMBOL".into(),
+                    Some("$ZED_CUSTOM_TYPESCRIPT_VITEST_PACKAGE_PATH".into()),
+                ),
+                (
+                    "mocha file test".into(),
+                    Some("$ZED_CUSTOM_TYPESCRIPT_MOCHA_PACKAGE_PATH".into()),
+                ),
+                (
+                    "mocha test $ZED_SYMBOL".into(),
+                    Some("$ZED_CUSTOM_TYPESCRIPT_MOCHA_PACKAGE_PATH".into()),
+                ),
+                (
+                    "root/package.json > test".into(),
+                    Some(path!("/root").into())
+                ),
+                (
+                    "sub/package.json > test".into(),
+                    Some(path!("/root/sub").into())
+                ),
+            ]
         );
     }
 }

@@ -4,6 +4,8 @@ pub mod command;
 pub mod fs;
 pub mod markdown;
 pub mod paths;
+pub mod redact;
+pub mod schemars;
 pub mod serde;
 pub mod shell_env;
 pub mod size;
@@ -213,6 +215,28 @@ where
     items.sort_by(compare);
 }
 
+/// Prevents execution of the application with root privileges on Unix systems.
+///
+/// This function checks if the current process is running with root privileges
+/// and terminates the program with an error message unless explicitly allowed via the
+/// `ZED_ALLOW_ROOT` environment variable.
+#[cfg(unix)]
+pub fn prevent_root_execution() {
+    let is_root = nix::unistd::geteuid().is_root();
+    let allow_root = std::env::var("ZED_ALLOW_ROOT").is_ok_and(|val| val == "true");
+
+    if is_root && !allow_root {
+        eprintln!(
+            "\
+Error: Running Zed as root or via sudo is unsupported.
+       Doing so (even once) may subtly break things for all subsequent non-root usage of Zed.
+       It is untested and not recommended, don't complain when things break.
+       If you wish to proceed anyways, set `ZED_ALLOW_ROOT=true` in your environment."
+        );
+        std::process::exit(1);
+    }
+}
+
 #[cfg(unix)]
 fn load_shell_from_passwd() -> Result<()> {
     let buflen = match unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) } {
@@ -260,6 +284,26 @@ fn load_shell_from_passwd() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(unix)]
+/// Returns a shell escaped path for the current zed executable
+pub fn get_shell_safe_zed_path() -> anyhow::Result<String> {
+    use anyhow::Context;
+
+    let zed_path = std::env::current_exe()
+        .context("Failed to determine current zed executable path.")?
+        .to_string_lossy()
+        .trim_end_matches(" (deleted)") // see https://github.com/rust-lang/rust/issues/69343
+        .to_string();
+
+    // As of writing, this can only be fail if the path contains a null byte, which shouldn't be possible
+    // but shlex has annotated the error as #[non_exhaustive] so we can't make it a compile error if other
+    // errors are introduced in the future :(
+    let zed_path_escaped =
+        shlex::try_quote(&zed_path).context("Failed to shell-escape Zed executable path.")?;
+
+    return Ok(zed_path_escaped.to_string());
 }
 
 #[cfg(unix)]
@@ -821,6 +865,7 @@ mod rng {
 }
 #[cfg(any(test, feature = "test-support"))]
 pub use rng::RandomCharIter;
+
 /// Get an embedded file as a string.
 pub fn asset_str<A: rust_embed::RustEmbed>(path: &str) -> Cow<'static, str> {
     match A::get(path).expect(path).data {

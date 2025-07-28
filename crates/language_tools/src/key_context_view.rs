@@ -13,7 +13,13 @@ use ui::{
 };
 use workspace::{Item, SplitDirection, Workspace};
 
-actions!(dev, [OpenKeyContextView]);
+actions!(
+    dev,
+    [
+        /// Opens the key context view for debugging keybindings.
+        OpenKeyContextView
+    ]
+);
 
 pub fn init(cx: &mut App) {
     cx.observe_new(|workspace: &mut Workspace, _, _| {
@@ -126,14 +132,7 @@ impl KeyContextView {
     }
 
     fn matches(&self, predicate: &KeyBindingContextPredicate) -> bool {
-        let mut stack = self.context_stack.clone();
-        while !stack.is_empty() {
-            if predicate.eval(&stack) {
-                return true;
-            }
-            stack.pop();
-        }
-        false
+        predicate.depth_of(&self.context_stack).is_some()
     }
 
     fn action_matches(&self, a: &Option<Box<dyn Action>>, b: &dyn Action) -> bool {
@@ -154,9 +153,6 @@ impl Item for KeyContextView {
         "Keyboard Context".into()
     }
 
-    fn telemetry_event_text(&self) -> Option<&'static str> {
-        None
-    }
 
     fn clone_on_split(
         &self,

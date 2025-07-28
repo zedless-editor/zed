@@ -7,7 +7,9 @@ pub mod feedback_modal;
 actions!(
     zed,
     [
+        /// Opens the Zed repository on GitHub.
         OpenZedRepo,
+        /// Opens the feature request form.
         RequestFeature,
     ]
 );

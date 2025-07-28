@@ -2,6 +2,7 @@ use std::{
     ops::ControlFlow,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -513,26 +514,6 @@ impl PrettierStore {
 
         let mut new_plugins = plugins.collect::<HashSet<_>>();
 
-        let fs = Arc::clone(&self.fs);
-        let locate_prettier_installation = match worktree.and_then(|worktree_id| {
-            self.worktree_store
-                .read(cx)
-                .worktree_for_id(worktree_id, cx)
-                .map(|worktree| worktree.read(cx).abs_path())
-        }) {
-            Some(locate_from) => {
-                let installed_prettiers = self.prettier_instances.keys().cloned().collect();
-                cx.background_spawn(async move {
-                    Prettier::locate_prettier_installation(
-                        fs.as_ref(),
-                        &installed_prettiers,
-                        locate_from.as_ref(),
-                    )
-                    .await
-                })
-            }
-            None => Task::ready(Ok(ControlFlow::Continue(None))),
-        };
         new_plugins.retain(|plugin| !self.default_prettier.installed_plugins.contains(plugin));
         let mut installation_attempt = 0;
         let previous_installation_task = match &mut self.default_prettier.prettier {
@@ -560,15 +541,34 @@ impl PrettierStore {
             }
         };
 
-        log::info!("Initializing default prettier with plugins {new_plugins:?}");
         let plugins_to_install = new_plugins.clone();
         let fs = Arc::clone(&self.fs);
         let new_installation_task = cx
-            .spawn(async move  |project, cx| {
-                match locate_prettier_installation
+            .spawn(async move  |prettier_store, cx| {
+                cx.background_executor().timer(Duration::from_millis(30)).await;
+                let location_data = prettier_store.update(cx, |prettier_store, cx| {
+                    worktree.and_then(|worktree_id| {
+                        prettier_store.worktree_store
+                            .read(cx)
+                            .worktree_for_id(worktree_id, cx)
+                            .map(|worktree| worktree.read(cx).abs_path())
+                    }).map(|locate_from| {
+                        let installed_prettiers = prettier_store.prettier_instances.keys().cloned().collect();
+                        (locate_from, installed_prettiers)
+                    })
+                })?;
+                let locate_prettier_installation = match location_data {
+                    Some((locate_from, installed_prettiers)) => Prettier::locate_prettier_installation(
+                        fs.as_ref(),
+                        &installed_prettiers,
+                        locate_from.as_ref(),
+                    )
                     .await
-                    .context("locate prettier installation")
-                    .map_err(Arc::new)?
+                    .context("locate prettier installation").map_err(Arc::new)?,
+                    None => ControlFlow::Continue(None),
+                };
+
+                match locate_prettier_installation
                 {
                     ControlFlow::Break(()) => return Ok(()),
                     ControlFlow::Continue(prettier_path) => {
@@ -579,8 +579,8 @@ impl PrettierStore {
                         if let Some(previous_installation_task) = previous_installation_task {
                             if let Err(e) = previous_installation_task.await {
                                 log::error!("Failed to install default prettier: {e:#}");
-                                project.update(cx, |project, _| {
-                                    if let PrettierInstallation::NotInstalled { attempts, not_installed_plugins, .. } = &mut project.default_prettier.prettier {
+                                prettier_store.update(cx, |prettier_store, _| {
+                                    if let PrettierInstallation::NotInstalled { attempts, not_installed_plugins, .. } = &mut prettier_store.default_prettier.prettier {
                                         *attempts += 1;
                                         new_plugins.extend(not_installed_plugins.iter().cloned());
                                         installation_attempt = *attempts;
@@ -590,8 +590,8 @@ impl PrettierStore {
                             }
                         };
                         if installation_attempt > prettier::FAIL_THRESHOLD {
-                            project.update(cx, |project, _| {
-                                if let PrettierInstallation::NotInstalled { installation_task, .. } = &mut project.default_prettier.prettier {
+                            prettier_store.update(cx, |prettier_store, _| {
+                                if let PrettierInstallation::NotInstalled { installation_task, .. } = &mut prettier_store.default_prettier.prettier {
                                     *installation_task = None;
                                 };
                             })?;
@@ -600,30 +600,41 @@ impl PrettierStore {
                             );
                             return Ok(());
                         }
-                        project.update(cx, |project, _| {
+                        prettier_store.update(cx, |prettier_store, _| {
                             new_plugins.retain(|plugin| {
-                                !project.default_prettier.installed_plugins.contains(plugin)
+                                !prettier_store.default_prettier.installed_plugins.contains(plugin)
                             });
-                            if let PrettierInstallation::NotInstalled { not_installed_plugins, .. } = &mut project.default_prettier.prettier {
+                            if let PrettierInstallation::NotInstalled { not_installed_plugins, .. } = &mut prettier_store.default_prettier.prettier {
                                 not_installed_plugins.retain(|plugin| {
-                                    !project.default_prettier.installed_plugins.contains(plugin)
+                                    !prettier_store.default_prettier.installed_plugins.contains(plugin)
                                 });
                                 not_installed_plugins.extend(new_plugins.iter().cloned());
                             }
                             needs_install |= !new_plugins.is_empty();
                         })?;
                         if needs_install {
+                            log::info!("Initializing default prettier with plugins {new_plugins:?}");
                             let installed_plugins = new_plugins.clone();
-                            log::warn!("Missing prettier plugins: {installed_plugins:?}");
-                            project.update(cx, |project, _| {
-                                project.default_prettier.prettier =
+                            log::info!("Initialized default prettier with plugins: {installed_plugins:?}");
+                            prettier_store.update(cx, |prettier_store, _| {
+                                prettier_store.default_prettier.prettier =
                                     PrettierInstallation::Installed(PrettierInstance {
                                         attempt: 0,
                                         prettier: None,
                                     });
-                                project.default_prettier
+                                prettier_store.default_prettier
                                     .installed_plugins
                                     .extend(installed_plugins);
+                            })?;
+                        } else {
+                            prettier_store.update(cx, |prettier_store, _| {
+                                if let PrettierInstallation::NotInstalled { .. } = &mut prettier_store.default_prettier.prettier {
+                                    prettier_store.default_prettier.prettier =
+                                        PrettierInstallation::Installed(PrettierInstance {
+                                            attempt: 0,
+                                            prettier: None,
+                                        });
+                                }
                             })?;
                         }
                     }
@@ -744,6 +755,7 @@ pub(super) async fn format_with_prettier(
     }
 }
 
+#[derive(Debug)]
 pub struct DefaultPrettier {
     prettier: PrettierInstallation,
     installed_plugins: HashSet<Arc<str>>,

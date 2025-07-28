@@ -4,7 +4,6 @@ use fs::Fs;
 use gpui::{AsyncApp, Entity};
 use language::{Buffer, Diff, language_settings::language_settings};
 use lsp::{LanguageServer, LanguageServerId};
-use paths::default_prettier_dir;
 use serde::{Deserialize, Serialize};
 use std::{
     ops::ControlFlow,
@@ -53,9 +52,17 @@ impl Prettier {
         ".prettierrc.toml",
         ".prettierrc.js",
         ".prettierrc.cjs",
+        ".prettierrc.mjs",
+        ".prettierrc.ts",
+        ".prettierrc.cts",
+        ".prettierrc.mts",
         "package.json",
         "prettier.config.js",
         "prettier.config.cjs",
+        "prettier.config.mjs",
+        "prettier.config.ts",
+        "prettier.config.cts",
+        "prettier.config.mts",
         ".editorconfig",
         ".prettierignore",
     ];
@@ -251,7 +258,7 @@ impl Prettier {
     pub async fn start(
         server_id: LanguageServerId,
         prettier_dir: PathBuf,
-        mut cx: AsyncApp,
+        cx: AsyncApp,
     ) -> anyhow::Result<Self> {
         Err(anyhow!("zedless: prettier is disabled"))
     }

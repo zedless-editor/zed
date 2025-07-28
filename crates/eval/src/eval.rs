@@ -7,6 +7,7 @@ mod tool_metrics;
 
 use assertions::{AssertionsReport, display_error_row};
 use instance::{ExampleInstance, JudgeOutput, RunOutput, run_git};
+use language_extension::LspAccess;
 pub(crate) use tool_metrics::*;
 
 use ::fs::RealFs;
@@ -59,7 +60,7 @@ struct Args {
 }
 
 fn main() {
-    dotenv::from_filename(CARGO_MANIFEST_DIR.join(".env")).ok();
+    dotenvy::from_filename(CARGO_MANIFEST_DIR.join(".env")).ok();
 
     env_logger::init();
 
@@ -350,15 +351,19 @@ pub fn init(cx: &mut App) -> Arc<AgentAppState> {
 
     language::init(cx);
     debug_adapter_extension::init(extension_host_proxy.clone(), cx);
-    language_extension::init(extension_host_proxy.clone(), languages.clone());
+    language_extension::init(
+        LspAccess::Noop,
+        extension_host_proxy.clone(),
+        languages.clone(),
+    );
     language_model::init(client.clone(), cx);
-    language_models::init(client.clone(), fs.clone(), cx);
+    language_models::init(client.clone(), cx);
     languages::init(languages.clone(), cx);
     prompt_store::init(cx);
     terminal_view::init(cx);
     let stdout_is_a_pty = false;
     let prompt_builder = PromptBuilder::load(fs.clone(), stdout_is_a_pty, cx);
-    agent::init(
+    agent_ui::init(
         fs.clone(),
         client.clone(),
         prompt_builder.clone(),

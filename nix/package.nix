@@ -78,6 +78,8 @@ in
     postPatch = ''
       substituteInPlace ../${pname}-${version}-vendor/webrtc-sys-*/build.rs \
         --replace-fail "cargo:rustc-link-lib=static=webrtc" "cargo:rustc-link-lib=dylib=webrtc"
+
+      echo stable > crates/zed/RELEASE_CHANNEL
     '';
 
     useFetchCargoVendor = true;

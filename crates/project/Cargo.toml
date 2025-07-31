@@ -19,7 +19,6 @@ test-support = [
     "language/test-support",
     "settings/test-support",
     "text/test-support",
-    "prettier/test-support",
     "worktree/test-support",
     "gpui/test-support",
     "dap/test-support",
@@ -60,7 +59,6 @@ parking_lot.workspace = true
 pathdiff.workspace = true
 paths.workspace = true
 postage.workspace = true
-prettier.workspace = true
 rand.workspace = true
 regex.workspace = true
 remote.workspace = true
@@ -102,7 +100,6 @@ git2.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
 language = { workspace = true, features = ["test-support"] }
 lsp = { workspace = true, features = ["test-support"] }
-prettier = { workspace = true, features = ["test-support"] }
 pretty_assertions.workspace = true
 release_channel.workspace = true
 rpc = { workspace = true, features = ["test-support"] }

@@ -222,15 +222,15 @@ in
         install -Dm755 $release_target/zed $out/libexec/zed-editor
         install -Dm755 $release_target/cli $out/bin/zeditor
 
-        install -Dm644 ${src}/crates/zed/resources/app-icon@2x.png $out/share/icons/hicolor/1024x1024@2x/apps/zed.png
-        install -Dm644 ${src}/crates/zed/resources/app-icon.png $out/share/icons/hicolor/512x512/apps/zed.png
+        install -Dm644 ${src}/crates/zed/resources/app-icon@2x.png $out/share/icons/hicolor/1024x1024/apps/zedless.png
+        install -Dm644 ${src}/crates/zed/resources/app-icon.png $out/share/icons/hicolor/512x512/apps/zedless.png
 
         # extracted from https://github.com/zed-industries/zed/blob/v0.141.2/script/bundle-linux (envsubst)
         # and https://github.com/zed-industries/zed/blob/v0.141.2/script/install.sh (final desktop file name)
         (
           export DO_STARTUP_NOTIFY="true"
           export APP_CLI="zeditor"
-          export APP_ICON="zed"
+          export APP_ICON="zedless"
           export APP_NAME="Zedless"
           export APP_ARGS="%U"
           mkdir -p "$out/share/applications"

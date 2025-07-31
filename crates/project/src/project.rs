@@ -9,7 +9,6 @@ pub mod image_store;
 pub mod lsp_command;
 pub mod lsp_store;
 mod manifest_tree;
-pub mod prettier_store;
 pub mod project_settings;
 pub mod search;
 mod task_inventory;
@@ -87,7 +86,6 @@ use lsp_command::*;
 use lsp_store::{CompletionDocumentation, LspFormatTarget, OpenLspBufferHandle};
 pub use manifest_tree::ManifestProviders;
 use parking_lot::Mutex;
-pub use prettier_store::PrettierStore;
 use project_settings::{ProjectSettings, SettingsObserver, SettingsObserverEvent};
 use remote::{SshConnectionOptions, SshRemoteClient};
 use rpc::{
@@ -128,7 +126,6 @@ use worktree_store::{WorktreeStore, WorktreeStoreEvent};
 pub use fs::*;
 pub use language::Location;
 #[cfg(any(test, feature = "test-support"))]
-pub use prettier::FORMAT_SUFFIX as TEST_PRETTIER_FORMAT_SUFFIX;
 pub use task_inventory::{
     BasicContextProvider, ContextProviderWithTasks, DebugScenarioContext, Inventory, TaskContexts,
     TaskSourceKind,
@@ -1034,15 +1031,6 @@ impl Project {
             cx.subscribe(&image_store, Self::on_image_store_event)
                 .detach();
 
-            let prettier_store = cx.new(|cx| {
-                PrettierStore::new(
-                    fs.clone(),
-                    languages.clone(),
-                    worktree_store.clone(),
-                    cx,
-                )
-            });
-
             let task_store = cx.new(|cx| {
                 TaskStore::local(
                     fs.clone(),
@@ -1069,7 +1057,6 @@ impl Project {
                 LspStore::new_local(
                     buffer_store.clone(),
                     worktree_store.clone(),
-                    prettier_store.clone(),
                     toolchain_store.clone(),
                     environment.clone(),
                     manifest_tree,
@@ -1647,7 +1634,6 @@ impl Project {
         root_paths: impl IntoIterator<Item = &Path>,
         cx: &mut AsyncApp,
     ) -> Entity<Project> {
-
         let fs = Arc::new(RealFs::new(None, cx.background_executor().clone()));
         let languages = LanguageRegistry::test(cx.background_executor().clone());
         let http_client = http_client::FakeHttpClient::with_404_response();
@@ -1656,16 +1642,7 @@ impl Project {
             .unwrap();
         let user_store = cx.new(|cx| UserStore::new(client.clone(), cx)).unwrap();
         let project = cx
-            .update(|cx| {
-                Project::local(
-                    client,
-                    user_store,
-                    Arc::new(languages),
-                    fs,
-                    None,
-                    cx,
-                )
-            })
+            .update(|cx| Project::local(client, user_store, Arc::new(languages), fs, None, cx))
             .unwrap();
         for path in root_paths {
             let (tree, _) = project
@@ -1688,21 +1665,12 @@ impl Project {
         root_paths: impl IntoIterator<Item = &Path>,
         cx: &mut gpui::TestAppContext,
     ) -> Entity<Project> {
-
         let languages = LanguageRegistry::test(cx.executor());
         let http_client = http_client::FakeHttpClient::with_404_response();
         let client = cx.update(|cx| client::Client::new(http_client.clone(), cx));
         let user_store = cx.new(|cx| UserStore::new(client.clone(), cx));
-        let project = cx.update(|cx| {
-            Project::local(
-                client,
-                user_store,
-                Arc::new(languages),
-                fs,
-                None,
-                cx,
-            )
-        });
+        let project =
+            cx.update(|cx| Project::local(client, user_store, Arc::new(languages), fs, None, cx));
         for path in root_paths {
             let (tree, _) = project
                 .update(cx, |project, cx| {

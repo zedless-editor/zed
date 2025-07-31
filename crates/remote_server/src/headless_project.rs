@@ -8,8 +8,8 @@ use gpui::{App, AppContext as _, AsyncApp, Context, Entity, PromptLevel};
 use http_client::HttpClient;
 use language::{Buffer, BufferEvent, LanguageRegistry, proto::serialize_operation};
 use project::{
-    LspStore, LspStoreEvent, ManifestTree, PrettierStore, ProjectEnvironment, ProjectPath,
-    ToolchainStore, WorktreeId,
+    LspStore, LspStoreEvent, ManifestTree, ProjectEnvironment, ProjectPath, ToolchainStore,
+    WorktreeId,
     buffer_store::{BufferStore, BufferStoreEvent},
     debugger::{breakpoint_store::BreakpointStore, dap_store::DapStore},
     git_store::GitStore,
@@ -129,15 +129,6 @@ impl HeadlessProject {
             store
         });
 
-        let prettier_store = cx.new(|cx| {
-            PrettierStore::new(
-                fs.clone(),
-                languages.clone(),
-                worktree_store.clone(),
-                cx,
-            )
-        });
-
         let task_store = cx.new(|cx| {
             let mut task_store = TaskStore::local(
                 fs.clone(),
@@ -165,7 +156,6 @@ impl HeadlessProject {
             let mut lsp_store = LspStore::new_local(
                 buffer_store.clone(),
                 worktree_store.clone(),
-                prettier_store.clone(),
                 toolchain_store.clone(),
                 environment,
                 manifest_tree,

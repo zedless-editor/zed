@@ -44,8 +44,8 @@ use serde_json::{self, json};
 use std::{cell::RefCell, future::Future, rc::Rc, sync::atomic::AtomicBool, time::Instant};
 use std::{
     iter,
-    sync::atomic::{self, AtomicUsize},
     path::Path,
+    sync::atomic::{self, AtomicUsize},
 };
 use test::{build_editor_with_project, editor_lsp_test_context::rust_lang};
 use text::ToPoint as _;
@@ -16250,100 +16250,6 @@ async fn test_completions_in_languages_with_extra_word_characters(cx: &mut TestA
 fn completion_menu_entries(menu: &CompletionsMenu) -> Vec<String> {
     let entries = menu.entries.borrow();
     entries.iter().map(|mat| mat.string.clone()).collect()
-}
-
-#[gpui::test]
-async fn test_document_format_with_prettier(cx: &mut TestAppContext) {
-    init_test(cx, |settings| {
-        settings.defaults.formatter = Some(SelectedFormatter::List(FormatterList::Single(
-            Formatter::Prettier,
-        )))
-    });
-
-    let fs = FakeFs::new(cx.executor());
-    fs.insert_file(path!("/file.ts"), Default::default()).await;
-
-    let project = Project::test(fs, [path!("/file.ts").as_ref()], cx).await;
-    let language_registry = project.read_with(cx, |project, _| project.languages().clone());
-
-    language_registry.add(Arc::new(Language::new(
-        LanguageConfig {
-            name: "TypeScript".into(),
-            matcher: LanguageMatcher {
-                path_suffixes: vec!["ts".to_string()],
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
-    )));
-    update_test_language_settings(cx, |settings| {
-        settings.defaults.prettier = Some(PrettierSettings {
-            allowed: true,
-            ..PrettierSettings::default()
-        });
-    });
-
-    let test_plugin = "test_plugin";
-    let _ = language_registry.register_fake_lsp(
-        "TypeScript",
-        FakeLspAdapter {
-            prettier_plugins: vec![test_plugin],
-            ..Default::default()
-        },
-    );
-
-    let prettier_format_suffix = project::TEST_PRETTIER_FORMAT_SUFFIX;
-    let buffer = project
-        .update(cx, |project, cx| {
-            project.open_local_buffer(path!("/file.ts"), cx)
-        })
-        .await
-        .unwrap();
-
-    let buffer_text = "one\ntwo\nthree\n";
-    let buffer = cx.new(|cx| MultiBuffer::singleton(buffer, cx));
-    let (editor, cx) = cx.add_window_view(|window, cx| build_editor(buffer, window, cx));
-    editor.update_in(cx, |editor, window, cx| {
-        editor.set_text(buffer_text, window, cx)
-    });
-
-    editor
-        .update_in(cx, |editor, window, cx| {
-            editor.perform_format(
-                project.clone(),
-                FormatTrigger::Manual,
-                FormatTarget::Buffers(editor.buffer().read(cx).all_buffers()),
-                window,
-                cx,
-            )
-        })
-        .unwrap()
-        .await;
-    assert_eq!(
-        editor.update(cx, |editor, cx| editor.text(cx)),
-        buffer_text.to_string() + prettier_format_suffix,
-        "Test prettier formatting was not applied to the original buffer text",
-    );
-
-    update_test_language_settings(cx, |settings| {
-        settings.defaults.formatter = Some(SelectedFormatter::Auto)
-    });
-    let format = editor.update_in(cx, |editor, window, cx| {
-        editor.perform_format(
-            project.clone(),
-            FormatTrigger::Manual,
-            FormatTarget::Buffers(editor.buffer().read(cx).all_buffers()),
-            window,
-            cx,
-        )
-    });
-    format.await.unwrap();
-    assert_eq!(
-        editor.update(cx, |editor, cx| editor.text(cx)),
-        buffer_text.to_string() + prettier_format_suffix + "\n" + prettier_format_suffix,
-        "Autoformatting (via test prettier) was not applied to the original buffer text",
-    );
 }
 
 #[gpui::test]

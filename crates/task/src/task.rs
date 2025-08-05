@@ -2,6 +2,7 @@
 
 mod adapter_schema;
 mod debug_format;
+mod just_format;
 mod serde_helpers;
 mod shell_builder;
 pub mod static_source;
@@ -22,6 +23,7 @@ pub use debug_format::{
     AttachRequest, BuildTaskDefinition, DebugRequest, DebugScenario, DebugTaskFile, LaunchRequest,
     Request, TcpArgumentsTemplate, ZedDebugConfig,
 };
+pub use just_format::JustTaskDump;
 pub use shell_builder::{DEFAULT_REMOTE_SHELL, ShellBuilder};
 pub use task_template::{
     DebugArgsRequest, HideStrategy, RevealStrategy, TaskTemplate, TaskTemplates,

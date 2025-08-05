@@ -7,9 +7,9 @@ use futures::StreamExt as _;
 use gpui::{App, AsyncApp, BorrowAppContext, Context, Entity, EventEmitter, Task};
 use lsp::LanguageServerName;
 use paths::{
-    EDITORCONFIG_NAME, local_debug_file_relative_path, local_settings_file_relative_path,
-    local_tasks_file_relative_path, local_vscode_launch_file_relative_path,
-    local_vscode_tasks_file_relative_path, task_file_name,
+    EDITORCONFIG_NAME, justfile_file_name, local_debug_file_relative_path,
+    local_settings_file_relative_path, local_tasks_file_relative_path,
+    local_vscode_launch_file_relative_path, local_vscode_tasks_file_relative_path, task_file_name,
 };
 use rpc::{
     AnyProtoClient, TypedEnvelope,
@@ -26,7 +26,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use task::{DebugTaskFile, TaskTemplates, VsCodeDebugTaskFile, VsCodeTaskFile};
+use task::{DebugTaskFile, JustTaskDump, TaskTemplates, VsCodeDebugTaskFile, VsCodeTaskFile};
 use util::{ResultExt, serde::default_true};
 use worktree::{PathChange, UpdatedEntriesSet, Worktree, WorktreeId};
 
@@ -841,6 +841,11 @@ impl SettingsObserver {
                         .unwrap(),
                 );
                 (settings_dir, LocalSettingsKind::Tasks)
+            } else if path.ends_with(justfile_file_name()) {
+                let Some(settings_dir) = path.parent().map(Arc::from) else {
+                    continue;
+                };
+                (settings_dir, LocalSettingsKind::Tasks)
             } else if path.ends_with(local_debug_file_relative_path()) {
                 let settings_dir = Arc::<Path>::from(
                     path.ancestors()
@@ -922,6 +927,33 @@ impl SettingsObserver {
                                         "converting VSCode debug tasks into Zed ones, file {abs_path:?}"
                                     )
                                         })?;
+                                    serde_json::to_string(&zed_tasks).with_context(|| {
+                                        format!(
+                                            "serializing Zed tasks into JSON, file {abs_path:?}"
+                                        )
+                                    })
+                                } else if abs_path.ends_with(justfile_file_name()) {
+                                    let just_path = which::which("just")?;
+
+                                    let path_str = abs_path.to_str()
+                                        .context("getting absolute path, file {abs_path:?}")?;
+
+                                    let just_json_dump = std::process::Command::new(just_path)
+                                        .args(["-f", path_str, "--dump", "--dump-format=json"])
+                                        .output()
+                                        .and_then(|out| String::from_utf8(out.stdout).map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)))
+                                        .context("reading Just tasks from justfile {abs_path:?}")?;
+
+                                    let just_tasks = parse_json_with_comments::<JustTaskDump>(&just_json_dump)
+                                        .with_context(|| {
+                                            format!("parsing Just tasks, file {abs_path:?}")
+                                        })?;
+
+                                    let zed_tasks = TaskTemplates::try_from(just_tasks)
+                                        .with_context(|| {
+                                            format!("converting Just tasks into Zed ones, file {abs_path:?}")
+                                        })?;
+
                                     serde_json::to_string(&zed_tasks).with_context(|| {
                                         format!(
                                             "serializing Zed tasks into JSON, file {abs_path:?}"

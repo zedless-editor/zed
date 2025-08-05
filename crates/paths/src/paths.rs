@@ -417,6 +417,10 @@ pub fn task_file_name() -> &'static str {
     "tasks.json"
 }
 
+pub fn justfile_file_name() -> &'static str {
+    "justfile"
+}
+
 /// Returns the relative path to a `debug.json` file within a project.
 /// .zed/debug.json
 pub fn local_debug_file_relative_path() -> &'static Path {

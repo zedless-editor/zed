@@ -76,14 +76,16 @@ in
 
     # Dynamically link WebRTC instead of static
     postPatch = ''
-      substituteInPlace ../${pname}-${version}-vendor/webrtc-sys-*/build.rs \
+      substituteInPlace ../cargo-vendor-dir/webrtc-sys-*/build.rs \
         --replace-fail "cargo:rustc-link-lib=static=webrtc" "cargo:rustc-link-lib=dylib=webrtc"
 
       echo stable > crates/zed/RELEASE_CHANNEL
     '';
 
-    useFetchCargoVendor = true;
-    cargoHash = "sha256-oLH0SzXrrvfZj0CdcPGXtRil75HFiHiSYan1/+9yODs=";
+    cargoDeps = rustPlatform.importCargoLock {
+      lockFile = ../Cargo.lock;
+      outputHashes = import ./cargo-hashes.nix;
+    };
 
     nativeBuildInputs =
       [

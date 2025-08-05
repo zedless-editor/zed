@@ -100,6 +100,7 @@ use util::{
     paths::{PathExt, SanitizedPath},
     post_inc,
 };
+use zedless::SilentError;
 
 pub use fs::*;
 pub use language::Location;
@@ -250,6 +251,7 @@ impl LocalLspStore {
                     pending_workspace_folders,
                     cx,
                 )
+                .map_err(SilentError::from)
             }
         });
 
@@ -267,8 +269,9 @@ impl LocalLspStore {
                 .enabled;
             cx.spawn(async move |cx| {
                 let result = async {
-                    let toolchains =
-                        lsp_store.update(cx, |lsp_store, cx| lsp_store.toolchain_store(cx))?;
+                    let toolchains = lsp_store
+                        .update(cx, |lsp_store, cx| lsp_store.toolchain_store(cx))
+                        .map_err(SilentError::from)?;
                     let language_server = pending_server.await?;
 
                     let workspace_config = Self::workspace_configuration_for_adapter(
@@ -278,14 +281,16 @@ impl LocalLspStore {
                         toolchains.clone(),
                         cx,
                     )
-                    .await?;
+                    .await
+                    .map_err(SilentError::from)?;
 
                     let mut initialization_options = Self::initialization_options_for_adapter(
                         adapter.adapter.clone(),
                         fs.as_ref(),
                         &delegate,
                     )
-                    .await?;
+                    .await
+                    .map_err(SilentError::from)?;
 
                     match (&mut initialization_options, override_options) {
                         (Some(initialization_options), Some(override_options)) => {
@@ -295,12 +300,14 @@ impl LocalLspStore {
                         _ => {}
                     }
 
-                    let initialization_params = cx.update(|cx| {
-                        let mut params =
-                            language_server.default_initialize_params(pull_diagnostics, cx);
-                        params.initialization_options = initialization_options;
-                        adapter.adapter.prepare_initialize_params(params, cx)
-                    })??;
+                    let initialization_params = cx
+                        .update(|cx| {
+                            let mut params =
+                                language_server.default_initialize_params(pull_diagnostics, cx);
+                            params.initialization_options = initialization_options;
+                            adapter.adapter.prepare_initialize_params(params, cx)
+                        })?
+                        .map_err(SilentError::from)?;
 
                     Self::setup_lsp_messages(
                         lsp_store.clone(),
@@ -332,7 +339,8 @@ impl LocalLspStore {
                                     })
                                     .ok();
                             }
-                        })?;
+                        })
+                        .map_err(SilentError::from)?;
 
                     language_server
                         .notify::<lsp::notification::DidChangeConfiguration>(
@@ -340,7 +348,7 @@ impl LocalLspStore {
                         )
                         .ok();
 
-                    anyhow::Ok(language_server)
+                    anyhow::Ok(language_server).map_err(SilentError::from)
                 }
                 .await;
 
@@ -362,7 +370,12 @@ impl LocalLspStore {
                         Some(server)
                     }
 
-                    Err(err) => {
+                    Err(SilentError::Silent) => {
+                        delegate.update_status(adapter.name(), BinaryStatus::Stopped);
+                        None
+                    }
+
+                    Err(SilentError::Error { error: err }) => {
                         let log = stderr_capture.lock().take().unwrap_or_default();
                         delegate.update_status(
                             adapter.name(),
@@ -401,7 +414,7 @@ impl LocalLspStore {
         delegate: Arc<dyn LspAdapterDelegate>,
         _allow_binary_download: bool,
         cx: &mut App,
-    ) -> Task<Result<LanguageServerBinary>> {
+    ) -> Task<Result<LanguageServerBinary, SilentError>> {
         let settings = ProjectSettings::get(
             Some(SettingsLocation {
                 worktree_id: delegate.worktree_id(),

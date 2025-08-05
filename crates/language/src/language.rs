@@ -69,6 +69,7 @@ use theme::SyntaxTheme;
 pub use toolchain::{LanguageToolchainStore, Toolchain, ToolchainList, ToolchainLister};
 use tree_sitter::{self, Query, QueryCursor, WasmStore, wasmtime};
 use util::serde::default_true;
+use zedless::SilentError;
 
 pub use buffer::Operation;
 pub use buffer::*;
@@ -214,7 +215,7 @@ impl CachedLspAdapter {
         toolchains: Arc<dyn LanguageToolchainStore>,
         binary_options: LanguageServerBinaryOptions,
         cx: &mut AsyncApp,
-    ) -> Result<LanguageServerBinary> {
+    ) -> Result<LanguageServerBinary, SilentError> {
         self.adapter
             .clone()
             .get_language_server_command(delegate, toolchains, binary_options, cx)
@@ -336,7 +337,7 @@ pub trait LspAdapter: 'static + Send + Sync {
         toolchains: Arc<dyn LanguageToolchainStore>,
         binary_options: LanguageServerBinaryOptions,
         cx: &'a mut AsyncApp,
-    ) -> Pin<Box<dyn 'a + Future<Output = Result<LanguageServerBinary>>>> {
+    ) -> Pin<Box<dyn 'a + Future<Output = Result<LanguageServerBinary, SilentError>>>> {
         async move {
             // First we check whether the adapter can give us a user-installed binary.
             // If so, we do *not* want to cache that, because each worktree might give us a different
@@ -350,7 +351,10 @@ pub trait LspAdapter: 'static + Send + Sync {
             // because we don't want to download and overwrite our global one
             // for each worktree we might have open.
             if binary_options.allow_path_lookup {
-                if let Some(binary) = self.check_if_user_installed(delegate.as_ref(), toolchains, cx).await {
+                if let Some(binary) = self
+                    .check_if_user_installed(delegate.as_ref(), toolchains, cx)
+                    .await
+                {
                     log::info!(
                         "found user-installed language server for {}. path: {:?}, arguments: {:?}",
                         self.name().0,
@@ -361,7 +365,7 @@ pub trait LspAdapter: 'static + Send + Sync {
                 }
             }
 
-            Err(anyhow::anyhow!("zedless: downloading language servers disabled"))
+            Err(SilentError::Silent)
         }
         .boxed_local()
     }
@@ -2121,7 +2125,7 @@ impl LspAdapter for FakeLspAdapter {
         _: Arc<dyn LanguageToolchainStore>,
         _: LanguageServerBinaryOptions,
         _: &'a mut AsyncApp,
-    ) -> Pin<Box<dyn 'a + Future<Output = Result<LanguageServerBinary>>>> {
+    ) -> Pin<Box<dyn 'a + Future<Output = Result<LanguageServerBinary, SilentError>>>> {
         async move { Ok(self.language_server_binary.clone()) }.boxed_local()
     }
 

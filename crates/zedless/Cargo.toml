@@ -12,4 +12,5 @@ workspace = true
 path = "src/zedless.rs"
 
 [dependencies]
+anyhow.workspace = true
 workspace-hack.workspace = true

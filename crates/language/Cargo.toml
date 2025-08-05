@@ -69,6 +69,7 @@ unicase = "2.6"
 util.workspace = true
 watch.workspace = true
 workspace-hack.workspace = true
+zedless.workspace = true
 diffy = "0.4.2"
 
 [dev-dependencies]

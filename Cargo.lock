@@ -8834,6 +8834,7 @@ dependencies = [
  "util",
  "watch",
  "workspace-hack",
+ "zedless",
  "zlog",
 ]
 
@@ -8855,6 +8856,7 @@ dependencies = [
  "serde_json",
  "util",
  "workspace-hack",
+ "zedless",
 ]
 
 [[package]]
@@ -12206,6 +12208,7 @@ dependencies = [
  "which 6.0.3",
  "workspace-hack",
  "worktree",
+ "zedless",
  "zlog",
 ]
 
@@ -20051,6 +20054,7 @@ dependencies = [
 name = "zedless"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "workspace-hack",
 ]
 

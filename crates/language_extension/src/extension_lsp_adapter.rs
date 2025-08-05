@@ -21,6 +21,7 @@ use lsp::{
 use serde::Serialize;
 use serde_json::Value;
 use util::{ResultExt, fs::make_file_executable, maybe};
+use zedless::SilentError;
 
 use crate::{LanguageServerRegistryProxy, LspAccess};
 
@@ -161,7 +162,7 @@ impl LspAdapter for ExtensionLspAdapter {
         _: Arc<dyn LanguageToolchainStore>,
         _: LanguageServerBinaryOptions,
         _: &'a mut AsyncApp,
-    ) -> Pin<Box<dyn 'a + Future<Output = Result<LanguageServerBinary>>>> {
+    ) -> Pin<Box<dyn 'a + Future<Output = Result<LanguageServerBinary, SilentError>>>> {
         async move {
             let delegate = Arc::new(WorktreeDelegateAdapter(delegate.clone())) as _;
             let command = self

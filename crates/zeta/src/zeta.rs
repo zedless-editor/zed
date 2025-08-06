@@ -1,16 +1,10 @@
 mod completion_diff_element;
 mod init;
 mod input_excerpt;
-mod license_detection;
-mod rate_completion_modal;
 
 pub(crate) use completion_diff_element::*;
 use db::kvp::{Dismissable, KEY_VALUE_STORE};
 pub use init::*;
-use inline_completion::DataCollectionState;
-use license_detection::LICENSE_FILES_TO_CHECK;
-pub use license_detection::is_license_eligible_for_data_collection;
-pub use rate_completion_modal::*;
 
 use anyhow::{Context as _, Result, anyhow};
 use arrayvec::ArrayVec;
@@ -30,7 +24,8 @@ use language_model::{LlmApiToken, RefreshLlmTokenListener};
 use postage::watch;
 use project::Project;
 use release_channel::AppVersion;
-use settings::WorktreeId;
+use settings::{Settings, WorktreeId};
+use zedless_settings::ZedlessSettings;
 use std::str::FromStr;
 use std::{
     borrow::Cow,
@@ -114,13 +109,6 @@ impl Dismissable for ZedPredictUpsell {
             .read_kvp(Self::KEY)
             .log_err()
             .map_or(false, |s| s.is_some())
-    }
-}
-
-pub fn should_show_upsell_modal(user_store: &Entity<UserStore>, cx: &App) -> bool {
-    match user_store.read(cx).current_user_has_accepted_terms() {
-        Some(true) => !ZedPredictUpsell::dismissed(),
-        Some(false) | None => true,
     }
 }
 
@@ -217,17 +205,7 @@ pub struct Zeta {
     events: VecDeque<Event>,
     registered_buffers: HashMap<gpui::EntityId, RegisteredBuffer>,
     shown_completions: VecDeque<InlineCompletion>,
-    rated_completions: HashSet<InlineCompletionId>,
-    data_collection_choice: Entity<DataCollectionChoice>,
-    llm_token: LlmApiToken,
-    _llm_token_subscription: Subscription,
-    /// Whether the terms of service have been accepted.
-    tos_accepted: bool,
-    /// Whether an update to a newer version of Zed is required to continue using Zeta.
-    update_required: bool,
     user_store: Entity<UserStore>,
-    _user_store_subscription: Subscription,
-    license_detection_watchers: HashMap<WorktreeId, Rc<LicenseDetectionWatcher>>,
 }
 
 impl Zeta {
@@ -248,16 +226,6 @@ impl Zeta {
             entity
         });
 
-        this.update(cx, move |this, cx| {
-            if let Some(worktree) = worktree {
-                worktree.update(cx, |worktree, cx| {
-                    this.license_detection_watchers
-                        .entry(worktree.id())
-                        .or_insert_with(|| Rc::new(LicenseDetectionWatcher::new(worktree, cx)));
-                });
-            }
-        });
-
         this
     }
 
@@ -275,49 +243,12 @@ impl Zeta {
         user_store: Entity<UserStore>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let refresh_llm_token_listener = RefreshLlmTokenListener::global(cx);
-
-        let data_collection_choice = Self::load_data_collection_choices();
-        let data_collection_choice = cx.new(|_| data_collection_choice);
-
         Self {
             workspace,
             client,
             events: VecDeque::new(),
             shown_completions: VecDeque::new(),
-            rated_completions: HashSet::default(),
             registered_buffers: HashMap::default(),
-            data_collection_choice,
-            llm_token: LlmApiToken::default(),
-            _llm_token_subscription: cx.subscribe(
-                &refresh_llm_token_listener,
-                |this, _listener, _event, cx| {
-                    let client = this.client.clone();
-                    let llm_token = this.llm_token.clone();
-                    cx.spawn(async move |_this, _cx| {
-                        llm_token.refresh(&client).await?;
-                        anyhow::Ok(())
-                    })
-                    .detach_and_log_err(cx);
-                },
-            ),
-            tos_accepted: user_store
-                .read(cx)
-                .current_user_has_accepted_terms()
-                .unwrap_or(false),
-            update_required: false,
-            _user_store_subscription: cx.subscribe(&user_store, |this, user_store, event, cx| {
-                match event {
-                    client::user::Event::PrivateUserInfoUpdated => {
-                        this.tos_accepted = user_store
-                            .read(cx)
-                            .current_user_has_accepted_terms()
-                            .unwrap_or(false);
-                    }
-                    _ => {}
-                }
-            }),
-            license_detection_watchers: HashMap::default(),
             user_store,
         }
     }
@@ -393,7 +324,6 @@ impl Zeta {
         project: Option<&Entity<Project>>,
         buffer: &Entity<Buffer>,
         cursor: language::Anchor,
-        can_collect_data: bool,
         cx: &mut Context<Self>,
         perform_predict_edits: F,
     ) -> Task<Result<Option<InlineCompletion>>>
@@ -413,9 +343,7 @@ impl Zeta {
             .map(|f| Arc::from(f.full_path(cx).as_path()))
             .unwrap_or_else(|| Arc::from(Path::new("untitled")));
 
-        let zeta = cx.entity();
         let client = self.client.clone();
-        let llm_token = self.llm_token.clone();
         let app_version = AppVersion::global(cx);
 
         let buffer = buffer.clone();
@@ -441,7 +369,11 @@ impl Zeta {
             None
         };
 
+        let server_url = ZedlessSettings::get_global(cx).zeta_url.clone().context("Zeta server URL not configured");
+
         cx.spawn(async move |this, cx| {
+            let server_url = server_url?;
+
             let request_sent_at = Instant::now();
 
             struct BackgroundValues {
@@ -490,7 +422,7 @@ impl Zeta {
                 input_excerpt: values.input_excerpt.clone(),
                 speculated_output: Some(values.speculated_output),
                 outline: Some(values.input_outline.clone()),
-                can_collect_data,
+                can_collect_data: false,
                 diagnostic_groups: diagnostic_groups.and_then(|diagnostic_groups| {
                     diagnostic_groups
                         .into_iter()
@@ -504,7 +436,7 @@ impl Zeta {
 
             let response = perform_predict_edits(PerformPredictEditsParams {
                 client,
-                llm_token,
+                server_url,
                 app_version,
                 body,
             })
@@ -512,33 +444,6 @@ impl Zeta {
             let (response, usage) = match response {
                 Ok(response) => response,
                 Err(err) => {
-                    if err.is::<ZedUpdateRequiredError>() {
-                        cx.update(|cx| {
-                            zeta.update(cx, |zeta, _cx| {
-                                zeta.update_required = true;
-                            });
-
-                            if let Some(workspace) = workspace {
-                                workspace.update(cx, |workspace, cx| {
-                                    workspace.show_notification(
-                                        NotificationId::unique::<ZedUpdateRequiredError>(),
-                                        cx,
-                                        |cx| {
-                                            cx.new(|cx| {
-                                                ErrorMessagePrompt::new(err.to_string(), cx)
-                                                    .with_link_button(
-                                                        "Update Zed",
-                                                        "https://zed.dev/releases",
-                                                    )
-                                            })
-                                        },
-                                    );
-                                });
-                            }
-                        })
-                        .ok();
-                    }
-
                     return Err(err);
                 }
             };
@@ -734,7 +639,7 @@ and then another
     ) -> Task<Result<Option<InlineCompletion>>> {
         use std::future::ready;
 
-        self.request_completion_impl(None, project, buffer, position, false, cx, |_params| {
+        self.request_completion_impl(None, project, buffer, position, cx, |_params| {
             ready(Ok((response, None)))
         })
     }
@@ -744,7 +649,6 @@ and then another
         project: Option<&Entity<Project>>,
         buffer: &Entity<Buffer>,
         position: language::Anchor,
-        can_collect_data: bool,
         cx: &mut Context<Self>,
     ) -> Task<Result<Option<InlineCompletion>>> {
         let workspace = self
@@ -756,7 +660,6 @@ and then another
             project,
             buffer,
             position,
-            can_collect_data,
             cx,
             Self::perform_predict_edits,
         )
@@ -768,48 +671,25 @@ and then another
         async move {
             let PerformPredictEditsParams {
                 client,
-                llm_token,
+                server_url,
                 app_version,
                 body,
                 ..
             } = params;
 
             let http_client = client.http_client();
-            let mut token = llm_token.acquire(&client).await?;
             let mut did_retry = false;
 
             loop {
                 let request_builder = http_client::Request::builder().method(Method::POST);
                 let request_builder =
-                    if let Ok(predict_edits_url) = std::env::var("ZED_PREDICT_EDITS_URL") {
-                        request_builder.uri(predict_edits_url)
-                    } else {
-                        request_builder.uri(
-                            http_client
-                                .build_zed_llm_url("/predict_edits/v2", &[])?
-                                .as_ref(),
-                        )
-                    };
+                    request_builder.uri(server_url.clone());
                 let request = request_builder
                     .header("Content-Type", "application/json")
-                    .header("Authorization", format!("Bearer {}", token))
                     .header(ZED_VERSION_HEADER_NAME, app_version.to_string())
                     .body(serde_json::to_string(&body)?.into())?;
 
                 let mut response = http_client.send(request).await?;
-
-                if let Some(minimum_required_version) = response
-                    .headers()
-                    .get(MINIMUM_REQUIRED_VERSION_HEADER_NAME)
-                    .and_then(|version| SemanticVersion::from_str(version.to_str().ok()?).ok())
-                {
-                    anyhow::ensure!(
-                        app_version >= minimum_required_version,
-                        ZedUpdateRequiredError {
-                            minimum_version: minimum_required_version
-                        }
-                    );
-                }
 
                 if response.status().is_success() {
                     let usage = EditPredictionUsage::from_headers(response.headers()).ok();
@@ -824,7 +704,6 @@ and then another
                         .is_some()
                 {
                     did_retry = true;
-                    token = llm_token.refresh(&client).await?;
                 } else {
                     let mut body = String::new();
                     response.body_mut().read_to_string(&mut body).await?;
@@ -836,75 +715,6 @@ and then another
                 }
             }
         }
-    }
-
-    fn accept_edit_prediction(
-        &mut self,
-        request_id: InlineCompletionId,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<()>> {
-        let client = self.client.clone();
-        let llm_token = self.llm_token.clone();
-        let app_version = AppVersion::global(cx);
-        cx.spawn(async move |this, cx| {
-            let http_client = client.http_client();
-            let mut response = llm_token_retry(&llm_token, &client, |token| {
-                let request_builder = http_client::Request::builder().method(Method::POST);
-                let request_builder =
-                    if let Ok(accept_prediction_url) = std::env::var("ZED_ACCEPT_PREDICTION_URL") {
-                        request_builder.uri(accept_prediction_url)
-                    } else {
-                        request_builder.uri(
-                            http_client
-                                .build_zed_llm_url("/predict_edits/accept", &[])?
-                                .as_ref(),
-                        )
-                    };
-                Ok(request_builder
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", format!("Bearer {}", token))
-                    .header(ZED_VERSION_HEADER_NAME, app_version.to_string())
-                    .body(
-                        serde_json::to_string(&AcceptEditPredictionBody {
-                            request_id: request_id.0,
-                        })?
-                        .into(),
-                    )?)
-            })
-            .await?;
-
-            if let Some(minimum_required_version) = response
-                .headers()
-                .get(MINIMUM_REQUIRED_VERSION_HEADER_NAME)
-                .and_then(|version| SemanticVersion::from_str(version.to_str().ok()?).ok())
-            {
-                if app_version < minimum_required_version {
-                    return Err(anyhow!(ZedUpdateRequiredError {
-                        minimum_version: minimum_required_version
-                    }));
-                }
-            }
-
-            if response.status().is_success() {
-                if let Some(usage) = EditPredictionUsage::from_headers(response.headers()).ok() {
-                    this.update(cx, |this, cx| {
-                        this.user_store.update(cx, |user_store, cx| {
-                            user_store.update_edit_prediction_usage(usage, cx);
-                        });
-                    })?;
-                }
-
-                Ok(())
-            } else {
-                let mut body = String::new();
-                response.body_mut().read_to_string(&mut body).await?;
-                Err(anyhow!(
-                    "error accepting edit prediction.\nStatus: {:?}\nBody: {}",
-                    response.status(),
-                    body
-                ))
-            }
-        })
     }
 
     fn process_completion_response(
@@ -1059,15 +869,10 @@ and then another
             .collect()
     }
 
-    pub fn is_completion_rated(&self, completion_id: InlineCompletionId) -> bool {
-        self.rated_completions.contains(&completion_id)
-    }
-
     pub fn completion_shown(&mut self, completion: &InlineCompletion, cx: &mut Context<Self>) {
         self.shown_completions.push_front(completion.clone());
         if self.shown_completions.len() > 50 {
             let completion = self.shown_completions.pop_back().unwrap();
-            self.rated_completions.remove(&completion.id);
         }
         cx.notify();
     }
@@ -1104,91 +909,13 @@ and then another
 
         new_snapshot
     }
-
-    fn load_data_collection_choices() -> DataCollectionChoice {
-        let choice = KEY_VALUE_STORE
-            .read_kvp(ZED_PREDICT_DATA_COLLECTION_CHOICE)
-            .log_err()
-            .flatten();
-
-        match choice.as_deref() {
-            Some("true") => DataCollectionChoice::Enabled,
-            Some("false") => DataCollectionChoice::Disabled,
-            Some(_) => {
-                log::error!("unknown value in '{ZED_PREDICT_DATA_COLLECTION_CHOICE}'");
-                DataCollectionChoice::NotAnswered
-            }
-            None => DataCollectionChoice::NotAnswered,
-        }
-    }
 }
 
 struct PerformPredictEditsParams {
     pub client: Arc<Client>,
-    pub llm_token: LlmApiToken,
+    pub server_url: String,
     pub app_version: SemanticVersion,
     pub body: PredictEditsBody,
-}
-
-#[derive(Error, Debug)]
-#[error(
-    "You must update to Zed version {minimum_version} or higher to continue using edit predictions."
-)]
-pub struct ZedUpdateRequiredError {
-    minimum_version: SemanticVersion,
-}
-
-struct LicenseDetectionWatcher {
-    is_open_source_rx: watch::Receiver<bool>,
-    _is_open_source_task: Task<()>,
-}
-
-impl LicenseDetectionWatcher {
-    pub fn new(worktree: &Worktree, cx: &mut Context<Worktree>) -> Self {
-        let (mut is_open_source_tx, is_open_source_rx) = watch::channel_with::<bool>(false);
-
-        // Check if worktree is a single file, if so we do not need to check for a LICENSE file
-        let task = if worktree.abs_path().is_file() {
-            Task::ready(())
-        } else {
-            let loaded_files = LICENSE_FILES_TO_CHECK
-                .iter()
-                .map(Path::new)
-                .map(|file| worktree.load_file(file, cx))
-                .collect::<ArrayVec<_, { LICENSE_FILES_TO_CHECK.len() }>>();
-
-            cx.background_spawn(async move {
-                for loaded_file in loaded_files.into_iter() {
-                    let Ok(loaded_file) = loaded_file.await else {
-                        continue;
-                    };
-
-                    let path = &loaded_file.file.path;
-                    if is_license_eligible_for_data_collection(&loaded_file.text) {
-                        log::info!("detected '{path:?}' as open source license");
-                        *is_open_source_tx.borrow_mut() = true;
-                    } else {
-                        log::info!("didn't detect '{path:?}' as open source license");
-                    }
-
-                    // stop on the first license that successfully read
-                    return;
-                }
-
-                log::debug!("didn't find a license file to check, assuming closed source");
-            })
-        };
-
-        Self {
-            is_open_source_rx,
-            _is_open_source_task: task,
-        }
-    }
-
-    /// Answers false until we find out it's open source
-    pub fn is_project_open_source(&self) -> bool {
-        *self.is_open_source_rx.borrow()
-    }
 }
 
 fn common_prefix<T1: Iterator<Item = char>, T2: Iterator<Item = char>>(a: T1, b: T2) -> usize {
@@ -1328,167 +1055,23 @@ struct PendingCompletion {
     _task: Task<()>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum DataCollectionChoice {
-    NotAnswered,
-    Enabled,
-    Disabled,
-}
-
-impl DataCollectionChoice {
-    pub fn is_enabled(self) -> bool {
-        match self {
-            Self::Enabled => true,
-            Self::NotAnswered | Self::Disabled => false,
-        }
-    }
-
-    pub fn is_answered(self) -> bool {
-        match self {
-            Self::Enabled | Self::Disabled => true,
-            Self::NotAnswered => false,
-        }
-    }
-
-    pub fn toggle(&self) -> DataCollectionChoice {
-        match self {
-            Self::Enabled => Self::Disabled,
-            Self::Disabled => Self::Enabled,
-            Self::NotAnswered => Self::Enabled,
-        }
-    }
-}
-
-impl From<bool> for DataCollectionChoice {
-    fn from(value: bool) -> Self {
-        match value {
-            true => DataCollectionChoice::Enabled,
-            false => DataCollectionChoice::Disabled,
-        }
-    }
-}
-
-pub struct ProviderDataCollection {
-    /// When set to None, data collection is not possible in the provider buffer
-    choice: Option<Entity<DataCollectionChoice>>,
-    license_detection_watcher: Option<Rc<LicenseDetectionWatcher>>,
-}
-
-impl ProviderDataCollection {
-    pub fn new(zeta: Entity<Zeta>, buffer: Option<Entity<Buffer>>, cx: &mut App) -> Self {
-        let choice_and_watcher = buffer.and_then(|buffer| {
-            let file = buffer.read(cx).file()?;
-
-            if !file.is_local() || file.is_private() {
-                return None;
-            }
-
-            let zeta = zeta.read(cx);
-            let choice = zeta.data_collection_choice.clone();
-
-            let license_detection_watcher = zeta
-                .license_detection_watchers
-                .get(&file.worktree_id(cx))
-                .cloned()?;
-
-            Some((choice, license_detection_watcher))
-        });
-
-        if let Some((choice, watcher)) = choice_and_watcher {
-            ProviderDataCollection {
-                choice: Some(choice),
-                license_detection_watcher: Some(watcher),
-            }
-        } else {
-            ProviderDataCollection {
-                choice: None,
-                license_detection_watcher: None,
-            }
-        }
-    }
-
-    pub fn can_collect_data(&self, cx: &App) -> bool {
-        self.is_data_collection_enabled(cx) && self.is_project_open_source()
-    }
-
-    pub fn is_data_collection_enabled(&self, cx: &App) -> bool {
-        self.choice
-            .as_ref()
-            .is_some_and(|choice| choice.read(cx).is_enabled())
-    }
-
-    fn is_project_open_source(&self) -> bool {
-        self.license_detection_watcher
-            .as_ref()
-            .is_some_and(|watcher| watcher.is_project_open_source())
-    }
-
-    pub fn toggle(&mut self, cx: &mut App) {
-        if let Some(choice) = self.choice.as_mut() {
-            let new_choice = choice.update(cx, |choice, _cx| {
-                let new_choice = choice.toggle();
-                *choice = new_choice;
-                new_choice
-            });
-
-            db::write_and_log(cx, move || {
-                KEY_VALUE_STORE.write_kvp(
-                    ZED_PREDICT_DATA_COLLECTION_CHOICE.into(),
-                    new_choice.is_enabled().to_string(),
-                )
-            });
-        }
-    }
-}
-
-async fn llm_token_retry(
-    llm_token: &LlmApiToken,
-    client: &Arc<Client>,
-    build_request: impl Fn(String) -> Result<Request<AsyncBody>>,
-) -> Result<Response<AsyncBody>> {
-    let mut did_retry = false;
-    let http_client = client.http_client();
-    let mut token = llm_token.acquire(client).await?;
-    loop {
-        let request = build_request(token.clone())?;
-        let response = http_client.send(request).await?;
-
-        if !did_retry
-            && !response.status().is_success()
-            && response
-                .headers()
-                .get(EXPIRED_LLM_TOKEN_HEADER_NAME)
-                .is_some()
-        {
-            did_retry = true;
-            token = llm_token.refresh(client).await?;
-            continue;
-        }
-
-        return Ok(response);
-    }
-}
-
 pub struct ZetaInlineCompletionProvider {
     zeta: Entity<Zeta>,
     pending_completions: ArrayVec<PendingCompletion, 2>,
     next_pending_completion_id: usize,
     current_completion: Option<CurrentInlineCompletion>,
-    /// None if this is entirely disabled for this provider
-    provider_data_collection: ProviderDataCollection,
     last_request_timestamp: Instant,
 }
 
 impl ZetaInlineCompletionProvider {
     pub const THROTTLE_TIMEOUT: Duration = Duration::from_millis(300);
 
-    pub fn new(zeta: Entity<Zeta>, provider_data_collection: ProviderDataCollection) -> Self {
+    pub fn new(zeta: Entity<Zeta>) -> Self {
         Self {
             zeta,
             pending_completions: ArrayVec::new(),
             next_pending_completion_id: 0,
             current_completion: None,
-            provider_data_collection,
             last_request_timestamp: Instant::now(),
         }
     }
@@ -1511,24 +1094,6 @@ impl inline_completion::EditPredictionProvider for ZetaInlineCompletionProvider 
         true
     }
 
-    fn data_collection_state(&self, cx: &App) -> DataCollectionState {
-        let is_project_open_source = self.provider_data_collection.is_project_open_source();
-
-        if self.provider_data_collection.is_data_collection_enabled(cx) {
-            DataCollectionState::Enabled {
-                is_project_open_source,
-            }
-        } else {
-            DataCollectionState::Disabled {
-                is_project_open_source,
-            }
-        }
-    }
-
-    fn toggle_data_collection(&mut self, cx: &mut App) {
-        self.provider_data_collection.toggle(cx);
-    }
-
     fn usage(&self, cx: &App) -> Option<EditPredictionUsage> {
         self.zeta.read(cx).usage(cx)
     }
@@ -1540,10 +1105,6 @@ impl inline_completion::EditPredictionProvider for ZetaInlineCompletionProvider 
         _cx: &App,
     ) -> bool {
         true
-    }
-
-    fn needs_terms_acceptance(&self, cx: &App) -> bool {
-        !self.zeta.read(cx).tos_accepted
     }
 
     fn is_refreshing(&self) -> bool {
@@ -1558,25 +1119,6 @@ impl inline_completion::EditPredictionProvider for ZetaInlineCompletionProvider 
         _debounce: bool,
         cx: &mut Context<Self>,
     ) {
-        if !self.zeta.read(cx).tos_accepted {
-            return;
-        }
-
-        if self.zeta.read(cx).update_required {
-            return;
-        }
-
-        if self
-            .zeta
-            .read(cx)
-            .user_store
-            .read_with(cx, |user_store, _| {
-                user_store.account_too_young() || user_store.has_overdue_invoices()
-            })
-        {
-            return;
-        }
-
         if let Some(current_completion) = self.current_completion.as_ref() {
             let snapshot = buffer.read(cx).snapshot();
             if current_completion
@@ -1590,7 +1132,6 @@ impl inline_completion::EditPredictionProvider for ZetaInlineCompletionProvider 
 
         let pending_completion_id = self.next_pending_completion_id;
         self.next_pending_completion_id += 1;
-        let can_collect_data = self.provider_data_collection.can_collect_data(cx);
         let last_request_timestamp = self.last_request_timestamp;
 
         let task = cx.spawn(async move |this, cx| {
@@ -1607,7 +1148,6 @@ impl inline_completion::EditPredictionProvider for ZetaInlineCompletionProvider 
                         project.as_ref(),
                         &buffer,
                         position,
-                        can_collect_data,
                         cx,
                     )
                 })
@@ -1697,17 +1237,6 @@ impl inline_completion::EditPredictionProvider for ZetaInlineCompletionProvider 
     }
 
     fn accept(&mut self, cx: &mut Context<Self>) {
-        let completion_id = self
-            .current_completion
-            .as_ref()
-            .map(|completion| completion.completion.id);
-        if let Some(completion_id) = completion_id {
-            self.zeta
-                .update(cx, |zeta, cx| {
-                    zeta.accept_edit_prediction(completion_id, cx)
-                })
-                .detach();
-        }
         self.pending_completions.clear();
     }
 
@@ -2020,7 +1549,7 @@ mod tests {
         let buffer = cx.new(|cx| Buffer::local(buffer_content, cx));
         let cursor = buffer.read_with(cx, |buffer, _| buffer.anchor_before(Point::new(1, 0)));
         let completion_task = zeta.update(cx, |zeta, cx| {
-            zeta.request_completion(None, &buffer, cursor, false, cx)
+            zeta.request_completion(None, &buffer, cursor, cx)
         });
 
         server.receive::<proto::GetUsers>().await.unwrap();
@@ -2075,7 +1604,7 @@ mod tests {
         let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
         let cursor = buffer.read_with(cx, |buffer, _| buffer.anchor_before(Point::new(1, 0)));
         let completion_task = zeta.update(cx, |zeta, cx| {
-            zeta.request_completion(None, &buffer, cursor, false, cx)
+            zeta.request_completion(None, &buffer, cursor, cx)
         });
 
         server.receive::<proto::GetUsers>().await.unwrap();

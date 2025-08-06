@@ -4289,7 +4289,6 @@ mod tests {
                 "workspace",
                 "zed",
                 "zed_predict_onboarding",
-                "zeta",
             ];
             assert_eq!(
                 all_namespaces,

@@ -16,6 +16,9 @@ pub struct ZedlessSettings {
     #[serde(default)]
     /// The features to enable.
     features: Vec<ZedlessFeature>,
+    #[serde(default)]
+    /// Zeta server URL.
+    pub zeta_url: Option<String>,
 }
 
 impl Settings for ZedlessSettings {

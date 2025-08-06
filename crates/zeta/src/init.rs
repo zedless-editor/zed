@@ -9,8 +9,6 @@ use settings::{Settings, SettingsStore, update_settings_file};
 use ui::App;
 use workspace::Workspace;
 
-use crate::{RateCompletionModal};
-
 actions!(
     edit_prediction,
     [
@@ -25,12 +23,6 @@ pub fn init(cx: &mut App) {
     feature_gate_predict_edits_actions(cx);
 
     cx.observe_new(move |workspace: &mut Workspace, _, _cx| {
-        workspace.register_action(|workspace, _: &RateCompletions, window, cx| {
-            if cx.has_flag::<PredictEditsRateCompletionsFeatureFlag>() {
-                RateCompletionModal::toggle(workspace, window, cx);
-            }
-        });
-
         workspace.register_action(|workspace, _: &ResetOnboarding, _window, cx| {
             update_settings_file::<AllLanguageSettings>(
                 workspace.app_state().fs.clone(),
@@ -54,10 +46,6 @@ fn feature_gate_predict_edits_actions(cx: &mut App) {
         TypeId::of::<ResetOnboarding>(),
         zed_actions::OpenZedPredictOnboarding.type_id(),
         TypeId::of::<crate::ClearHistory>(),
-        TypeId::of::<crate::ThumbsUpActiveCompletion>(),
-        TypeId::of::<crate::ThumbsDownActiveCompletion>(),
-        TypeId::of::<crate::NextEdit>(),
-        TypeId::of::<crate::PreviousEdit>(),
     ];
 
     CommandPaletteFilter::update_global(cx, |filter, _cx| {

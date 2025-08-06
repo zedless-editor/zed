@@ -8174,6 +8174,7 @@ dependencies = [
  "workspace-hack",
  "zed_actions",
  "zed_llm_client",
+ "zedless_settings",
  "zeta",
 ]
 
@@ -20232,6 +20233,7 @@ dependencies = [
  "worktree",
  "zed_actions",
  "zed_llm_client",
+ "zedless_settings",
  "zlog",
 ]
 

@@ -16,7 +16,6 @@ use crate::{
         AdapterQuery, LanguageServerTree, LanguageServerTreeNode, LaunchDisposition,
         ManifestQueryDelegate, ManifestTree,
     },
-    prettier_store::{self, PrettierStore, PrettierStoreEvent},
     project_settings::{LspSettings, ProjectSettings},
     relativize_path, resolve_path,
     toolchain_store::{EmptyToolchainStore, ToolchainStoreEvent},
@@ -105,7 +104,6 @@ use zedless::SilentError;
 pub use fs::*;
 pub use language::Location;
 #[cfg(any(test, feature = "test-support"))]
-pub use prettier::FORMAT_SUFFIX as TEST_PRETTIER_FORMAT_SUFFIX;
 pub use worktree::{
     Entry, EntryKind, FS_WATCH_LATENCY, File, LocalWorktree, PathChange, ProjectEntryId,
     UpdatedEntriesSet, UpdatedGitRepositoriesSet, Worktree, WorktreeId, WorktreeSettings,
@@ -157,7 +155,6 @@ pub struct LocalLspStore {
         HashMap<LanguageServerId, HashMap<String, Vec<FileSystemWatcher>>>,
     supplementary_language_servers:
         HashMap<LanguageServerId, (LanguageServerName, Arc<LanguageServer>)>,
-    prettier_store: Entity<PrettierStore>,
     next_diagnostic_group_id: usize,
     diagnostics: HashMap<
         WorktreeId,
@@ -1421,13 +1418,8 @@ impl LocalLspStore {
             (FormatTrigger::Manual, _) | (FormatTrigger::Save, FormatOnSave::On) => {
                 match &settings.formatter {
                     SelectedFormatter::Auto => {
-                        if settings.prettier.allowed {
-                            zlog::trace!(logger => "Formatter set to auto: defaulting to prettier");
-                            std::slice::from_ref(&Formatter::Prettier)
-                        } else {
-                            zlog::trace!(logger => "Formatter set to auto: defaulting to primary language server");
-                            std::slice::from_ref(&Formatter::LanguageServer { name: None })
-                        }
+                        zlog::trace!(logger => "Formatter set to auto: defaulting to primary language server");
+                        std::slice::from_ref(&Formatter::LanguageServer { name: None })
                     }
                     SelectedFormatter::List(formatter_list) => formatter_list.as_ref(),
                 }
@@ -1438,31 +1430,6 @@ impl LocalLspStore {
 
         for formatter in formatters {
             match formatter {
-                Formatter::Prettier => {
-                    let logger = zlog::scoped!(logger => "prettier");
-                    zlog::trace!(logger => "formatting");
-                    let _timer = zlog::time!(logger => "Formatting buffer via prettier");
-
-                    let prettier = lsp_store.read_with(cx, |lsp_store, _cx| {
-                        lsp_store.prettier_store().unwrap().downgrade()
-                    })?;
-                    let diff = prettier_store::format_with_prettier(&prettier, &buffer.handle, cx)
-                        .await
-                        .transpose()?;
-                    let Some(diff) = diff else {
-                        zlog::trace!(logger => "No changes");
-                        continue;
-                    };
-
-                    extend_formatting_transaction(
-                        buffer,
-                        formatting_transaction_id,
-                        cx,
-                        |buffer, cx| {
-                            buffer.apply_diff(diff, cx);
-                        },
-                    )?;
-                }
                 Formatter::External { command, arguments } => {
                     let logger = zlog::scoped!(logger => "command");
                     zlog::trace!(logger => "formatting");
@@ -3195,9 +3162,6 @@ impl LocalLspStore {
         cx: &mut Context<LspStore>,
     ) -> Vec<LanguageServerId> {
         self.diagnostics.remove(&id_to_remove);
-        self.prettier_store.update(cx, |prettier_store, cx| {
-            prettier_store.remove_worktree(id_to_remove, cx);
-        });
 
         let mut servers_to_remove = BTreeMap::default();
         let mut servers_to_preserve = HashSet::default();
@@ -3735,7 +3699,6 @@ impl LspStore {
     pub fn new_local(
         buffer_store: Entity<BufferStore>,
         worktree_store: Entity<WorktreeStore>,
-        prettier_store: Entity<PrettierStore>,
         toolchain_store: Entity<ToolchainStore>,
         environment: Entity<ProjectEnvironment>,
         manifest_tree: Entity<ManifestTree>,
@@ -3748,8 +3711,6 @@ impl LspStore {
         cx.subscribe(&buffer_store, Self::on_buffer_store_event)
             .detach();
         cx.subscribe(&worktree_store, Self::on_worktree_store_event)
-            .detach();
-        cx.subscribe(&prettier_store, Self::on_prettier_store_event)
             .detach();
         cx.subscribe(&toolchain_store, Self::on_toolchain_store_event)
             .detach();
@@ -3789,7 +3750,6 @@ impl LspStore {
                 language_server_watcher_registrations: Default::default(),
                 buffers_being_formatted: Default::default(),
                 buffer_snapshots: Default::default(),
-                prettier_store,
                 environment,
                 http_client,
                 fs,
@@ -3946,31 +3906,6 @@ impl LspStore {
         }
     }
 
-    fn on_prettier_store_event(
-        &mut self,
-        _: Entity<PrettierStore>,
-        event: &PrettierStoreEvent,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            PrettierStoreEvent::LanguageServerRemoved(prettier_server_id) => {
-                self.unregister_supplementary_language_server(*prettier_server_id, cx);
-            }
-            PrettierStoreEvent::LanguageServerAdded {
-                new_server_id,
-                name,
-                prettier_server,
-            } => {
-                self.register_supplementary_language_server(
-                    *new_server_id,
-                    name.clone(),
-                    prettier_server.clone(),
-                    cx,
-                );
-            }
-        }
-    }
-
     fn on_toolchain_store_event(
         &mut self,
         _: Entity<ToolchainStore>,
@@ -3986,10 +3921,6 @@ impl LspStore {
 
     fn request_workspace_config_refresh(&mut self) {
         *self._maintain_workspace_config.1.borrow_mut() = ();
-    }
-
-    pub fn prettier_store(&self) -> Option<Entity<PrettierStore>> {
-        self.as_local().map(|local| local.prettier_store.clone())
     }
 
     fn on_buffer_event(
@@ -4397,22 +4328,6 @@ impl LspStore {
             None
         };
 
-        if settings.prettier.allowed {
-            if let Some(prettier_plugins) = prettier_store::prettier_plugins_for_language(&settings)
-            {
-                let prettier_store = self.as_local().map(|s| s.prettier_store.clone());
-                if let Some(prettier_store) = prettier_store {
-                    prettier_store.update(cx, |prettier_store, cx| {
-                        prettier_store.install_default_prettier(
-                            worktree_id,
-                            prettier_plugins.iter().map(|s| Arc::from(s.as_str())),
-                            cx,
-                        )
-                    })
-                }
-            }
-        }
-
         cx.emit(LspStoreEvent::LanguageDetected {
             buffer: buffer_entity.clone(),
             new_language: Some(new_language),
@@ -4596,12 +4511,6 @@ impl LspStore {
         }
 
         self.refresh_server_tree(cx);
-
-        if let Some(prettier_store) = self.as_local().map(|s| s.prettier_store.clone()) {
-            prettier_store.update(cx, |prettier_store, cx| {
-                prettier_store.on_settings_changed(language_formatters_to_check, cx)
-            })
-        }
 
         cx.notify();
     }
@@ -10991,10 +10900,6 @@ impl LspStore {
         }
 
         let Some(local) = self.as_local() else { return };
-
-        local.prettier_store.update(cx, |prettier_store, cx| {
-            prettier_store.update_prettier_settings(&worktree_handle, changes, cx)
-        });
 
         let worktree_id = worktree_handle.read(cx).id();
         let mut language_server_ids = local

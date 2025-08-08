@@ -900,8 +900,6 @@ impl AsRef<[Formatter]> for FormatterList {
 pub enum Formatter {
     /// Format code using the current language server.
     LanguageServer { name: Option<String> },
-    /// Format code using Zed's Prettier integration.
-    Prettier,
     /// Format code using an external command.
     External {
         /// The external program to run.
@@ -1634,15 +1632,6 @@ mod tests {
             settings.formatter,
             Some(SelectedFormatter::List(FormatterList::Vec(vec![
                 Formatter::LanguageServer { name: None }
-            ])))
-        );
-        let raw = "{\"formatter\": [{\"language_server\": {\"name\": null}}, \"prettier\"]}";
-        let settings: LanguageSettingsContent = serde_json::from_str(raw).unwrap();
-        assert_eq!(
-            settings.formatter,
-            Some(SelectedFormatter::List(FormatterList::Vec(vec![
-                Formatter::LanguageServer { name: None },
-                Formatter::Prettier
             ])))
         );
     }

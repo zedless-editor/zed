@@ -19924,6 +19924,7 @@ dependencies = [
  "workspace",
  "workspace-hack",
  "zed_actions",
+ "zedless_settings",
  "zeta",
  "zlog",
  "zlog_settings",
@@ -20035,6 +20036,18 @@ name = "zedless"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "workspace-hack",
+]
+
+[[package]]
+name = "zedless_settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "schemars",
+ "serde",
+ "settings",
  "workspace-hack",
 ]
 

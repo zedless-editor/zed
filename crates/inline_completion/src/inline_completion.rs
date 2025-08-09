@@ -61,15 +61,11 @@ pub trait EditPredictionProvider: 'static + Sized {
     fn show_tab_accept_marker() -> bool {
         false
     }
-    fn data_collection_state(&self, _cx: &App) -> DataCollectionState {
-        DataCollectionState::Unsupported
-    }
 
     fn usage(&self, _cx: &App) -> Option<EditPredictionUsage> {
         None
     }
 
-    fn toggle_data_collection(&mut self, _cx: &mut App) {}
     fn is_enabled(
         &self,
         buffer: &Entity<Buffer>,
@@ -85,9 +81,6 @@ pub trait EditPredictionProvider: 'static + Sized {
         debounce: bool,
         cx: &mut Context<Self>,
     );
-    fn needs_terms_acceptance(&self, _cx: &App) -> bool {
-        false
-    }
     fn cycle(
         &mut self,
         buffer: Entity<Buffer>,
@@ -116,10 +109,7 @@ pub trait InlineCompletionProviderHandle {
     ) -> bool;
     fn show_completions_in_menu(&self) -> bool;
     fn show_tab_accept_marker(&self) -> bool;
-    fn data_collection_state(&self, cx: &App) -> DataCollectionState;
     fn usage(&self, cx: &App) -> Option<EditPredictionUsage>;
-    fn toggle_data_collection(&self, cx: &mut App);
-    fn needs_terms_acceptance(&self, cx: &App) -> bool;
     fn is_refreshing(&self, cx: &App) -> bool;
     fn refresh(
         &self,
@@ -166,16 +156,8 @@ where
         T::show_tab_accept_marker()
     }
 
-    fn data_collection_state(&self, cx: &App) -> DataCollectionState {
-        self.read(cx).data_collection_state(cx)
-    }
-
     fn usage(&self, cx: &App) -> Option<EditPredictionUsage> {
         self.read(cx).usage(cx)
-    }
-
-    fn toggle_data_collection(&self, cx: &mut App) {
-        self.update(cx, |this, cx| this.toggle_data_collection(cx))
     }
 
     fn is_enabled(
@@ -185,10 +167,6 @@ where
         cx: &App,
     ) -> bool {
         self.read(cx).is_enabled(buffer, cursor_position, cx)
-    }
-
-    fn needs_terms_acceptance(&self, cx: &App) -> bool {
-        self.read(cx).needs_terms_acceptance(cx)
     }
 
     fn is_refreshing(&self, cx: &App) -> bool {

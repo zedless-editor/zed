@@ -164,6 +164,7 @@ members = [
     "crates/zed",
     "crates/zed_actions",
     "crates/zedless",
+    "crates/zedless_settings",
     "crates/zeta",
     "crates/zlog",
     "crates/zlog_settings",
@@ -362,6 +363,7 @@ worktree = { path = "crates/worktree" }
 zed = { path = "crates/zed" }
 zed_actions = { path = "crates/zed_actions" }
 zedless = { path = "crates/zedless" }
+zedless_settings = { path = "crates/zedless_settings" }
 zeta = { path = "crates/zeta" }
 zlog = { path = "crates/zlog" }
 zlog_settings = { path = "crates/zlog_settings" }

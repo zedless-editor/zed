@@ -19,6 +19,7 @@ use language::{
 };
 use regex::Regex;
 use settings::{Settings, SettingsStore, update_settings_file};
+use zedless_settings::ZedlessSettings;
 use std::{
     sync::{Arc, LazyLock},
     time::Duration,
@@ -75,13 +76,8 @@ impl Render for InlineCompletionButton {
                     IconName::ZedPredictDisabled
                 };
 
-                if zeta::should_show_upsell_modal(&self.user_store, cx) {
-                    let tooltip_meta =
-                        match self.user_store.read(cx).current_user_has_accepted_terms() {
-                            Some(true) => "Choose a Plan",
-                            Some(false) => "Accept the Terms of Service",
-                            None => "Sign In",
-                        };
+                if ZedlessSettings::get_global(cx).zeta_url.is_none() {
+                    let tooltip_meta = "Configure Zeta server URL in settings";
 
                     return div().child(
                         IconButton::new("zed-predict-pending-button", zeta_icon)
@@ -99,7 +95,7 @@ impl Render for InlineCompletionButton {
                             })
                             .on_click(cx.listener(move |_, _, window, cx| {
                                 window.dispatch_action(
-                                    zed_actions::OpenZedPredictOnboarding.boxed_clone(),
+                                    zed_actions::OpenSettings.boxed_clone(),
                                     cx,
                                 );
                             })),

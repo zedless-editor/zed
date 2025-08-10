@@ -1,7 +1,6 @@
 {
   lib,
   rustPlatform,
-  fetchpatch,
   cmake,
   copyDesktopItems,
   curl,
@@ -43,30 +42,29 @@
 }:
 assert withGLES -> stdenv.hostPlatform.isLinux; let
   inherit (builtins) fromTOML readFile;
+  inherit (lib.fileset) toSource unions;
 
   gpu-lib =
     if withGLES
     then libglvnd
     else vulkan-loader;
 
-  includeFilter = path: type: let
-    baseName = baseNameOf (toString path);
-    parentDir = dirOf path;
-    inRootDir = type == "directory" && parentDir == ../.;
-  in
-    !(
-      inRootDir
-      && (lib.any (x: baseName == x) ["docs" "target" "nix" "flake.nix" "flake.lock"])
-    );
-
   # Cargo.toml located in repo root does not contain any version information.
   cargoToml = fromTOML (readFile ../crates/zed/Cargo.toml);
   pname = cargoToml.package.name;
   version = cargoToml.package.version;
-  src = lib.cleanSourceWith {
-    name = "zed-source";
-    src = ../.;
-    filter = includeFilter;
+  src = toSource {
+    root = ../.;
+    fileset = unions [
+      ../crates
+      ../assets
+      ../extensions
+      ../script
+      ../tooling
+      ../Cargo.toml
+      ../Cargo.lock
+      ../.config
+    ];
   };
 in
   rustPlatform.buildRustPackage {

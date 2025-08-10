@@ -7,11 +7,11 @@ use cli::FORCE_CLI_MODE_ENV_VAR_NAME;
 use client::{Client, ProxySettings, UserStore, parse_zed_link};
 use collab_ui::channel_view::ChannelView;
 use collections::HashMap;
-use db::kvp::{KEY_VALUE_STORE};
+use db::kvp::KEY_VALUE_STORE;
 use editor::Editor;
 use extension::ExtensionHostProxy;
-use feature_flags::FeatureFlagAppExt;
 use extension_host::ExtensionStore;
+use feature_flags::FeatureFlagAppExt;
 use fs::{Fs, RealFs};
 use futures::{StreamExt, channel::oneshot, future};
 use git::GitHostingProviderRegistry;
@@ -536,6 +536,8 @@ pub fn main() {
         extensions_ui::init(cx);
         zeta::init(cx);
         inspector_ui::init(app_state.clone(), cx);
+
+        zedless_settings::init(cx);
 
         cx.observe_global::<SettingsStore>({
             let fs = fs.clone();

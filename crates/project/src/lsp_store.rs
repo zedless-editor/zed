@@ -103,7 +103,6 @@ use zedless::SilentError;
 
 pub use fs::*;
 pub use language::Location;
-#[cfg(any(test, feature = "test-support"))]
 pub use worktree::{
     Entry, EntryKind, FS_WATCH_LATENCY, File, LocalWorktree, PathChange, ProjectEntryId,
     UpdatedEntriesSet, UpdatedGitRepositoriesSet, Worktree, WorktreeId, WorktreeSettings,

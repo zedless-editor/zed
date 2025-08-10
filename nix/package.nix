@@ -258,10 +258,6 @@ in
     doInstallCheck = true;
 
     passthru = {
-      updateScript = gitUpdater {
-        rev-prefix = "v";
-        ignoredVersions = "(*-pre|0.999999.0|0.9999-temporary)";
-      };
       tests =
         {
           remoteServerVersion = testers.testVersion {

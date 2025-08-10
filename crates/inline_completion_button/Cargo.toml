@@ -30,6 +30,7 @@ workspace-hack.workspace = true
 workspace.workspace = true
 zed_actions.workspace = true
 zed_llm_client.workspace = true
+zedless_settings.workspace = true
 zeta.workspace = true
 
 [dev-dependencies]

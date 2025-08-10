@@ -9,7 +9,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use ui::Window;
 use util::ResultExt;
 use workspace::Workspace;
-use zeta::{ProviderDataCollection, ZetaInlineCompletionProvider};
+use zeta::{ZetaInlineCompletionProvider};
 
 pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
     let editors: Rc<RefCell<HashMap<WeakEntity<Editor>, AnyWindowHandle>>> = Rc::default();
@@ -170,46 +170,41 @@ fn assign_edit_prediction_provider(
             editor.set_edit_prediction_provider::<ZetaInlineCompletionProvider>(None, window, cx);
         }
         EditPredictionProvider::Zed => {
-            if client.status().borrow().is_connected() {
-                let mut worktree = None;
+            let mut worktree = None;
 
-                if let Some(buffer) = &singleton_buffer {
-                    if let Some(file) = buffer.read(cx).file() {
-                        let id = file.worktree_id(cx);
-                        if let Some(inner_worktree) = editor
-                            .project
-                            .as_ref()
-                            .and_then(|project| project.read(cx).worktree_for_id(id, cx))
-                        {
-                            worktree = Some(inner_worktree);
-                        }
+            if let Some(buffer) = &singleton_buffer {
+                if let Some(file) = buffer.read(cx).file() {
+                    let id = file.worktree_id(cx);
+                    if let Some(inner_worktree) = editor
+                        .project
+                        .as_ref()
+                        .and_then(|project| project.read(cx).worktree_for_id(id, cx))
+                    {
+                        worktree = Some(inner_worktree);
                     }
                 }
-
-                let workspace = window
-                    .root::<Workspace>()
-                    .flatten()
-                    .map(|workspace| workspace.downgrade());
-
-                let zeta =
-                    zeta::Zeta::register(workspace, worktree, client.clone(), user_store, cx);
-
-                if let Some(buffer) = &singleton_buffer {
-                    if buffer.read(cx).file().is_some() {
-                        zeta.update(cx, |zeta, cx| {
-                            zeta.register_buffer(&buffer, cx);
-                        });
-                    }
-                }
-
-                let data_collection =
-                    ProviderDataCollection::new(zeta.clone(), singleton_buffer, cx);
-
-                let provider =
-                    cx.new(|_| zeta::ZetaInlineCompletionProvider::new(zeta, data_collection));
-
-                editor.set_edit_prediction_provider(Some(provider), window, cx);
             }
+
+            let workspace = window
+                .root::<Workspace>()
+                .flatten()
+                .map(|workspace| workspace.downgrade());
+
+            let zeta =
+                zeta::Zeta::register(workspace, worktree, client.clone(), user_store, cx);
+
+            if let Some(buffer) = &singleton_buffer {
+                if buffer.read(cx).file().is_some() {
+                    zeta.update(cx, |zeta, cx| {
+                        zeta.register_buffer(&buffer, cx);
+                    });
+                }
+            }
+
+            let provider =
+                cx.new(|_| zeta::ZetaInlineCompletionProvider::new(zeta));
+
+            editor.set_edit_prediction_provider(Some(provider), window, cx);
         }
     }
 }

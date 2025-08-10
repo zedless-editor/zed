@@ -1,7 +1,6 @@
 {
   lib,
   rustPlatform,
-  fetchpatch,
   cmake,
   copyDesktopItems,
   curl,
@@ -43,30 +42,29 @@
 }:
 assert withGLES -> stdenv.hostPlatform.isLinux; let
   inherit (builtins) fromTOML readFile;
+  inherit (lib.fileset) toSource unions;
 
   gpu-lib =
     if withGLES
     then libglvnd
     else vulkan-loader;
 
-  includeFilter = path: type: let
-    baseName = baseNameOf (toString path);
-    parentDir = dirOf path;
-    inRootDir = type == "directory" && parentDir == ../.;
-  in
-    !(
-      inRootDir
-      && (lib.any (x: baseName == x) ["docs" "target" "nix" "flake.nix" "flake.lock"])
-    );
-
   # Cargo.toml located in repo root does not contain any version information.
   cargoToml = fromTOML (readFile ../crates/zed/Cargo.toml);
   pname = cargoToml.package.name;
   version = cargoToml.package.version;
-  src = lib.cleanSourceWith {
-    name = "zed-source";
-    src = ../.;
-    filter = includeFilter;
+  src = toSource {
+    root = ../.;
+    fileset = unions [
+      ../crates
+      ../assets
+      ../extensions
+      ../script
+      ../tooling
+      ../Cargo.toml
+      ../Cargo.lock
+      ../.config
+    ];
   };
 in
   rustPlatform.buildRustPackage {
@@ -220,11 +218,15 @@ in
 
         # Physical location of the CLI must be inside the app bundle as this is used
         # to determine which app to start
+        ln -s $out/Applications/Zed.app/Contents/MacOS/cli $out/bin/zedless
+        ln -s $out/Applications/Zed.app/Contents/MacOS/cli $out/bin/zed
         ln -s $out/Applications/Zed.app/Contents/MacOS/cli $out/bin/zeditor
       ''
       + lib.optionalString stdenv.hostPlatform.isLinux ''
         install -Dm755 $release_target/zed $out/libexec/zed-editor
-        install -Dm755 $release_target/cli $out/bin/zeditor
+        install -Dm755 $release_target/cli $out/bin/zedless
+        ln -s $out/bin/zedless $out/bin/zed
+        ln -s $out/bin/zedless $out/bin/zeditor
 
         install -Dm644 ${src}/crates/zed/resources/app-icon@2x.png $out/share/icons/hicolor/1024x1024/apps/zedless.png
         install -Dm644 ${src}/crates/zed/resources/app-icon.png $out/share/icons/hicolor/512x512/apps/zedless.png
@@ -233,7 +235,7 @@ in
         # and https://github.com/zed-industries/zed/blob/v0.141.2/script/install.sh (final desktop file name)
         (
           export DO_STARTUP_NOTIFY="true"
-          export APP_CLI="zeditor"
+          export APP_CLI="zedless"
           export APP_ICON="zedless"
           export APP_NAME="Zedless"
           export APP_ARGS="%U"
@@ -251,15 +253,11 @@ in
     nativeInstallCheckInputs = [
       versionCheckHook
     ];
-    versionCheckProgram = "${placeholder "out"}/bin/zeditor";
+    versionCheckProgram = "${placeholder "out"}/bin/zedless";
     versionCheckProgramArg = ["--version"];
     doInstallCheck = true;
 
     passthru = {
-      updateScript = gitUpdater {
-        rev-prefix = "v";
-        ignoredVersions = "(*-pre|0.999999.0|0.9999-temporary)";
-      };
       tests =
         {
           remoteServerVersion = testers.testVersion {
@@ -280,7 +278,7 @@ in
         max
         NotAShelf
       ];
-      mainProgram = "zeditor";
+      mainProgram = "zedless";
       platforms = lib.platforms.linux ++ lib.platforms.darwin;
     };
   }

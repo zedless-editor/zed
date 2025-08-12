@@ -11,7 +11,7 @@ use language_model::{
     LanguageModelId, LanguageModelName, LanguageModelProvider, LanguageModelProviderId,
     LanguageModelProviderName, LanguageModelProviderState, LanguageModelRequest,
     LanguageModelToolChoice, LanguageModelToolResultContent, LanguageModelToolUse, MessageContent,
-    RateLimiter, Role, StopReason, TokenUsage,
+    RateLimiter, Role, StopReason,
 };
 use menu;
 use open_ai::{ImageUrl, Model, ResponseStreamEvent, stream_completion};

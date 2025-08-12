@@ -465,9 +465,9 @@ impl MessageEditor {
             .await;
 
         this.update(cx, |this, cx| {
-            let mut anchor_ranges = Vec::new();
-            let mut mentioned_user_ids = Vec::new();
-            let mut text = String::new();
+            let anchor_ranges = Vec::new();
+            let mentioned_user_ids = Vec::new();
+            let text = String::new();
 
             this.editor.update(cx, |editor, cx| {
 

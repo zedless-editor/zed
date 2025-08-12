@@ -1,5 +1,5 @@
 use anyhow::Result;
-use client::{UserStore, zed_urls};
+use client::UserStore;
 use editor::{Editor, SelectionEffects, actions::ShowEditPrediction, scroll::Autoscroll};
 use feature_flags::{FeatureFlagAppExt, PredictEditsRateCompletionsFeatureFlag};
 use fs::Fs;
@@ -22,12 +22,11 @@ use std::{
 };
 use ui::{
     Clickable, ContextMenu, ContextMenuEntry, DocumentationSide, IconButton, IconButtonShape,
-    Indicator, PopoverMenu, PopoverMenuHandle, ProgressBar, Tooltip, prelude::*,
+    Indicator, PopoverMenu, PopoverMenuHandle, Tooltip, prelude::*,
 };
 use workspace::{
     StatusItemView, Workspace, create_and_open_local_file, item::ItemHandle,
 };
-use zed_actions::OpenBrowser;
 use zeta::RateCompletions;
 
 actions!(
@@ -367,7 +366,7 @@ impl EditPredictionButton {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<ContextMenu> {
-        ContextMenu::build(window, cx, |mut menu, window, cx| {
+        ContextMenu::build(window, cx, |menu, window, cx| {
             self.build_language_settings_menu(menu, window, cx).when(
                 cx.has_flag::<PredictEditsRateCompletionsFeatureFlag>(),
                 |this| this.action("Rate Completions", RateCompletions.boxed_clone()),

@@ -543,30 +543,14 @@ impl TitleBar {
         let user_store = self.user_store.read(cx);
         if let Some(user) = user_store.current_user() {
             let user_avatar = user.avatar_uri.clone();
-            let free_chip_bg = cx
-                .theme()
-                .colors()
-                .editor_background
-                .opacity(0.5)
-                .blend(cx.theme().colors().text_accent.opacity(0.05));
-
-            let pro_chip_bg = cx
-                .theme()
-                .colors()
-                .editor_background
-                .opacity(0.5)
-                .blend(cx.theme().colors().text_accent.opacity(0.2));
 
             PopoverMenu::new("user-menu")
                 .anchor(Corner::TopRight)
                 .menu(move |window, cx| {
                     ContextMenu::build(window, cx, |menu, _, _cx| {
                         menu.custom_entry(
-                            move |_window, _cx| {
-                                div().into_any_element()
-                            },
-                            move |_, _cx| {
-                            },
+                            move |_window, _cx| div().into_any_element(),
+                            move |_, _cx| {},
                         )
                         .separator()
                         .action("Settings", zed_actions::OpenSettings.boxed_clone())

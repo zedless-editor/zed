@@ -126,7 +126,10 @@ impl Render for PlatformTitleBar {
                     PlatformStyle::Linux => {
                         if matches!(decorations, Decorations::Client { .. }) {
                             title_bar
-                                .child(platform_linux::LinuxWindowControls::new(close_action, window.window_style()))
+                                .child(platform_linux::LinuxWindowControls::new(
+                                    close_action,
+                                    window.window_style(),
+                                ))
                                 .when(supported_controls.window_menu, |titlebar| {
                                     titlebar
                                         .on_mouse_down(MouseButton::Right, move |ev, window, _| {

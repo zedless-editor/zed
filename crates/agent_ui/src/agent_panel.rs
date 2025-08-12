@@ -547,7 +547,6 @@ impl AgentPanel {
         let user_store = workspace.app_state().user_store.clone();
         let project = workspace.project();
         let language_registry = project.read(cx).languages().clone();
-        let client = workspace.client().clone();
         let workspace = workspace.weak_handle();
         let weak_self = cx.entity().downgrade();
 
@@ -1792,8 +1791,6 @@ impl AgentPanel {
     }
 
     fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let user_store = self.user_store.read(cx);
-        let account_url = zed_urls::account_url(cx);
 
         let focus_handle = self.focus_handle(cx);
 

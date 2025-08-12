@@ -588,9 +588,7 @@ async fn test_agent_connection(cx: &mut TestAppContext) {
         client::init_settings(cx);
 
         let http_client = FakeHttpClient::with_404_response();
-        let clock = Arc::new(clock::FakeSystemClock::new());
         let client = Client::new(http_client, cx);
-        let user_store = cx.new(|cx| UserStore::new(client.clone(), cx));
         language_model::init(client.clone(), cx);
         language_models::init(client.clone(), cx);
         Project::init_settings(cx);
@@ -855,7 +853,6 @@ async fn setup(cx: &mut TestAppContext, model: TestModel) -> ThreadTest {
 
             client::init_settings(cx);
             let client = Client::production(cx);
-            let user_store = cx.new(|cx| UserStore::new(client.clone(), cx));
             language_model::init(client.clone(), cx);
             language_models::init(client.clone(), cx);
 

@@ -170,8 +170,6 @@ async fn get_context(
         Some(events) => events.read_to_string().await?,
         None => String::new(),
     };
-    // Enable gathering extra data not currently needed for edit predictions
-    let can_collect_data = true;
     let mut gather_context_output = cx
         .update(|cx| {
             gather_context(

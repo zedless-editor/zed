@@ -1621,31 +1621,6 @@ impl Render for MessageEditor {
 
         let line_height = TextSize::Small.rems(cx).to_pixels(window.rem_size()) * 1.5;
 
-        let has_configured_providers = LanguageModelRegistry::read_global(cx)
-            .providers()
-            .iter()
-            .filter(|provider| {
-                provider.is_authenticated(cx) && provider.id() != ZED_CLOUD_PROVIDER_ID
-            })
-            .count()
-            > 0;
-
-        let is_signed_out = self
-            .workspace
-            .read_with(cx, |workspace, _| {
-                workspace.client().status().borrow().is_signed_out()
-            })
-            .unwrap_or(true);
-
-        let has_history = self
-            .history_store
-            .as_ref()
-            .and_then(|hs| hs.update(cx, |hs, cx| hs.entries(cx).len() > 0).ok())
-            .unwrap_or(false)
-            || self
-                .thread
-                .read_with(cx, |thread, _| thread.messages().len() > 0);
-
         v_flex()
             .size_full()
             .bg(cx.theme().colors().panel_background)

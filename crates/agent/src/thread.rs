@@ -1662,7 +1662,6 @@ impl Thread {
                 let mut events = stream_completion_future.await?;
 
                 let mut stop_reason = StopReason::EndTurn;
-                let current_token_usage = TokenUsage::default();
 
                 thread
                     .update(cx, |_thread, cx| {
@@ -3003,16 +3002,6 @@ impl Thread {
             .get(self.messages.len().saturating_sub(1))
             .or_else(|| self.request_token_usage.last())
             .cloned()
-    }
-
-    fn update_token_usage_at_last_message(&mut self, token_usage: TokenUsage) {
-        let placeholder = self.token_usage_at_last_message().unwrap_or_default();
-        self.request_token_usage
-            .resize(self.messages.len(), placeholder);
-
-        if let Some(last) = self.request_token_usage.last_mut() {
-            *last = token_usage;
-        }
     }
 
     pub fn deny_tool_use(

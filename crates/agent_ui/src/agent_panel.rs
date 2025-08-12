@@ -65,7 +65,7 @@ use time::UtcOffset;
 use ui::utils::WithRemSize;
 use ui::{
     Banner, Callout, ContextMenu, ContextMenuEntry, ElevationIndex, KeyBinding, PopoverMenu,
-    PopoverMenuHandle, ProgressBar, Tab, Tooltip, prelude::*,
+    PopoverMenuHandle, Tab, Tooltip, prelude::*,
 };
 use util::ResultExt as _;
 use workspace::{

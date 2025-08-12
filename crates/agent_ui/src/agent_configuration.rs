@@ -27,7 +27,7 @@ use project::{
 };
 use settings::{Settings, update_settings_file};
 use ui::{
-    Chip, ContextMenu, Disclosure, Divider, DividerColor, ElevationIndex, Indicator, PopoverMenu,
+    ContextMenu, Disclosure, Divider, DividerColor, ElevationIndex, Indicator, PopoverMenu,
     Scrollbar, ScrollbarState, Switch, SwitchColor, SwitchField, Tooltip, prelude::*,
 };
 use util::ResultExt as _;

@@ -13,8 +13,7 @@ use futures::{
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Subscription, Task, WeakEntity};
 use language::{Buffer, IndentKind, Point, TransactionId, line_diff};
 use language_model::{
-    LanguageModel, LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage,
-    LanguageModelTextStream, Role,
+    CompletionIntent, LanguageModel, LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage, LanguageModelTextStream, Role
 };
 use multi_buffer::MultiBufferRow;
 use parking_lot::Mutex;
@@ -33,7 +32,6 @@ use std::{
     time::Instant,
 };
 use streaming_diff::{CharOperation, LineDiff, LineOperation, StreamingDiff};
-use zed_llm_client::CompletionIntent;
 
 pub struct BufferCodegen {
     alternatives: Vec<Entity<CodegenAlternative>>,
@@ -1416,7 +1414,6 @@ mod tests {
                 future::ready(Ok(LanguageModelTextStream {
                     message_id: None,
                     stream: chunks_rx.map(Ok).boxed(),
-                    last_token_usage: Arc::new(Mutex::new(TokenUsage::default())),
                 })),
                 cx,
             );

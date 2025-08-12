@@ -16,7 +16,6 @@ use agent::{
 };
 use agent_settings::AgentSettings;
 use anyhow::{Context as _, Result};
-use client::{DisableAiSettings};
 use collections::{HashMap, HashSet, VecDeque, hash_map};
 use editor::SelectionEffects;
 use editor::{
@@ -39,7 +38,7 @@ use language_model::{
 };
 use multi_buffer::MultiBufferRow;
 use parking_lot::Mutex;
-use project::{CodeAction, LspAction, Project, ProjectTransaction};
+use project::{CodeAction, DisableAiSettings, LspAction, Project, ProjectTransaction};
 use prompt_store::{PromptBuilder, PromptStore};
 use settings::{Settings, SettingsStore};
 
@@ -48,7 +47,7 @@ use text::{OffsetRangeExt, ToPoint as _};
 use ui::prelude::*;
 use util::{RangeExt, ResultExt, maybe};
 use workspace::{ItemHandle, Toast, Workspace, dock::Panel, notifications::NotificationId};
-use zed_actions::agent::OpenConfiguration;
+use zed_actions::agent::OpenSettings;
 
 pub fn init(
     fs: Arc<dyn Fs>,
@@ -158,7 +157,7 @@ impl InlineAssistant {
                     let window = windows[0];
                     let _ = window.update(cx, |_, window, cx| {
                         editor.update(cx, |editor, cx| {
-                            if editor.has_active_inline_completion() {
+                            if editor.has_active_edit_prediction() {
                                 editor.cancel(&Default::default(), window, cx);
                             }
                         });
@@ -227,8 +226,8 @@ impl InlineAssistant {
                     );
 
                     if DisableAiSettings::get_global(cx).disable_ai {
-                        // Cancel any active completions
-                        if editor.has_active_inline_completion() {
+                        // Cancel any active edit predictions
+                        if editor.has_active_edit_prediction() {
                             editor.cancel(&Default::default(), window, cx);
                         }
                     }
@@ -341,7 +340,7 @@ impl InlineAssistant {
                     if let Some(answer) = answer {
                         if answer == 0 {
                             cx.update(|window, cx| {
-                                window.dispatch_action(Box::new(OpenConfiguration), cx)
+                                window.dispatch_action(Box::new(OpenSettings), cx)
                             })
                             .ok();
                         }

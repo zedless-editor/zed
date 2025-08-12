@@ -1,5 +1,5 @@
 use crate::{
-    db::{Database, NewUserParams},
+    db::{Database},
     test_both_dbs,
 };
 use pretty_assertions::assert_eq;
@@ -13,29 +13,13 @@ test_both_dbs!(
 
 async fn test_get_user_flags(db: &Arc<Database>) {
     let user_1 = db
-        .create_user(
-            "user1@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "user1".to_string(),
-                github_user_id: 1,
-            },
-        )
+        .create_user("user1@example.com", None, false)
         .await
         .unwrap()
         .user_id;
 
     let user_2 = db
-        .create_user(
-            "user2@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "user2".to_string(),
-                github_user_id: 2,
-            },
-        )
+        .create_user("user2@example.com", None, false)
         .await
         .unwrap()
         .user_id;

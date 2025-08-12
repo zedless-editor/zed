@@ -14,15 +14,7 @@ test_both_dbs!(
 
 async fn test_accepted_tos(db: &Arc<Database>) {
     let user_id = db
-        .create_user(
-            "user1@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "user1".to_string(),
-                github_user_id: 1,
-            },
-        )
+        .create_user("user1@example.com", None, false)
         .await
         .unwrap()
         .user_id;
@@ -53,15 +45,7 @@ test_both_dbs!(
 
 async fn test_destroy_user_cascade_deletes_access_tokens(db: &Arc<Database>) {
     let user_id = db
-        .create_user(
-            "user1@example.com",
-            Some("user1"),
-            false,
-            NewUserParams {
-                github_login: "user1".to_string(),
-                github_user_id: 12345,
-            },
-        )
+        .create_user("user1@example.com", Some("user1"), false)
         .await
         .unwrap()
         .user_id;

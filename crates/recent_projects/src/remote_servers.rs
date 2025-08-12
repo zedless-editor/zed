@@ -950,7 +950,7 @@ impl RemoteServerProjects {
                     )
                     .child(Label::new(project.paths.join(", ")))
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        let secondary_confirm = e.down.modifiers.platform;
+                        let secondary_confirm = e.modifiers().platform;
                         callback(this, secondary_confirm, window, cx)
                     }))
                     .when(is_from_zed, |server_list_item| {
@@ -960,7 +960,7 @@ impl RemoteServerProjects {
                                 .child({
                                     let project = project.clone();
                                     // Right-margin to offset it from the Scrollbar
-                                    IconButton::new("remove-remote-project", IconName::TrashAlt)
+                                    IconButton::new("remove-remote-project", IconName::Trash)
                                         .icon_size(IconSize::Small)
                                         .shape(IconButtonShape::Square)
                                         .size(ButtonSize::Large)

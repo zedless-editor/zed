@@ -8,6 +8,7 @@ use crate::{
 use anyhow::anyhow;
 use call::ActiveCall;
 use channel::{ChannelBuffer, ChannelStore};
+use client::test::{make_get_authenticated_user_response, parse_authorization_header};
 use client::{
     self, ChannelId, Client, Connection, Credentials, EstablishConnectionError, UserStore,
     proto::PeerId,
@@ -19,7 +20,7 @@ use fs::FakeFs;
 use futures::{StreamExt as _, channel::oneshot};
 use git::GitHostingProviderRegistry;
 use gpui::{AppContext as _, BackgroundExecutor, Entity, Task, TestAppContext, VisualTestContext};
-use http_client::FakeHttpClient;
+use http_client::{FakeHttpClient, Method};
 use language::LanguageRegistry;
 use notifications::NotificationStore;
 use parking_lot::Mutex;
@@ -159,6 +160,8 @@ impl TestServer {
     }
 
     pub async fn create_client(&mut self, cx: &mut TestAppContext, name: &str) -> TestClient {
+        const ACCESS_TOKEN: &str = "the-token";
+
         let fs = FakeFs::new(cx.executor());
 
         cx.update(|cx| {
@@ -172,28 +175,55 @@ impl TestServer {
             client::init_settings(cx);
         });
 
-        let http = FakeHttpClient::with_404_response();
-        let user_id = if let Ok(Some(user)) = self.app_state.db.get_user_by_github_login(name).await
-        {
-            user.id
-        } else {
-            let github_user_id = self.next_github_user_id;
+        let user_id = {
             self.next_github_user_id += 1;
             self.app_state
                 .db
-                .create_user(
-                    &format!("{name}@example.com"),
-                    None,
-                    false,
-                    NewUserParams {
-                        github_login: name.into(),
-                        github_user_id,
-                    },
-                )
+                .create_user(&format!("{name}@example.com"), None, false)
                 .await
                 .expect("creating user failed")
                 .user_id
         };
+
+        let http = FakeHttpClient::create({
+            let name = name.to_string();
+            move |req| {
+                async move {
+                    match (req.method(), req.uri().path()) {
+                        (&Method::GET, "/client/users/me") => {
+                            let credentials = parse_authorization_header(&req);
+                            if credentials
+                                != Some(Credentials {
+                                    user_id: user_id.to_proto(),
+                                    access_token: ACCESS_TOKEN.into(),
+                                })
+                            {
+                                return Ok(http_client::Response::builder()
+                                    .status(401)
+                                    .body("Unauthorized".into())
+                                    .unwrap());
+                            }
+
+                            Ok(http_client::Response::builder()
+                                .status(200)
+                                .body(
+                                    serde_json::to_string(&make_get_authenticated_user_response(
+                                        user_id.0,
+                                    ))
+                                    .unwrap()
+                                    .into(),
+                                )
+                                .unwrap())
+                        }
+                        _ => Ok(http_client::Response::builder()
+                            .status(404)
+                            .body("Not Found".into())
+                            .unwrap()),
+                    }
+                }
+            }
+        });
+
         let client_name = name.to_string();
         let mut client = cx.update(|cx| Client::new(http.clone(), cx));
         let server = self.server.clone();
@@ -205,11 +235,10 @@ impl TestServer {
             .unwrap()
             .set_id(user_id.to_proto())
             .override_authenticate(move |cx| {
-                let access_token = "the-token".to_string();
                 cx.spawn(async move |_| {
                     Ok(Credentials {
                         user_id: user_id.to_proto(),
-                        access_token,
+                        access_token: ACCESS_TOKEN.into(),
                     })
                 })
             })
@@ -218,7 +247,7 @@ impl TestServer {
                     credentials,
                     &Credentials {
                         user_id: user_id.0 as u64,
-                        access_token: "the-token".into()
+                        access_token: ACCESS_TOKEN.into(),
                     }
                 );
 
@@ -251,6 +280,8 @@ impl TestServer {
                             client_name,
                             Principal::User(user),
                             ZedVersion(SemanticVersion::new(1, 0, 0)),
+                            Some("test".to_string()),
+                            None,
                             None,
                             None,
                             Some(connection_id_tx),
@@ -314,7 +345,7 @@ impl TestServer {
         });
 
         client
-            .authenticate_and_connect(false, &cx.to_async())
+            .connect(false, &cx.to_async())
             .await
             .into_response()
             .unwrap();
@@ -517,7 +548,6 @@ impl TestServer {
     ) -> Arc<AppState> {
         Arc::new(AppState {
             db: test_db.db().clone(),
-            llm_db: None,
             livekit_client: Some(Arc::new(livekit_test_server.create_api_client())),
             blob_store_client: None,
             real_stripe_client: None,
@@ -687,17 +717,17 @@ impl TestClient {
                 current: store
                     .contacts()
                     .iter()
-                    .map(|contact| contact.user.github_login.clone())
+                    .map(|contact| contact.user.id.clone().to_string())
                     .collect(),
                 outgoing_requests: store
                     .outgoing_contact_requests()
                     .iter()
-                    .map(|user| user.github_login.clone())
+                    .map(|user| user.id.clone().to_string())
                     .collect(),
                 incoming_requests: store
                     .incoming_contact_requests()
                     .iter()
-                    .map(|user| user.github_login.clone())
+                    .map(|user| user.id.clone().to_string())
                     .collect(),
             })
     }

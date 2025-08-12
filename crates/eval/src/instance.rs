@@ -1046,8 +1046,7 @@ pub fn response_events_to_markdown(
                 ));
             }
             Ok(
-                LanguageModelCompletionEvent::UsageUpdate(_)
-                | LanguageModelCompletionEvent::StartMessage { .. }
+                LanguageModelCompletionEvent::StartMessage { .. }
                 | LanguageModelCompletionEvent::StatusUpdate { .. },
             ) => {}
             Ok(LanguageModelCompletionEvent::ToolUseJsonParseError {
@@ -1131,8 +1130,7 @@ impl ThreadDialog {
                 }
 
                 // Skip these
-                Ok(LanguageModelCompletionEvent::UsageUpdate(_))
-                | Ok(LanguageModelCompletionEvent::RedactedThinking { .. })
+                Ok(LanguageModelCompletionEvent::RedactedThinking { .. })
                 | Ok(LanguageModelCompletionEvent::StatusUpdate { .. })
                 | Ok(LanguageModelCompletionEvent::StartMessage { .. })
                 | Ok(LanguageModelCompletionEvent::Stop(_)) => {}

@@ -822,7 +822,7 @@ impl LspLogView {
             BINARY = server.binary(),
             WORKSPACE_FOLDERS = server
                 .workspace_folders()
-                .iter()
+                .into_iter()
                 .filter_map(|path| path
                     .to_file_path()
                     .ok()

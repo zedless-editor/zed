@@ -222,10 +222,6 @@ impl<T: RandomizedTest> TestPlan<T> {
                     &format!("{username}@example.com"),
                     None,
                     false,
-                    NewUserParams {
-                        github_login: username.clone(),
-                        github_user_id: ix as i32,
-                    },
                 )
                 .await
                 .unwrap()

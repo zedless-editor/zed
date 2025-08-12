@@ -324,20 +324,6 @@ impl CollabPanel {
             )
             .detach();
 
-            let entity = cx.entity().downgrade();
-            let list_state = ListState::new(
-                0,
-                gpui::ListAlignment::Top,
-                px(1000.),
-                move |ix, window, cx| {
-                    if let Some(entity) = entity.upgrade() {
-                        entity.update(cx, |this, cx| this.render_list_entry(ix, window, cx))
-                    } else {
-                        div().into_any()
-                    }
-                },
-            );
-
             let mut this = Self {
                 width: None,
                 focus_handle: cx.focus_handle(),
@@ -345,7 +331,7 @@ impl CollabPanel {
                 fs: workspace.app_state().fs.clone(),
                 pending_serialization: Task::ready(None),
                 context_menu: None,
-                list_state,
+                list_state: ListState::new(0, gpui::ListAlignment::Top, px(1000.)),
                 channel_name_editor,
                 filter_editor,
                 entries: Vec::default(),
@@ -516,7 +502,7 @@ impl CollabPanel {
                 if let Some(user) = user_store.current_user() {
                     self.match_candidates.clear();
                     self.match_candidates
-                        .push(StringMatchCandidate::new(0, &user.github_login));
+                        .push(StringMatchCandidate::new(0, &user.id.to_string()));
                     let matches = executor.block(match_strings(
                         &self.match_candidates,
                         &query,
@@ -558,7 +544,7 @@ impl CollabPanel {
                     .extend(room.remote_participants().values().map(|participant| {
                         StringMatchCandidate::new(
                             participant.user.id as usize,
-                            &participant.user.github_login,
+                            &participant.user.id.to_string(),
                         )
                     }));
                 let mut matches = executor.block(match_strings(
@@ -610,7 +596,7 @@ impl CollabPanel {
                 self.match_candidates
                     .extend(room.pending_participants().iter().enumerate().map(
                         |(id, participant)| {
-                            StringMatchCandidate::new(id, &participant.github_login)
+                            StringMatchCandidate::new(id, &participant.id.to_string())
                         },
                     ));
                 let matches = executor.block(match_strings(
@@ -755,7 +741,7 @@ impl CollabPanel {
                 incoming
                     .iter()
                     .enumerate()
-                    .map(|(ix, user)| StringMatchCandidate::new(ix, &user.github_login)),
+                    .map(|(ix, user)| StringMatchCandidate::new(ix, &user.id.to_string())),
             );
             let matches = executor.block(match_strings(
                 &self.match_candidates,
@@ -780,7 +766,7 @@ impl CollabPanel {
                 outgoing
                     .iter()
                     .enumerate()
-                    .map(|(ix, user)| StringMatchCandidate::new(ix, &user.github_login)),
+                    .map(|(ix, user)| StringMatchCandidate::new(ix, &user.id.to_string())),
             );
             let matches = executor.block(match_strings(
                 &self.match_candidates,
@@ -813,7 +799,7 @@ impl CollabPanel {
                 contacts
                     .iter()
                     .enumerate()
-                    .map(|(ix, contact)| StringMatchCandidate::new(ix, &contact.user.github_login)),
+                    .map(|(ix, contact)| StringMatchCandidate::new(ix, &contact.user.id.to_string())),
             );
 
             let matches = executor.block(match_strings(
@@ -932,17 +918,18 @@ impl CollabPanel {
         cx: &mut Context<Self>,
     ) -> ListItem {
         let user_id = user.id;
+        let user_id_str = SharedString::from(user.id.clone().to_string());
         let is_current_user =
             self.user_store.read(cx).current_user().map(|user| user.id) == Some(user_id);
-        let tooltip = format!("Follow {}", user.github_login);
+        let tooltip = format!("Follow {}", user.id);
 
         let is_call_admin = ActiveCall::global(cx).read(cx).room().is_some_and(|room| {
             room.read(cx).local_participant().role == proto::ChannelRole::Admin
         });
 
-        ListItem::new(SharedString::from(user.github_login.clone()))
+        ListItem::new(user_id_str.clone())
             .start_slot(Avatar::new(user.avatar_uri.clone()))
-            .child(Label::new(user.github_login.clone()))
+            .child(Label::new(user.id.clone().to_string()))
             .toggle_state(is_selected)
             .end_slot(if is_pending {
                 Label::new("Calling").color(Color::Muted).into_any_element()
@@ -1124,7 +1111,7 @@ impl CollabPanel {
                     .relative()
                     .gap_1()
                     .child(render_tree_branch(false, false, window, cx))
-                    .child(IconButton::new(0, IconName::MessageBubbles))
+                    .child(IconButton::new(0, IconName::Chat))
                     .children(has_messages_notification.then(|| {
                         div()
                             .w_1p5()
@@ -1461,9 +1448,9 @@ impl CollabPanel {
 
             if contact.online && !contact.busy {
                 let label = if in_room {
-                    format!("Invite {} to join", contact.user.github_login)
+                    format!("Invite {} to join", contact.user.id)
                 } else {
-                    format!("Call {}", contact.user.github_login)
+                    format!("Call {}", contact.user.id)
                 };
                 context_menu = context_menu.entry(label, None, {
                     let this = this.clone();
@@ -1481,7 +1468,6 @@ impl CollabPanel {
                     this.update(cx, |this, cx| {
                         this.remove_contact(
                             contact.user.id,
-                            &contact.user.github_login,
                             window,
                             cx,
                         );
@@ -2192,17 +2178,11 @@ impl CollabPanel {
         }
     }
 
-    fn remove_contact(
-        &mut self,
-        user_id: u64,
-        github_login: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn remove_contact(&mut self, user_id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let user_store = self.user_store.clone();
         let prompt_message = format!(
             "Are you sure you want to remove \"{}\" from your contacts?",
-            github_login
+            user_id
         );
         let answer = window.prompt(
             PromptLevel::Warning,
@@ -2331,7 +2311,7 @@ impl CollabPanel {
                                 let client = this.client.clone();
                                 cx.spawn_in(window, async move |_, cx| {
                                     client
-                                        .authenticate_and_connect(true, &cx)
+                                        .connect(true, &cx)
                                         .await
                                         .into_response()
                                         .notify_async_err(cx);
@@ -2431,7 +2411,13 @@ impl CollabPanel {
         });
         v_flex()
             .size_full()
-            .child(list(self.list_state.clone()).size_full())
+            .child(
+                list(
+                    self.list_state.clone(),
+                    cx.processor(Self::render_list_entry),
+                )
+                .size_full(),
+            )
             .child(
                 v_flex()
                     .child(div().mx_2().border_primary(cx).border_t_1())
@@ -2583,8 +2569,8 @@ impl CollabPanel {
     ) -> impl IntoElement {
         let online = contact.online;
         let busy = contact.busy || calling;
-        let github_login = SharedString::from(contact.user.github_login.clone());
-        let item = ListItem::new(github_login.clone())
+        let user_id = SharedString::from(contact.user.id.clone().to_string());
+        let item = ListItem::new(user_id.clone())
             .indent_level(1)
             .indent_step_size(px(20.))
             .toggle_state(is_selected)
@@ -2592,7 +2578,7 @@ impl CollabPanel {
                 h_flex()
                     .w_full()
                     .justify_between()
-                    .child(Label::new(github_login.clone()))
+                    .child(Label::new(user_id.clone()))
                     .when(calling, |el| {
                         el.child(Label::new("Calling").color(Color::Muted))
                     })
@@ -2605,7 +2591,7 @@ impl CollabPanel {
                                     let contact = contact.clone();
                                     move |this, event: &ClickEvent, window, cx| {
                                         this.deploy_contact_context_menu(
-                                            event.down.position,
+                                            event.position(),
                                             contact.clone(),
                                             window,
                                             cx,
@@ -2635,20 +2621,20 @@ impl CollabPanel {
             );
 
         div()
-            .id(github_login.clone())
+            .id(user_id.clone())
             .group("")
             .child(item)
             .tooltip(move |_, cx| {
                 let text = if !online {
-                    format!(" {} is offline", &github_login)
+                    format!(" {} is offline", &user_id)
                 } else if busy {
-                    format!(" {} is on a call", &github_login)
+                    format!(" {} is on a call", &user_id)
                 } else {
                     let room = ActiveCall::global(cx).read(cx).room();
                     if room.is_some() {
-                        format!("Invite {} to join call", &github_login)
+                        format!("Invite {} to join call", &user_id)
                     } else {
-                        format!("Call {}", &github_login)
+                        format!("Call {}", &user_id)
                     }
                 };
                 Tooltip::simple(text, cx)
@@ -2662,7 +2648,7 @@ impl CollabPanel {
         is_selected: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let github_login = SharedString::from(user.github_login.clone());
+        let user_id_str = SharedString::from(user.id.clone().to_string());
         let user_id = user.id;
         let is_response_pending = self.user_store.read(cx).is_contact_request_pending(user);
         let color = if is_response_pending {
@@ -2687,18 +2673,17 @@ impl CollabPanel {
                     .tooltip(Tooltip::text("Accept invite")),
             ]
         } else {
-            let github_login = github_login.clone();
             vec![
                 IconButton::new("remove_contact", IconName::Close)
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.remove_contact(user_id, &github_login, window, cx);
+                        this.remove_contact(user_id, window, cx);
                     }))
                     .icon_color(color)
                     .tooltip(Tooltip::text("Cancel invite")),
             ]
         };
 
-        ListItem::new(github_login.clone())
+        ListItem::new(user_id_str.clone())
             .indent_level(1)
             .indent_step_size(px(20.))
             .toggle_state(is_selected)
@@ -2706,7 +2691,7 @@ impl CollabPanel {
                 h_flex()
                     .w_full()
                     .justify_between()
-                    .child(Label::new(github_login.clone()))
+                    .child(Label::new(user_id.clone().to_string()))
                     .child(h_flex().children(controls)),
             )
             .start_slot(Avatar::new(user.avatar_uri.clone()))
@@ -2923,7 +2908,7 @@ impl CollabPanel {
                         .gap_1()
                         .px_1()
                         .child(
-                            IconButton::new("channel_chat", IconName::MessageBubbles)
+                            IconButton::new("channel_chat", IconName::Chat)
                                 .style(ButtonStyle::Filled)
                                 .shape(ui::IconButtonShape::Square)
                                 .icon_size(IconSize::Small)
@@ -2939,7 +2924,7 @@ impl CollabPanel {
                                 .visible_on_hover(""),
                         )
                         .child(
-                            IconButton::new("channel_notes", IconName::File)
+                            IconButton::new("channel_notes", IconName::Reader)
                                 .style(ButtonStyle::Filled)
                                 .shape(ui::IconButtonShape::Square)
                                 .icon_size(IconSize::Small)
@@ -3061,7 +3046,7 @@ impl Render for CollabPanel {
             .on_action(cx.listener(CollabPanel::move_channel_down))
             .track_focus(&self.focus_handle)
             .size_full()
-            .child(if self.user_store.read(cx).current_user().is_none() {
+            .child(if !self.client.status().borrow().is_connected() {
                 self.render_signed_out(cx)
             } else {
                 self.render_signed_in(window, cx)
@@ -3295,7 +3280,7 @@ impl Render for JoinChannelTooltip {
                     h_flex()
                         .gap_2()
                         .child(Avatar::new(participant.avatar_uri.clone()))
-                        .child(Label::new(participant.github_login.clone()))
+                        .child(Label::new(participant.id.clone().to_string()))
                 }))
         })
     }

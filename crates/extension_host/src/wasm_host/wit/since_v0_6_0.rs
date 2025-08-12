@@ -28,7 +28,8 @@ use std::{
     sync::{Arc, OnceLock},
 };
 use task::{SpawnInTerminal, ZedDebugConfig};
-use util::{fs::make_file_executable, maybe};
+use url::Url;
+use util::{archive::extract_zip, fs::make_file_executable, maybe};
 use wasmtime::component::{Linker, Resource};
 use anyhow::anyhow;
 
@@ -798,7 +799,8 @@ impl process::Host for WasmState {
         command: process::Command,
     ) -> wasmtime::Result<Result<process::Output, String>> {
         maybe!(async {
-            self.manifest.allow_exec(&command.command, &command.args)?;
+            self.capability_granter
+                .grant_exec(&command.command, &command.args)?;
 
             let output = util::command::new_smol_command(command.command.as_str())
                 .args(&command.args)

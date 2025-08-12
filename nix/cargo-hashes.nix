@@ -14,6 +14,7 @@
   "pet-0.1.0" = "sha256-DVLyPNQLzYuebe9wVldYyhKD09IoUZL19J1jwDgHOeU=";
   "reqwest-0.12.15" = "sha256-G7RRaNP6aqixSThXFJybPZ1AnesYn+f97p210FHf3qw=";
   "scap-0.0.8" = "sha256-3DdcZoDImYuP+QmdsyaoMDiL61xqkC3zodDi9CgWiXg=";
+  "tiktoken-rs-0.8.0" = "";
   "tree-sitter-gitcommit-0.0.1" = "sha256-Z1BDWFXve4lRa6cTQyVHAfVo2ZFhcxKdRYpyWqbU4lY=";
   "tree-sitter-gomod-1.1.1" = "sha256-KD6Fio9qie3wbGAvQaYsMdYOK1QjnRrGExt1oL/6mis=";
   "tree-sitter-gowork-0.0.1" = "sha256-WRMgGjOlJ+bT/YnSBeSLRTLlltA5WwTvV0Ow/949+BE=";
@@ -23,4 +24,5 @@
   "tree-sitter-yaml-0.6.1" = "sha256-95u/bq74SiUHW8lVp3RpanmYS/lyVPW0Inn8gR7N3IQ=";
   "windows-capture-1.4.3" = "sha256-k07Jpk4mcDo1JsZDF7AZMHRqlqFKHt60G2X3BUjMhBc=";
   "xim-0.4.0" = "sha256-BXyaIBoqMNbzaSJqMadmofdjtlEVSoU6iogF66YP6a4=";
+  "yawc-0.2.4" = "";
 }

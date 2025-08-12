@@ -1,6 +1,8 @@
 use super::{Client, Status, TypedEnvelope, proto};
 use anyhow::{Context as _, Result, anyhow};
 use chrono::{DateTime, Utc};
+use cloud_api_client::GetAuthenticatedUserResponse;
+use cloud_api_client::websocket_protocol::MessageToClient;
 use collections::{HashMap, HashSet, hash_map::Entry};
 use derive_more::Deref;
 use feature_flags::FeatureFlagAppExt;
@@ -16,11 +18,7 @@ use std::{
     sync::{Arc, Weak},
 };
 use text::ReplicaId;
-use util::{TryFutureExt as _, maybe};
-use zed_llm_client::{
-    EDIT_PREDICTIONS_USAGE_AMOUNT_HEADER_NAME, EDIT_PREDICTIONS_USAGE_LIMIT_HEADER_NAME,
-    MODEL_REQUESTS_USAGE_AMOUNT_HEADER_NAME, MODEL_REQUESTS_USAGE_LIMIT_HEADER_NAME, UsageLimit,
-};
+use util::{ResultExt, TryFutureExt as _};
 
 pub type UserId = u64;
 
@@ -55,7 +53,6 @@ pub struct ParticipantIndex(pub u32);
 #[derive(Default, Debug)]
 pub struct User {
     pub id: UserId,
-    pub github_login: String,
     pub avatar_uri: SharedUri,
     pub name: Option<String>,
 }
@@ -78,13 +75,13 @@ impl PartialOrd for User {
 
 impl Ord for User {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.github_login.cmp(&other.github_login)
+        self.id.cmp(&other.id)
     }
 }
 
 impl PartialEq for User {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.github_login == other.github_login
+        self.id == other.id
     }
 }
 
@@ -107,19 +104,10 @@ pub enum ContactRequestStatus {
 
 pub struct UserStore {
     users: HashMap<u64, Arc<User>>,
-    by_github_login: HashMap<String, u64>,
     participant_indices: HashMap<u64, ParticipantIndex>,
     update_contacts_tx: mpsc::UnboundedSender<UpdateContacts>,
-    current_plan: Option<proto::Plan>,
-    subscription_period: Option<(DateTime<Utc>, DateTime<Utc>)>,
-    trial_started_at: Option<DateTime<Utc>>,
-    model_request_usage: Option<ModelRequestUsage>,
-    edit_prediction_usage: Option<EditPredictionUsage>,
-    is_usage_based_billing_enabled: Option<bool>,
-    account_too_young: Option<bool>,
-    has_overdue_invoices: Option<bool>,
     current_user: watch::Receiver<Option<Arc<User>>>,
-    accepted_tos_at: Option<Option<DateTime<Utc>>>,
+    accepted_tos_at: Option<Option<cloud_api_client::Timestamp>>,
     contacts: Vec<Arc<Contact>>,
     incoming_contact_requests: Vec<Arc<User>>,
     outgoing_contact_requests: Vec<Arc<User>>,
@@ -145,6 +133,7 @@ pub enum Event {
     ShowContacts,
     ParticipantIndicesChanged,
     PrivateUserInfoUpdated,
+    PlanUpdated,
 }
 
 #[derive(Clone, Copy)]
@@ -162,18 +151,6 @@ enum UpdateContacts {
     Clear(postage::barrier::Sender),
 }
 
-#[derive(Debug, Clone, Copy, Deref)]
-pub struct ModelRequestUsage(pub RequestUsage);
-
-#[derive(Debug, Clone, Copy, Deref)]
-pub struct EditPredictionUsage(pub RequestUsage);
-
-#[derive(Debug, Clone, Copy)]
-pub struct RequestUsage {
-    pub limit: UsageLimit,
-    pub amount: i32,
-}
-
 impl UserStore {
     pub fn new(client: Arc<Client>, cx: &Context<Self>) -> Self {
         let (mut current_user_tx, current_user_rx) = watch::channel();
@@ -184,18 +161,15 @@ impl UserStore {
             client.add_message_handler(cx.weak_entity(), Self::handle_update_invite_info),
             client.add_message_handler(cx.weak_entity(), Self::handle_show_contacts),
         ];
+
+        client.add_message_to_client_handler({
+            let this = cx.weak_entity();
+            move |message, cx| Self::handle_message_to_client(this.clone(), message, cx)
+        });
+
         Self {
             users: Default::default(),
-            by_github_login: Default::default(),
             current_user: current_user_rx,
-            current_plan: None,
-            subscription_period: None,
-            trial_started_at: None,
-            model_request_usage: None,
-            edit_prediction_usage: None,
-            is_usage_based_billing_enabled: None,
-            account_too_young: None,
-            has_overdue_invoices: None,
             accepted_tos_at: None,
             contacts: Default::default(),
             incoming_contact_requests: Default::default(),
@@ -225,49 +199,44 @@ impl UserStore {
                         return Ok(());
                     };
                     match status {
-                        Status::Connected { .. } => {
+                        Status::Authenticated | Status::Connected { .. } => {
                             if let Some(user_id) = client.user_id() {
-                                let fetch_user = if let Ok(fetch_user) =
-                                    this.update(cx, |this, cx| this.get_user(user_id, cx).log_err())
-                                {
-                                    fetch_user
+                                let response = client
+                                    .cloud_client()
+                                    .get_authenticated_user()
+                                    .await
+                                    .log_err();
+
+                                let current_user_and_response = if let Some(response) = response {
+                                    let user = Arc::new(User {
+                                        id: user_id,
+                                        avatar_uri: response.user.avatar_url.clone().into(),
+                                        name: response.user.name.clone(),
+                                    });
+
+                                    Some((user, response))
                                 } else {
-                                    break;
+                                    None
                                 };
-                                let fetch_private_user_info =
-                                    client.request(proto::GetPrivateUserInfo {}).log_err();
-                                let (user, info) =
-                                    futures::join!(fetch_user, fetch_private_user_info);
+                                current_user_tx
+                                    .send(
+                                        current_user_and_response
+                                            .as_ref()
+                                            .map(|(user, _)| user.clone()),
+                                    )
+                                    .await
+                                    .ok();
 
                                 cx.update(|cx| {
-                                    if let Some(info) = info {
-                                        let staff =
-                                            info.staff && !*feature_flags::ZED_DISABLE_STAFF;
-                                        cx.update_flags(staff, info.flags);
-
+                                    if let Some((user, response)) = current_user_and_response {
                                         this.update(cx, |this, cx| {
-                                            let accepted_tos_at = {
-                                                #[cfg(debug_assertions)]
-                                                if std::env::var("ZED_IGNORE_ACCEPTED_TOS").is_ok()
-                                                {
-                                                    None
-                                                } else {
-                                                    info.accepted_tos_at
-                                                }
-
-                                                #[cfg(not(debug_assertions))]
-                                                info.accepted_tos_at
-                                            };
-
-                                            this.set_current_user_accepted_tos_at(accepted_tos_at);
-                                            cx.emit(Event::PrivateUserInfoUpdated);
+                                            this.users.insert(user_id, user);
+                                            this.update_authenticated_user(response, cx)
                                         })
                                     } else {
                                         anyhow::Ok(())
                                     }
                                 })??;
-
-                                current_user_tx.send(user).await.ok();
 
                                 this.update(cx, |_, cx| cx.notify())?;
                             }
@@ -302,7 +271,6 @@ impl UserStore {
     #[cfg(feature = "test-support")]
     pub fn clear_cache(&mut self) {
         self.users.clear();
-        self.by_github_login.clear();
     }
 
     async fn handle_update_invite_info(
@@ -348,59 +316,22 @@ impl UserStore {
 
     async fn handle_update_plan(
         this: Entity<Self>,
-        message: TypedEnvelope<proto::UpdateUserPlan>,
+        _message: TypedEnvelope<proto::UpdateUserPlan>,
         mut cx: AsyncApp,
     ) -> Result<()> {
+        let client = this
+            .read_with(&cx, |this, _| this.client.upgrade())?
+            .context("client was dropped")?;
+
+        let response = client
+            .cloud_client()
+            .get_authenticated_user()
+            .await
+            .context("failed to fetch authenticated user")?;
+
         this.update(&mut cx, |this, cx| {
-            this.current_plan = Some(message.payload.plan());
-            this.subscription_period = maybe!({
-                let period = message.payload.subscription_period?;
-                let started_at = DateTime::from_timestamp(period.started_at as i64, 0)?;
-                let ended_at = DateTime::from_timestamp(period.ended_at as i64, 0)?;
-
-                Some((started_at, ended_at))
-            });
-            this.trial_started_at = message
-                .payload
-                .trial_started_at
-                .and_then(|trial_started_at| DateTime::from_timestamp(trial_started_at as i64, 0));
-            this.is_usage_based_billing_enabled = message.payload.is_usage_based_billing_enabled;
-            this.account_too_young = message.payload.account_too_young;
-            this.has_overdue_invoices = message.payload.has_overdue_invoices;
-
-            if let Some(usage) = message.payload.usage {
-                // limits are always present even though they are wrapped in Option
-                this.model_request_usage = usage
-                    .model_requests_usage_limit
-                    .and_then(|limit| {
-                        RequestUsage::from_proto(usage.model_requests_usage_amount, limit)
-                    })
-                    .map(ModelRequestUsage);
-                this.edit_prediction_usage = usage
-                    .edit_predictions_usage_limit
-                    .and_then(|limit| {
-                        RequestUsage::from_proto(usage.model_requests_usage_amount, limit)
-                    })
-                    .map(EditPredictionUsage);
-            }
-
-            cx.notify();
-        })?;
-        Ok(())
-    }
-
-    pub fn update_model_request_usage(&mut self, usage: ModelRequestUsage, cx: &mut Context<Self>) {
-        self.model_request_usage = Some(usage);
-        cx.notify();
-    }
-
-    pub fn update_edit_prediction_usage(
-        &mut self,
-        usage: EditPredictionUsage,
-        cx: &mut Context<Self>,
-    ) {
-        self.edit_prediction_usage = Some(usage);
-        cx.notify();
+            this.update_authenticated_user(response, cx);
+        })
     }
 
     fn update_contacts(&mut self, message: UpdateContacts, cx: &Context<Self>) -> Task<Result<()>> {
@@ -467,8 +398,8 @@ impl UserStore {
                         // Update existing contacts and insert new ones
                         for updated_contact in updated_contacts {
                             match this.contacts.binary_search_by_key(
-                                &&updated_contact.user.github_login,
-                                |contact| &contact.user.github_login,
+                                &&updated_contact.user.id,
+                                |contact| &contact.user.id,
                             ) {
                                 Ok(ix) => this.contacts[ix] = updated_contact,
                                 Err(ix) => this.contacts.insert(ix, updated_contact),
@@ -491,8 +422,8 @@ impl UserStore {
                         for user in incoming_requests {
                             match this
                                 .incoming_contact_requests
-                                .binary_search_by_key(&&user.github_login, |contact| {
-                                    &contact.github_login
+                                .binary_search_by_key(&&user.id, |contact| {
+                                    &contact.id
                                 }) {
                                 Ok(ix) => this.incoming_contact_requests[ix] = user,
                                 Err(ix) => this.incoming_contact_requests.insert(ix, user),
@@ -506,8 +437,8 @@ impl UserStore {
                         for request in outgoing_requests {
                             match this
                                 .outgoing_contact_requests
-                                .binary_search_by_key(&&request.github_login, |contact| {
-                                    &contact.github_login
+                                .binary_search_by_key(&&request.id, |contact| {
+                                    &contact.id
                                 }) {
                                 Ok(ix) => this.outgoing_contact_requests[ix] = request,
                                 Err(ix) => this.outgoing_contact_requests.insert(ix, request),
@@ -528,9 +459,7 @@ impl UserStore {
     }
 
     pub fn has_contact(&self, user: &Arc<User>) -> bool {
-        self.contacts
-            .binary_search_by_key(&&user.github_login, |contact| &contact.user.github_login)
-            .is_ok()
+        false
     }
 
     pub fn incoming_contact_requests(&self) -> &[Arc<User>] {
@@ -546,27 +475,7 @@ impl UserStore {
     }
 
     pub fn contact_request_status(&self, user: &User) -> ContactRequestStatus {
-        if self
-            .contacts
-            .binary_search_by_key(&&user.github_login, |contact| &contact.user.github_login)
-            .is_ok()
-        {
-            ContactRequestStatus::RequestAccepted
-        } else if self
-            .outgoing_contact_requests
-            .binary_search_by_key(&&user.github_login, |user| &user.github_login)
-            .is_ok()
-        {
-            ContactRequestStatus::RequestSent
-        } else if self
-            .incoming_contact_requests
-            .binary_search_by_key(&&user.github_login, |user| &user.github_login)
-            .is_ok()
-        {
-            ContactRequestStatus::RequestReceived
-        } else {
-            ContactRequestStatus::None
-        }
+        ContactRequestStatus::None
     }
 
     pub fn request_contact(
@@ -749,69 +658,54 @@ impl UserStore {
         })
     }
 
-    pub fn cached_user_by_github_login(&self, github_login: &str) -> Option<Arc<User>> {
-        self.by_github_login
-            .get(github_login)
-            .and_then(|id| self.users.get(id).cloned())
-    }
-
     pub fn current_user(&self) -> Option<Arc<User>> {
         self.current_user.borrow().clone()
     }
 
-    pub fn current_plan(&self) -> Option<proto::Plan> {
-        #[cfg(debug_assertions)]
-        if let Ok(plan) = std::env::var("ZED_SIMULATE_PLAN").as_ref() {
-            return match plan.as_str() {
-                "free" => Some(proto::Plan::Free),
-                "trial" => Some(proto::Plan::ZedProTrial),
-                "pro" => Some(proto::Plan::ZedPro),
-                _ => {
-                    panic!("ZED_SIMULATE_PLAN must be one of 'free', 'trial', or 'pro'");
+    fn update_authenticated_user(
+        &mut self,
+        response: GetAuthenticatedUserResponse,
+        cx: &mut Context<Self>,
+    ) {
+        let staff = response.user.is_staff && !*feature_flags::ZED_DISABLE_STAFF;
+        cx.update_flags(staff, response.feature_flags);
+
+        cx.emit(Event::PrivateUserInfoUpdated);
+    }
+
+    fn handle_message_to_client(this: WeakEntity<Self>, message: &MessageToClient, cx: &App) {
+        cx.spawn(async move |cx| {
+            match message {
+                MessageToClient::UserUpdated => {
+                    let cloud_client = cx
+                        .update(|cx| {
+                            this.read_with(cx, |this, _cx| {
+                                this.client.upgrade().map(|client| client.cloud_client())
+                            })
+                        })??
+                        .ok_or(anyhow::anyhow!("Failed to get Cloud client"))?;
+
+                    let response = cloud_client.get_authenticated_user().await?;
+                    cx.update(|cx| {
+                        this.update(cx, |this, cx| {
+                            this.update_authenticated_user(response, cx);
+                        })
+                    })??;
                 }
-            };
-        }
+            }
 
-        self.current_plan
-    }
-
-    pub fn subscription_period(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-        self.subscription_period
-    }
-
-    pub fn trial_started_at(&self) -> Option<DateTime<Utc>> {
-        self.trial_started_at
-    }
-
-    pub fn usage_based_billing_enabled(&self) -> Option<bool> {
-        self.is_usage_based_billing_enabled
-    }
-
-    pub fn model_request_usage(&self) -> Option<ModelRequestUsage> {
-        self.model_request_usage
-    }
-
-    pub fn edit_prediction_usage(&self) -> Option<EditPredictionUsage> {
-        self.edit_prediction_usage
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
     }
 
     pub fn watch_current_user(&self) -> watch::Receiver<Option<Arc<User>>> {
         self.current_user.clone()
     }
 
-    /// Returns whether the user's account is too new to use the service.
-    pub fn account_too_young(&self) -> bool {
-        self.account_too_young.unwrap_or(false)
-    }
-
-    /// Returns whether the current user has overdue invoices and usage should be blocked.
-    pub fn has_overdue_invoices(&self) -> bool {
-        self.has_overdue_invoices.unwrap_or(false)
-    }
-
-    pub fn current_user_has_accepted_terms(&self) -> Option<bool> {
+    pub fn has_accepted_terms_of_service(&self) -> bool {
         self.accepted_tos_at
-            .map(|accepted_tos_at| accepted_tos_at.is_some())
+            .map_or(false, |accepted_tos_at| accepted_tos_at.is_some())
     }
 
     pub fn accept_terms_of_service(&self, cx: &Context<Self>) -> Task<Result<()>> {
@@ -823,21 +717,16 @@ impl UserStore {
         cx.spawn(async move |this, cx| -> anyhow::Result<()> {
             let client = client.upgrade().context("client not found")?;
             let response = client
-                .request(proto::AcceptTermsOfService {})
+                .cloud_client()
+                .accept_terms_of_service()
                 .await
                 .context("error accepting tos")?;
             this.update(cx, |this, cx| {
-                this.set_current_user_accepted_tos_at(Some(response.accepted_tos_at));
+                this.accepted_tos_at = Some(response.user.accepted_tos_at);
                 cx.emit(Event::PrivateUserInfoUpdated);
             })?;
             Ok(())
         })
-    }
-
-    fn set_current_user_accepted_tos_at(&mut self, accepted_tos_at: Option<u64>) {
-        self.accepted_tos_at = Some(
-            accepted_tos_at.and_then(|timestamp| DateTime::from_timestamp(timestamp as i64, 0)),
-        );
     }
 
     fn load_users(
@@ -862,13 +751,7 @@ impl UserStore {
         let mut ret = Vec::with_capacity(users.len());
         for user in users {
             let user = User::new(user);
-            if let Some(old) = self.users.insert(user.id, user.clone()) {
-                if old.github_login != user.github_login {
-                    self.by_github_login.remove(&old.github_login);
-                }
-            }
-            self.by_github_login
-                .insert(user.github_login.clone(), user.id);
+            if let Some(old) = self.users.insert(user.id, user.clone()) {}
             ret.push(user)
         }
         ret
@@ -897,11 +780,7 @@ impl UserStore {
         let mut ret = HashMap::default();
         let mut missing_user_ids = Vec::new();
         for id in user_ids {
-            if let Some(github_login) = self.get_cached_user(id).map(|u| u.github_login.clone()) {
-                ret.insert(id, github_login.into());
-            } else {
-                missing_user_ids.push(id)
-            }
+            missing_user_ids.push(id)
         }
         if !missing_user_ids.is_empty() {
             let this = self.weak_self.clone();
@@ -919,8 +798,7 @@ impl User {
     fn new(message: proto::User) -> Arc<Self> {
         Arc::new(User {
             id: message.id,
-            github_login: message.github_login,
-            avatar_uri: message.avatar_url.into(),
+            avatar_uri: "".into(),
             name: message.name,
         })
     }
@@ -955,65 +833,5 @@ impl Collaborator {
             committer_name: message.committer_name,
             committer_email: message.committer_email,
         })
-    }
-}
-
-impl RequestUsage {
-    pub fn over_limit(&self) -> bool {
-        match self.limit {
-            UsageLimit::Limited(limit) => self.amount >= limit,
-            UsageLimit::Unlimited => false,
-        }
-    }
-
-    pub fn from_proto(amount: u32, limit: proto::UsageLimit) -> Option<Self> {
-        let limit = match limit.variant? {
-            proto::usage_limit::Variant::Limited(limited) => {
-                UsageLimit::Limited(limited.limit as i32)
-            }
-            proto::usage_limit::Variant::Unlimited(_) => UsageLimit::Unlimited,
-        };
-        Some(RequestUsage {
-            limit,
-            amount: amount as i32,
-        })
-    }
-
-    fn from_headers(
-        limit_name: &str,
-        amount_name: &str,
-        headers: &HeaderMap<HeaderValue>,
-    ) -> Result<Self> {
-        let limit = headers
-            .get(limit_name)
-            .with_context(|| format!("missing {limit_name:?} header"))?;
-        let limit = UsageLimit::from_str(limit.to_str()?)?;
-
-        let amount = headers
-            .get(amount_name)
-            .with_context(|| format!("missing {amount_name:?} header"))?;
-        let amount = amount.to_str()?.parse::<i32>()?;
-
-        Ok(Self { limit, amount })
-    }
-}
-
-impl ModelRequestUsage {
-    pub fn from_headers(headers: &HeaderMap<HeaderValue>) -> Result<Self> {
-        Ok(Self(RequestUsage::from_headers(
-            MODEL_REQUESTS_USAGE_LIMIT_HEADER_NAME,
-            MODEL_REQUESTS_USAGE_AMOUNT_HEADER_NAME,
-            headers,
-        )?))
-    }
-}
-
-impl EditPredictionUsage {
-    pub fn from_headers(headers: &HeaderMap<HeaderValue>) -> Result<Self> {
-        Ok(Self(RequestUsage::from_headers(
-            EDIT_PREDICTIONS_USAGE_LIMIT_HEADER_NAME,
-            EDIT_PREDICTIONS_USAGE_AMOUNT_HEADER_NAME,
-            headers,
-        )?))
     }
 }

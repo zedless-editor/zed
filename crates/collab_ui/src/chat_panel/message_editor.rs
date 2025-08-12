@@ -374,12 +374,12 @@ impl MessageEditor {
                 .read(cx)
                 .channel_participants(chat.channel_id)
             {
-                names.insert(participant.github_login.clone());
+                names.insert(participant.id.clone().to_string());
             }
             for message in chat
                 .messages_in_range(chat.message_count().saturating_sub(100)..chat.message_count())
             {
-                names.insert(message.sender.github_login.clone());
+                names.insert(message.sender.id.clone().to_string());
             }
         }
 
@@ -470,24 +470,6 @@ impl MessageEditor {
             let mut text = String::new();
 
             this.editor.update(cx, |editor, cx| {
-                let multi_buffer = editor.buffer().read(cx).snapshot(cx);
-                for range in ranges {
-                    text.clear();
-                    text.extend(buffer.text_for_range(range.clone()));
-                    if let Some(username) = text.strip_prefix('@') {
-                        if let Some(user) = this
-                            .user_store
-                            .read(cx)
-                            .cached_user_by_github_login(username)
-                        {
-                            let start = multi_buffer.anchor_after(range.start);
-                            let end = multi_buffer.anchor_after(range.end);
-
-                            mentioned_user_ids.push(user.id);
-                            anchor_ranges.push(start..end);
-                        }
-                    }
-                }
 
                 editor.clear_highlights::<Self>(cx);
                 editor.highlight_text::<Self>(

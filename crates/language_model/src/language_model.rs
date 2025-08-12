@@ -3,6 +3,7 @@ mod rate_limiter;
 mod registry;
 mod request;
 mod role;
+mod types;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod fake_provider;
@@ -24,13 +25,13 @@ use std::time::Duration;
 use std::{fmt, io};
 use thiserror::Error;
 use util::serde::is_default;
-use zed_llm_client::{CompletionMode, CompletionRequestStatus};
 
 pub use crate::model::*;
 pub use crate::rate_limiter::*;
 pub use crate::registry::*;
 pub use crate::request::*;
 pub use crate::role::*;
+pub use crate::types::*;
 
 pub const ANTHROPIC_PROVIDER_ID: LanguageModelProviderId =
     LanguageModelProviderId::new("anthropic");
@@ -49,9 +50,8 @@ pub const ZED_CLOUD_PROVIDER_ID: LanguageModelProviderId = LanguageModelProvider
 pub const ZED_CLOUD_PROVIDER_NAME: LanguageModelProviderName =
     LanguageModelProviderName::new("Zed");
 
-pub fn init(client: Arc<Client>, cx: &mut App) {
+pub fn init(_client: Arc<Client>, cx: &mut App) {
     init_settings(cx);
-    RefreshLlmTokenListener::register(client.clone(), cx);
 }
 
 pub fn init_settings(cx: &mut App) {
@@ -89,7 +89,6 @@ pub enum LanguageModelCompletionEvent {
     StartMessage {
         message_id: String,
     },
-    UsageUpdate(TokenUsage),
 }
 
 #[derive(Error, Debug)]
@@ -369,8 +368,6 @@ pub struct LanguageModelToolUse {
 pub struct LanguageModelTextStream {
     pub message_id: Option<String>,
     pub stream: BoxStream<'static, Result<String, LanguageModelCompletionError>>,
-    // Has complete token usage after the stream has finished
-    pub last_token_usage: Arc<Mutex<TokenUsage>>,
 }
 
 impl Default for LanguageModelTextStream {
@@ -378,7 +375,6 @@ impl Default for LanguageModelTextStream {
         Self {
             message_id: None,
             stream: Box::pin(futures::stream::empty()),
-            last_token_usage: Arc::new(Mutex::new(TokenUsage::default())),
         }
     }
 }
@@ -458,7 +454,6 @@ pub trait LanguageModel: Send + Sync {
             let mut events = events.fuse();
             let mut message_id = None;
             let mut first_item_text = None;
-            let last_token_usage = Arc::new(Mutex::new(TokenUsage::default()));
 
             if let Some(first_event) = events.next().await {
                 match first_event {
@@ -474,27 +469,17 @@ pub trait LanguageModel: Send + Sync {
 
             let stream = futures::stream::iter(first_item_text.map(Ok))
                 .chain(events.filter_map({
-                    let last_token_usage = last_token_usage.clone();
-                    move |result| {
-                        let last_token_usage = last_token_usage.clone();
-                        async move {
-                            match result {
-                                Ok(LanguageModelCompletionEvent::StatusUpdate { .. }) => None,
-                                Ok(LanguageModelCompletionEvent::StartMessage { .. }) => None,
-                                Ok(LanguageModelCompletionEvent::Text(text)) => Some(Ok(text)),
-                                Ok(LanguageModelCompletionEvent::Thinking { .. }) => None,
-                                Ok(LanguageModelCompletionEvent::RedactedThinking { .. }) => None,
-                                Ok(LanguageModelCompletionEvent::Stop(_)) => None,
-                                Ok(LanguageModelCompletionEvent::ToolUse(_)) => None,
-                                Ok(LanguageModelCompletionEvent::ToolUseJsonParseError {
-                                    ..
-                                }) => None,
-                                Ok(LanguageModelCompletionEvent::UsageUpdate(token_usage)) => {
-                                    *last_token_usage.lock() = token_usage;
-                                    None
-                                }
-                                Err(err) => Some(Err(err)),
-                            }
+                    move |result| async move {
+                        match result {
+                            Ok(LanguageModelCompletionEvent::StatusUpdate { .. }) => None,
+                            Ok(LanguageModelCompletionEvent::StartMessage { .. }) => None,
+                            Ok(LanguageModelCompletionEvent::Text(text)) => Some(Ok(text)),
+                            Ok(LanguageModelCompletionEvent::Thinking { .. }) => None,
+                            Ok(LanguageModelCompletionEvent::RedactedThinking { .. }) => None,
+                            Ok(LanguageModelCompletionEvent::Stop(_)) => None,
+                            Ok(LanguageModelCompletionEvent::ToolUse(_)) => None,
+                            Ok(LanguageModelCompletionEvent::ToolUseJsonParseError { .. }) => None,
+                            Err(err) => Some(Err(err)),
                         }
                     }
                 }))
@@ -503,7 +488,6 @@ pub trait LanguageModel: Send + Sync {
             Ok(LanguageModelTextStream {
                 message_id,
                 stream,
-                last_token_usage,
             })
         }
         .boxed()

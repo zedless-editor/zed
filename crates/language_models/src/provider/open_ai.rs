@@ -529,15 +529,6 @@ impl OpenAiEventMapper {
         event: ResponseStreamEvent,
     ) -> Vec<Result<LanguageModelCompletionEvent, LanguageModelCompletionError>> {
         let mut events = Vec::new();
-        if let Some(usage) = event.usage {
-            events.push(Ok(LanguageModelCompletionEvent::UsageUpdate(TokenUsage {
-                input_tokens: usage.prompt_tokens,
-                output_tokens: usage.completion_tokens,
-                cache_creation_input_tokens: 0,
-                cache_read_input_tokens: 0,
-            })));
-        }
-
         let Some(choice) = event.choices.first() else {
             return events;
         };
@@ -666,6 +657,10 @@ pub fn count_open_ai_tokens(
             | Model::O3
             | Model::O3Mini
             | Model::O4Mini => tiktoken_rs::num_tokens_from_messages(model.id(), &messages),
+            // GPT-5 models don't have tiktoken support yet; fall back on gpt-4o tokenizer
+            Model::Five | Model::FiveMini | Model::FiveNano => {
+                tiktoken_rs::num_tokens_from_messages("gpt-4o", &messages)
+            }
         }
         .map(|tokens| tokens as u64)
     })
@@ -772,7 +767,7 @@ impl Render for ConfigurationView {
         let api_key_section = if self.should_render_editor(cx) {
             v_flex()
                 .on_action(cx.listener(Self::save_api_key))
-                .child(Label::new("To use Zed's assistant with an OpenAI-compatible provider, follow these steps:"))
+                .child(Label::new("To use Zed's agent with an OpenAI-compatible provider, follow these steps:"))
                 .child(
                     List::new()
                         .child(InstructionListItem::text_only(
@@ -849,10 +844,10 @@ impl Render for ConfigurationView {
             .child(
                 Button::new("docs", "Learn More")
                     .icon(IconName::ArrowUpRight)
-                    .icon_size(IconSize::XSmall)
+                    .icon_size(IconSize::Small)
                     .icon_color(Color::Muted)
                     .on_click(move |_, _window, cx| {
-                        cx.open_url("https://zed.dev/docs/ai/configuration#openai-api-compatible")
+                        cx.open_url("https://zed.dev/docs/ai/llm-providers#openai-api-compatible")
                     }),
             );
 

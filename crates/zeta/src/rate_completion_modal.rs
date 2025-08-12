@@ -1,4 +1,4 @@
-use crate::{CompletionDiffElement, InlineCompletion, Zeta};
+use crate::{CompletionDiffElement, EditPrediction, Zeta};
 use editor::Editor;
 use gpui::{App, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, actions, prelude::*};
 use language::language_settings;
@@ -34,7 +34,7 @@ pub struct RateCompletionModal {
 }
 
 struct ActiveCompletion {
-    completion: InlineCompletion,
+    completion: EditPrediction,
     feedback_editor: Entity<Editor>,
 }
 
@@ -228,7 +228,7 @@ impl RateCompletionModal {
 
     pub fn select_completion(
         &mut self,
-        completion: Option<InlineCompletion>,
+        completion: Option<EditPrediction>,
         focus: bool,
         window: &mut Window,
         cx: &mut Context<Self>,

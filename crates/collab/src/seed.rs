@@ -67,40 +67,6 @@ pub async fn seed(config: &Config, db: &Database, force: bool) -> anyhow::Result
         flags.push(flag);
     }
 
-    for admin_login in seed_config.admins {
-        let user = fetch_github::<GithubUser>(
-            &client,
-            &format!("https://api.github.com/users/{admin_login}"),
-        )
-        .await;
-        let user = db
-            .create_user(
-                &user.email.unwrap_or(format!("{admin_login}@example.com")),
-                user.name.as_deref(),
-                true,
-                NewUserParams {
-                    github_login: user.login,
-                    github_user_id: user.id,
-                },
-            )
-            .await
-            .context("failed to create admin user")?;
-        if first_user.is_none() {
-            first_user = Some(user.user_id);
-        } else {
-            others.push(user.user_id)
-        }
-
-        for flag in &flags {
-            db.add_user_flag(user.user_id, *flag)
-                .await
-                .context(format!(
-                    "Unable to enable flag '{}' for user '{}'",
-                    flag, user.user_id
-                ))?;
-        }
-    }
-
     for channel in seed_config.channels {
         let (channel, _) = db
             .create_channel(&channel, None, first_user.unwrap())
@@ -119,56 +85,10 @@ pub async fn seed(config: &Config, db: &Database, force: bool) -> anyhow::Result
         }
     }
 
-    let github_users_filepath = seed_path.parent().unwrap().join("seed/github_users.json");
-    let github_users: Vec<GithubUser> =
-        serde_json::from_str(&fs::read_to_string(github_users_filepath)?)?;
-
-    for github_user in github_users {
-        log::info!("Seeding {:?} from GitHub", github_user.login);
-
-        let user = db
-            .update_or_create_user_by_github_account(
-                &github_user.login,
-                github_user.id,
-                github_user.email.as_deref(),
-                github_user.name.as_deref(),
-                github_user.created_at,
-                None,
-            )
-            .await
-            .expect("failed to insert user");
-
-        for flag in &flags {
-            db.add_user_flag(user.id, *flag).await.context(format!(
-                "Unable to enable flag '{}' for user '{}'",
-                flag, user.id
-            ))?;
-        }
-    }
-
     Ok(())
 }
 
 fn load_admins(path: impl AsRef<Path>) -> anyhow::Result<SeedConfig> {
     let file_content = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&file_content)?)
-}
-
-async fn fetch_github<T: DeserializeOwned>(client: &reqwest::Client, url: &str) -> T {
-    let mut request_builder = client.get(url);
-    if let Ok(github_token) = std::env::var("GITHUB_TOKEN") {
-        request_builder =
-            request_builder.header("Authorization", format!("Bearer {}", github_token));
-    }
-    let response = request_builder
-        .header("user-agent", "zed")
-        .send()
-        .await
-        .unwrap_or_else(|error| panic!("failed to fetch '{url}': {error}"));
-    let response_text = response.text().await.unwrap_or_else(|error| {
-        panic!("failed to fetch '{url}': {error}");
-    });
-    serde_json::from_str(&response_text).unwrap_or_else(|error| {
-        panic!("failed to deserialize github user from '{url}'. Error: '{error}', text: '{response_text}'");
-    })
 }

@@ -1662,7 +1662,7 @@ impl Thread {
                 let mut events = stream_completion_future.await?;
 
                 let mut stop_reason = StopReason::EndTurn;
-                let mut current_token_usage = TokenUsage::default();
+                let current_token_usage = TokenUsage::default();
 
                 thread
                     .update(cx, |_thread, cx| {

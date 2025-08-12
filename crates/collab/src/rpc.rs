@@ -1,7 +1,6 @@
 mod connection_pool;
 
 use crate::api::{CloudflareIpCountryHeader, SystemIdHeader};
-use crate::stripe_client::StripeCustomerId;
 use crate::{
     AppState, Error, Result, auth,
     db::{

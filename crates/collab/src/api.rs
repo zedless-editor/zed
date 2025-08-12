@@ -8,9 +8,7 @@ use crate::{
     db::{User, UserId},
     rpc,
 };
-use ::rpc::proto;
 use anyhow::Context as _;
-use axum::extract;
 use axum::{
     Extension, Json, Router,
     body::Body,
@@ -229,7 +227,7 @@ async fn create_access_token(
         .await?
         .context("user not found")?;
 
-    let mut impersonated_user_id = None;
+    let impersonated_user_id = None;
     if let Some(impersonate) = params.impersonate {
         if user.admin {
             return Err(Error::http(

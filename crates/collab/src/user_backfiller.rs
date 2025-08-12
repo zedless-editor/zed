@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
-use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
-use util::ResultExt;
 
 use crate::db::Database;
 use crate::executor::Executor;
-use crate::{AppState, Config};
+use crate::Config;
 
 const GITHUB_REQUESTS_PER_HOUR_LIMIT: usize = 5_000;
 const SLEEP_DURATION_BETWEEN_USERS: std::time::Duration = std::time::Duration::from_millis(

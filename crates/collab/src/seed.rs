@@ -1,9 +1,9 @@
-use crate::db::{self, ChannelRole, NewUserParams};
+use crate::db::{self, ChannelRole};
 
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use db::Database;
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::Deserialize;
 use std::{fs, path::Path};
 
 use crate::Config;
@@ -43,8 +43,8 @@ pub async fn seed(config: &Config, db: &Database, force: bool) -> anyhow::Result
     let seed_config = load_admins(seed_path)
         .context(format!("failed to load {}", seed_path.to_string_lossy()))?;
 
-    let mut first_user = None;
-    let mut others = vec![];
+    let first_user = None;
+    let others = vec![];
 
     let flag_names = ["language-models"];
     let mut flags = Vec::new();

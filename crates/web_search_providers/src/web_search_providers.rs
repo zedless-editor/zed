@@ -1,9 +1,8 @@
 
 use client::Client;
-use gpui::{App, Context, Entity};
-use language_model::LanguageModelRegistry;
+use gpui::{App, Context};
 use std::sync::Arc;
-use web_search::{WebSearchProviderId, WebSearchRegistry};
+use web_search::WebSearchRegistry;
 
 pub fn init(client: Arc<Client>, cx: &mut App) {
     let registry = WebSearchRegistry::global(cx);

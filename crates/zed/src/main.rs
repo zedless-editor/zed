@@ -41,7 +41,6 @@ use theme::{
     ThemeSettings,
 };
 use util::{ResultExt, TryFutureExt, maybe};
-use uuid::Uuid;
 use welcome::{FIRST_OPEN, show_welcome_view};
 use workspace::{
     AppState, SerializedWorkspaceLocation, Toast, Workspace, WorkspaceSettings, WorkspaceStore,

@@ -1,4 +1,4 @@
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use collections::HashMap;
 use futures::StreamExt;
@@ -19,7 +19,6 @@ use std::{
     sync::{Arc, LazyLock},
 };
 use task::{TaskTemplate, TaskTemplates, TaskVariables, VariableName};
-use util::fs::{make_file_executable, remove_matching};
 use util::merge_json_value_into;
 use util::{ResultExt, maybe};
 

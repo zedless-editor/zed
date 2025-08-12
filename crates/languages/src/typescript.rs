@@ -11,7 +11,7 @@ use language::{
 use lsp::{CodeActionKind, LanguageServerName};
 use project::{Fs, lsp_store::language_server_settings};
 use serde_json::{Value, json};
-use smol::{fs, lock::RwLock, stream::StreamExt};
+use smol::{lock::RwLock, stream::StreamExt};
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},

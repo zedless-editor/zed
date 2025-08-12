@@ -15,7 +15,6 @@ use futures::{StreamExt, future::BoxFuture, stream::BoxStream};
 use gpui::{AnyElement, AnyView, App, AsyncApp, SharedString, Task, Window};
 use http_client::{StatusCode, http};
 use icons::IconName;
-use parking_lot::Mutex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::ops::{Add, Sub};
@@ -26,7 +25,6 @@ use std::{fmt, io};
 use thiserror::Error;
 use util::serde::is_default;
 
-pub use crate::model::*;
 pub use crate::rate_limiter::*;
 pub use crate::registry::*;
 pub use crate::request::*;

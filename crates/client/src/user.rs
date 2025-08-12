@@ -1,22 +1,16 @@
 use super::{Client, Status, TypedEnvelope, proto};
 use anyhow::{Context as _, Result, anyhow};
-use chrono::{DateTime, Utc};
 use cloud_api_client::GetAuthenticatedUserResponse;
 use cloud_api_client::websocket_protocol::MessageToClient;
 use collections::{HashMap, HashSet, hash_map::Entry};
-use derive_more::Deref;
 use feature_flags::FeatureFlagAppExt;
 use futures::{Future, StreamExt, channel::mpsc};
 use gpui::{
     App, AsyncApp, Context, Entity, EventEmitter, SharedString, SharedUri, Task, WeakEntity,
 };
-use http_client::http::{HeaderMap, HeaderValue};
 use postage::{sink::Sink, watch};
 use rpc::proto::{RequestMessage, UsersResponse};
-use std::{
-    str::FromStr as _,
-    sync::{Arc, Weak},
-};
+use std::sync::{Arc, Weak};
 use text::ReplicaId;
 use util::{ResultExt, TryFutureExt as _};
 
@@ -777,7 +771,7 @@ impl UserStore {
         user_ids: impl Iterator<Item = u64>,
         cx: &App,
     ) -> HashMap<u64, SharedString> {
-        let mut ret = HashMap::default();
+        let ret = HashMap::default();
         let mut missing_user_ids = Vec::new();
         for id in user_ids {
             missing_user_ids.push(id)

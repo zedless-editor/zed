@@ -11,8 +11,8 @@ use gpui::{App, Task, Window, actions};
 use rpc::proto::{self};
 use theme::ActiveTheme;
 use ui::{
-    Avatar, AvatarAudioStatusIndicator, ContextMenu, ContextMenuItem, Divider, DividerColor,
-    Facepile, PopoverMenu, SplitButton, SplitButtonStyle, TintColor, Tooltip, prelude::*,
+    Avatar, AvatarAudioStatusIndicator, Divider, DividerColor,
+    Facepile, TintColor, Tooltip, prelude::*,
 };
 use util::maybe;
 use workspace::notifications::DetachAndPromptErr;

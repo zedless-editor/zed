@@ -18,7 +18,7 @@ use crate::application_menu::{
 };
 
 use call::ActiveCall;
-use client::{Client, UserStore, zed_urls};
+use client::{Client, UserStore};
 use gpui::{
     Action, AnyElement, App, Context, Corner, Element, Entity, Focusable, InteractiveElement,
     IntoElement, MouseButton, ParentElement, Render, StatefulInteractiveElement, Styled,
@@ -31,7 +31,7 @@ use std::sync::Arc;
 use theme::ActiveTheme;
 use title_bar_settings::TitleBarSettings;
 use ui::{
-    Avatar, Button, ButtonLike, ButtonStyle, Chip, ContextMenu, Icon, IconName, IconSize,
+    Avatar, Button, ButtonLike, ButtonStyle, ContextMenu, Icon, IconName, IconSize,
     IconWithIndicator, Indicator, PopoverMenu, Tooltip, h_flex, prelude::*,
 };
 use util::ResultExt;

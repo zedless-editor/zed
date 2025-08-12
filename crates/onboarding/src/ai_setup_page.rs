@@ -6,17 +6,14 @@ use gpui::{
     Action, AnyView, App, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, WeakEntity,
     Window, prelude::*,
 };
-use itertools;
-use language_model::{LanguageModelProvider, LanguageModelProviderId, LanguageModelRegistry};
+use language_model::LanguageModelProvider;
 use project::DisableAiSettings;
 use settings::{Settings, update_settings_file};
 use ui::{
-    Badge, ButtonLike, Divider, KeyBinding, Modal, ModalFooter, ModalHeader, Section, SwitchField,
+    Badge, KeyBinding, Modal, ModalFooter, ModalHeader, Section, SwitchField,
     ToggleState, prelude::*, tooltip_container,
 };
-use util::ResultExt;
 use workspace::{ModalView, Workspace};
-use zed_actions::agent::OpenSettings;
 
 fn render_privacy_card(tab_index: &mut isize, disabled: bool, cx: &mut App) -> impl IntoElement {
     let (title, description) = if disabled {

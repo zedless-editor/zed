@@ -12,24 +12,22 @@ use language_model::PredictEditsResponse;
 use license_detection::LicenseDetectionWatcher;
 pub use rate_completion_modal::*;
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result};
 use arrayvec::ArrayVec;
 use client::{Client, UserStore};
 use collections::{HashMap, HashSet, VecDeque};
 use futures::AsyncReadExt;
 use gpui::{
-    App, AppContext as _, AsyncApp, Context, Entity, EntityId, Global, SemanticVersion,
-    Subscription, Task, WeakEntity, actions,
+    App, AppContext as _, AsyncApp, Context, Entity, EntityId, Global, SemanticVersion, Task, WeakEntity, actions,
 };
-use http_client::{AsyncBody, HttpClient, Method, Request, Response};
+use http_client::{HttpClient, Method};
 use input_excerpt::excerpt_for_cursor_position;
 use language::{
     Anchor, Buffer, BufferSnapshot, EditPreview, OffsetRangeExt, ToOffset, ToPoint, text_diff,
 };
-use project::{Project, ProjectPath};
+use project::Project;
 use release_channel::AppVersion;
 use settings::WorktreeId;
-use std::str::FromStr;
 use std::{
     cmp,
     fmt::Write,
@@ -45,7 +43,6 @@ use thiserror::Error;
 use util::ResultExt;
 use uuid::Uuid;
 use workspace::Workspace;
-use workspace::notifications::{ErrorMessagePrompt, NotificationId};
 use worktree::Worktree;
 
 const CURSOR_MARKER: &'static str = "<|user_cursor_is_here|>";
@@ -617,7 +614,7 @@ and then another
         async move {
             let PerformPredictEditsParams {
                 client,
-                app_version,
+                
                 body,
                 ..
             } = params;

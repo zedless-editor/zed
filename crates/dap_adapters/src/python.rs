@@ -1,25 +1,17 @@
 use crate::*;
 use anyhow::{Context as _, anyhow};
 use dap::{DebugRequest, StartDebuggingRequestArguments, adapters::DebugTaskDefinition};
-use fs::RemoveOptions;
-use futures::{StreamExt, TryStreamExt};
-use gpui::http_client::AsyncBody;
+use futures::StreamExt;
 use gpui::{AsyncApp, SharedString};
 use json_dotpath::DotPaths;
 use language::LanguageName;
 use serde_json::Value;
-use smol::fs::File;
-use smol::io::AsyncReadExt;
-use smol::lock::OnceCell;
-use std::ffi::OsString;
 use std::net::Ipv4Addr;
-use std::str::FromStr;
 use std::{
     collections::HashMap,
     ffi::OsStr,
     path::{Path, PathBuf},
 };
-use util::{ResultExt, maybe};
 
 #[derive(Default)]
 pub(crate) struct PythonDebugAdapter {}

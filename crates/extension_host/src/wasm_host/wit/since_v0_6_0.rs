@@ -28,8 +28,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 use task::{SpawnInTerminal, ZedDebugConfig};
-use url::Url;
-use util::{archive::extract_zip, fs::make_file_executable, maybe};
+use util::{fs::make_file_executable, maybe};
 use wasmtime::component::{Linker, Resource};
 use anyhow::anyhow;
 

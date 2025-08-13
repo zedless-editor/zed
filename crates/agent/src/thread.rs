@@ -8,13 +8,12 @@ use crate::{
     },
     tool_use::{PendingToolUse, ToolUse, ToolUseState},
 };
-use agent_settings::{AgentProfileId, AgentSettings, CompletionMode};
+use action_log::ActionLog;
+use agent_settings::{AgentProfileId, AgentSettings, CompletionMode, SUMMARIZE_THREAD_PROMPT};
 use anyhow::{Result, anyhow};
-use assistant_tool::{ActionLog, AnyToolCard, Tool, ToolWorkingSet};
+use assistant_tool::{AnyToolCard, Tool, ToolWorkingSet};
 use chrono::{DateTime, Utc};
-use client::{ModelRequestUsage, RequestUsage};
 use collections::HashMap;
-use feature_flags::{self, FeatureFlagAppExt};
 use futures::{FutureExt, StreamExt as _, future::Shared};
 use git::repository::DiffType;
 use gpui::{
@@ -23,11 +22,11 @@ use gpui::{
 };
 use http_client::StatusCode;
 use language_model::{
-    ConfiguredModel, LanguageModel, LanguageModelCompletionError, LanguageModelCompletionEvent,
-    LanguageModelExt as _, LanguageModelId, LanguageModelRegistry, LanguageModelRequest,
-    LanguageModelRequestMessage, LanguageModelRequestTool, LanguageModelToolResult,
-    LanguageModelToolResultContent, LanguageModelToolUse, LanguageModelToolUseId, MessageContent,
-    ModelRequestLimitReachedError, PaymentRequiredError, Role, SelectedModel, StopReason,
+    CompletionIntent, CompletionRequestStatus, ConfiguredModel, LanguageModel,
+    LanguageModelCompletionError, LanguageModelCompletionEvent, LanguageModelExt as _,
+    LanguageModelId, LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage,
+    LanguageModelRequestTool, LanguageModelToolResult, LanguageModelToolResultContent,
+    LanguageModelToolUse, LanguageModelToolUseId, MessageContent, Role, SelectedModel, StopReason,
     TokenUsage,
 };
 use postage::stream::Stream as _;
@@ -36,7 +35,6 @@ use project::{
     git_store::{GitStore, GitStoreCheckpoint, RepositoryState},
 };
 use prompt_store::{ModelContext, PromptBuilder};
-use proto::Plan;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::Settings;
@@ -49,7 +47,6 @@ use std::{
 use thiserror::Error;
 use util::{ResultExt as _, post_inc};
 use uuid::Uuid;
-use zed_llm_client::{CompletionIntent, CompletionRequestStatus, UsageLimit};
 
 const MAX_RETRY_ATTEMPTS: u8 = 4;
 const BASE_RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -930,7 +927,7 @@ impl Thread {
     }
 
     pub fn tool_uses_for_message(&self, id: MessageId, cx: &App) -> Vec<ToolUse> {
-        self.tool_use.tool_uses_for_message(id, cx)
+        self.tool_use.tool_uses_for_message(id, &self.project, cx)
     }
 
     pub fn tool_results_for_message(
@@ -1655,7 +1652,7 @@ impl Thread {
 
         let completion_mode = request
             .mode
-            .unwrap_or(zed_llm_client::CompletionMode::Normal);
+            .unwrap_or(language_model::CompletionMode::Normal);
 
         self.last_received_chunk_at = Some(Instant::now());
 
@@ -1665,7 +1662,6 @@ impl Thread {
                 let mut events = stream_completion_future.await?;
 
                 let mut stop_reason = StopReason::EndTurn;
-                let mut current_token_usage = TokenUsage::default();
 
                 thread
                     .update(cx, |_thread, cx| {
@@ -1692,13 +1688,6 @@ impl Thread {
                             }
                             LanguageModelCompletionEvent::Stop(reason) => {
                                 stop_reason = reason;
-                            }
-                            LanguageModelCompletionEvent::UsageUpdate(token_usage) => {
-                                thread.update_token_usage_at_last_message(token_usage);
-                                thread.cumulative_token_usage = thread.cumulative_token_usage
-                                    + token_usage
-                                    - current_token_usage;
-                                current_token_usage = token_usage;
                             }
                             LanguageModelCompletionEvent::Text(chunk) => {
                                 thread.received_chunk();
@@ -1851,13 +1840,6 @@ impl Thread {
                                                 ),
                                             );
                                         }
-                                        CompletionRequestStatus::UsageUpdated { amount, limit } => {
-                                            thread.update_model_request_usage(
-                                                amount as u32,
-                                                limit,
-                                                cx,
-                                            );
-                                        }
                                         CompletionRequestStatus::ToolUseLimitReached => {
                                             thread.tool_use_limit_reached = true;
                                             cx.emit(ThreadEvent::ToolUseLimitReached);
@@ -1968,15 +1950,7 @@ impl Thread {
                                 project.set_agent_location(None, cx);
                             });
 
-                            if error.is::<PaymentRequiredError>() {
-                                cx.emit(ThreadEvent::ShowError(ThreadError::PaymentRequired));
-                            } else if let Some(error) =
-                                error.downcast_ref::<ModelRequestLimitReachedError>()
-                            {
-                                cx.emit(ThreadEvent::ShowError(
-                                    ThreadError::ModelRequestLimitReached { plan: error.plan },
-                                ));
-                            } else if let Some(completion_error) =
+                            if let Some(completion_error) =
                                 error.downcast_ref::<LanguageModelCompletionError>()
                             {
                                 match &completion_error {
@@ -2066,12 +2040,10 @@ impl Thread {
             return;
         }
 
-        let added_user_message = include_str!("./prompts/summarize_thread_prompt.txt");
-
         let request = self.to_summarize_request(
             &model.model,
             CompletionIntent::ThreadSummarization,
-            added_user_message.into(),
+            SUMMARIZE_THREAD_PROMPT.into(),
             cx,
         );
 
@@ -2088,14 +2060,6 @@ impl Thread {
                     };
                     let text = match event {
                         LanguageModelCompletionEvent::Text(text) => text,
-                        LanguageModelCompletionEvent::StatusUpdate(
-                            CompletionRequestStatus::UsageUpdated { amount, limit },
-                        ) => {
-                            this.update(cx, |thread, cx| {
-                                thread.update_model_request_usage(amount as u32, limit, cx);
-                            })?;
-                            continue;
-                        }
                         _ => continue,
                     };
 
@@ -2509,7 +2473,7 @@ impl Thread {
             return self.handle_hallucinated_tool_use(tool_use.id, tool_use.name, window, cx);
         }
 
-        if tool.needs_confirmation(&tool_use.input, cx)
+        if tool.needs_confirmation(&tool_use.input, &self.project, cx)
             && !AgentSettings::get_global(cx).always_allow_tool_actions
         {
             self.tool_use.confirm_tool_use(
@@ -2974,7 +2938,6 @@ impl Thread {
         &self.project
     }
 
-
     pub fn cumulative_token_usage(&self) -> TokenUsage {
         self.cumulative_token_usage
     }
@@ -3041,30 +3004,6 @@ impl Thread {
             .cloned()
     }
 
-    fn update_token_usage_at_last_message(&mut self, token_usage: TokenUsage) {
-        let placeholder = self.token_usage_at_last_message().unwrap_or_default();
-        self.request_token_usage
-            .resize(self.messages.len(), placeholder);
-
-        if let Some(last) = self.request_token_usage.last_mut() {
-            *last = token_usage;
-        }
-    }
-
-    fn update_model_request_usage(&self, amount: u32, limit: UsageLimit, cx: &mut Context<Self>) {
-        self.project.update(cx, |project, cx| {
-            project.user_store().update(cx, |user_store, cx| {
-                user_store.update_model_request_usage(
-                    ModelRequestUsage(RequestUsage {
-                        amount: amount as i32,
-                        limit,
-                    }),
-                    cx,
-                )
-            })
-        });
-    }
-
     pub fn deny_tool_use(
         &mut self,
         tool_use_id: LanguageModelToolUseId,
@@ -3089,10 +3028,6 @@ impl Thread {
 
 #[derive(Debug, Clone, Error)]
 pub enum ThreadError {
-    #[error("Payment required")]
-    PaymentRequired,
-    #[error("Model request limit reached")]
-    ModelRequestLimitReached { plan: Plan },
     #[error("Message {header}: {message}")]
     Message {
         header: SharedString,
@@ -3844,8 +3779,8 @@ fn main() {{
         });
 
         cx.run_until_parked();
-        fake_model.stream_last_completion_response("Brief");
-        fake_model.stream_last_completion_response(" Introduction");
+        fake_model.send_last_completion_stream_text_chunk("Brief");
+        fake_model.send_last_completion_stream_text_chunk(" Introduction");
         fake_model.end_last_completion_stream();
         cx.run_until_parked();
 
@@ -3938,7 +3873,7 @@ fn main() {{
         });
 
         cx.run_until_parked();
-        fake_model.stream_last_completion_response("A successful summary");
+        fake_model.send_last_completion_stream_text_chunk("A successful summary");
         fake_model.end_last_completion_stream();
         cx.run_until_parked();
 
@@ -4571,7 +4506,7 @@ fn main() {{
             !pending.is_empty(),
             "Should have a pending completion after retry"
         );
-        fake_model.stream_completion_response(&pending[0], "Success!");
+        fake_model.send_completion_stream_text_chunk(&pending[0], "Success!");
         fake_model.end_completion_stream(&pending[0]);
         cx.run_until_parked();
 
@@ -4739,7 +4674,7 @@ fn main() {{
 
         // Check for pending completions and complete them
         if let Some(pending) = inner_fake.pending_completions().first() {
-            inner_fake.stream_completion_response(pending, "Success!");
+            inner_fake.send_completion_stream_text_chunk(pending, "Success!");
             inner_fake.end_completion_stream(pending);
         }
         cx.run_until_parked();
@@ -5224,7 +5159,7 @@ fn main() {{
 
     fn simulate_successful_response(fake_model: &FakeLanguageModel, cx: &mut TestAppContext) {
         cx.run_until_parked();
-        fake_model.stream_last_completion_response("Assistant response");
+        fake_model.send_last_completion_stream_text_chunk("Assistant response");
         fake_model.end_last_completion_stream();
         cx.run_until_parked();
     }

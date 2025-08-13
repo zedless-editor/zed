@@ -1,8 +1,6 @@
-mod lmstudio;
 mod ollama;
 mod open_ai;
 
-pub use lmstudio::*;
 pub use ollama::*;
 pub use open_ai::*;
 use sha2::{Digest, Sha256};

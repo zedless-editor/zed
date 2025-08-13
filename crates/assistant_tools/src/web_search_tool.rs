@@ -2,9 +2,10 @@ use std::{sync::Arc, time::Duration};
 
 use crate::schema::json_schema_for;
 use crate::ui::ToolCallCardHeader;
+use action_log::ActionLog;
 use anyhow::{Context as _, Result, anyhow};
 use assistant_tool::{
-    ActionLog, Tool, ToolCard, ToolResult, ToolResultContent, ToolResultOutput, ToolUseStatus,
+    Tool, ToolCard, ToolResult, ToolResultContent, ToolResultOutput, ToolUseStatus,
 };
 use futures::{Future, FutureExt, TryFutureExt};
 use gpui::{
@@ -15,9 +16,8 @@ use project::Project;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ui::{IconName, Tooltip, prelude::*};
-use web_search::WebSearchRegistry;
+use web_search::{WebSearchRegistry, WebSearchResponse, WebSearchResult};
 use workspace::Workspace;
-use zed_llm_client::{WebSearchResponse, WebSearchResult};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct WebSearchToolInput {
@@ -32,7 +32,7 @@ impl Tool for WebSearchTool {
         "web_search".into()
     }
 
-    fn needs_confirmation(&self, _: &serde_json::Value, _: &App) -> bool {
+    fn needs_confirmation(&self, _: &serde_json::Value, _: &Entity<Project>, _: &App) -> bool {
         false
     }
 
@@ -45,7 +45,7 @@ impl Tool for WebSearchTool {
     }
 
     fn icon(&self) -> IconName {
-        IconName::Globe
+        IconName::ToolWeb
     }
 
     fn input_schema(&self, format: LanguageModelToolSchemaFormat) -> Result<serde_json::Value> {
@@ -177,7 +177,7 @@ impl ToolCard for WebSearchToolCard {
                             .label_size(LabelSize::Small)
                             .color(Color::Muted)
                             .icon(IconName::ArrowUpRight)
-                            .icon_size(IconSize::XSmall)
+                            .icon_size(IconSize::Small)
                             .icon_position(IconPosition::End)
                             .truncate(true)
                             .tooltip({

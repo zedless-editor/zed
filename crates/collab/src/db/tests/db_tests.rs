@@ -15,15 +15,7 @@ async fn test_get_users(db: &Arc<Database>) {
     let mut user_metric_ids = Vec::new();
     for i in 1..=4 {
         let user = db
-            .create_user(
-                &format!("user{i}@example.com"),
-                None,
-                false,
-                NewUserParams {
-                    github_login: format!("user{i}"),
-                    github_user_id: i,
-                },
-            )
+            .create_user(&format!("user{i}@example.com"), None, false)
             .await
             .unwrap();
         user_ids.push(user.user_id);
@@ -37,101 +29,28 @@ async fn test_get_users(db: &Arc<Database>) {
             .into_iter()
             .map(|user| (
                 user.id,
-                user.github_login,
-                user.github_user_id,
                 user.email_address
             ))
             .collect::<Vec<_>>(),
         vec![
             (
                 user_ids[0],
-                "user1".to_string(),
-                1,
                 Some("user1@example.com".to_string()),
             ),
             (
                 user_ids[1],
-                "user2".to_string(),
-                2,
                 Some("user2@example.com".to_string()),
             ),
             (
                 user_ids[2],
-                "user3".to_string(),
-                3,
                 Some("user3@example.com".to_string()),
             ),
             (
                 user_ids[3],
-                "user4".to_string(),
-                4,
                 Some("user4@example.com".to_string()),
             )
         ]
     );
-}
-
-test_both_dbs!(
-    test_update_or_create_user_by_github_account,
-    test_update_or_create_user_by_github_account_postgres,
-    test_update_or_create_user_by_github_account_sqlite
-);
-
-async fn test_update_or_create_user_by_github_account(db: &Arc<Database>) {
-    db.create_user(
-        "user1@example.com",
-        None,
-        false,
-        NewUserParams {
-            github_login: "login1".into(),
-            github_user_id: 101,
-        },
-    )
-    .await
-    .unwrap();
-    let user_id2 = db
-        .create_user(
-            "user2@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "login2".into(),
-                github_user_id: 102,
-            },
-        )
-        .await
-        .unwrap()
-        .user_id;
-
-    let user = db
-        .update_or_create_user_by_github_account(
-            "the-new-login2",
-            102,
-            None,
-            None,
-            Utc::now(),
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(user.id, user_id2);
-    assert_eq!(&user.github_login, "the-new-login2");
-    assert_eq!(user.github_user_id, 102);
-
-    let user = db
-        .update_or_create_user_by_github_account(
-            "login3",
-            103,
-            Some("user3@example.com"),
-            None,
-            Utc::now(),
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(&user.github_login, "login3");
-    assert_eq!(user.github_user_id, 103);
-    assert_eq!(user.email_address, Some("user3@example.com".into()));
 }
 
 test_both_dbs!(
@@ -142,28 +61,12 @@ test_both_dbs!(
 
 async fn test_create_access_tokens(db: &Arc<Database>) {
     let user_1 = db
-        .create_user(
-            "u1@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "u1".into(),
-                github_user_id: 1,
-            },
-        )
+        .create_user("u1@example.com", None, false)
         .await
         .unwrap()
         .user_id;
     let user_2 = db
-        .create_user(
-            "u2@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "u2".into(),
-                github_user_id: 2,
-            },
-        )
+        .create_user("u2@example.com", None, false)
         .await
         .unwrap()
         .user_id;
@@ -311,10 +214,6 @@ async fn test_add_contacts(db: &Arc<Database>) {
                 &format!("user{i}@example.com"),
                 None,
                 false,
-                NewUserParams {
-                    github_login: format!("user{i}"),
-                    github_user_id: i,
-                },
             )
             .await
             .unwrap()
@@ -469,15 +368,7 @@ async fn test_metrics_id(db: &Arc<Database>) {
         metrics_id: metrics_id1,
         ..
     } = db
-        .create_user(
-            "person1@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "person1".into(),
-                github_user_id: 101,
-            },
-        )
+        .create_user("person1@example.com", None, false)
         .await
         .unwrap();
     let NewUserResult {
@@ -485,15 +376,7 @@ async fn test_metrics_id(db: &Arc<Database>) {
         metrics_id: metrics_id2,
         ..
     } = db
-        .create_user(
-            "person2@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "person2".into(),
-                github_user_id: 102,
-            },
-        )
+        .create_user("person2@example.com", None, false)
         .await
         .unwrap();
 
@@ -514,27 +397,11 @@ async fn test_project_count(db: &Arc<Database>) {
     let owner_id = db.create_server("test").await.unwrap().0 as u32;
 
     let user1 = db
-        .create_user(
-            "admin@example.com",
-            None,
-            true,
-            NewUserParams {
-                github_login: "admin".into(),
-                github_user_id: 0,
-            },
-        )
+        .create_user("admin@example.com", None, true)
         .await
         .unwrap();
     let user2 = db
-        .create_user(
-            "user@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "user".into(),
-                github_user_id: 1,
-            },
-        )
+        .create_user("user@example.com", None, false)
         .await
         .unwrap();
 
@@ -608,10 +475,7 @@ async fn test_fuzzy_search_users(cx: &mut gpui::TestAppContext) {
             &format!("{github_login}@example.com"),
             None,
             false,
-            NewUserParams {
-                github_login: github_login.into(),
-                github_user_id: i as i32,
-            },
+            NewUserParams {},
         )
         .await
         .unwrap();

@@ -39,6 +39,7 @@
   writableTmpDirAsHomeHook,
   withGLES ? false,
   buildRemoteServer ? true,
+  buildZetaCli ? true,
 }:
 assert withGLES -> stdenv.hostPlatform.isLinux; let
   inherit (builtins) fromTOML readFile;
@@ -133,7 +134,8 @@ in
         "--package=zed"
         "--package=cli"
       ]
-      ++ lib.optional buildRemoteServer "--package=remote_server";
+      ++ lib.optional buildRemoteServer "--package=remote_server"
+      ++ lib.optional buildZetaCli "--package=zeta_cli";
 
     # Required on darwin because we don't have access to the
     # proprietary Metal shader compiler.
@@ -245,6 +247,9 @@ in
       ''
       + lib.optionalString buildRemoteServer ''
         install -Dm755 $release_target/remote_server $remote_server/bin/zed-remote-server-stable-$version
+      ''
+      + lib.optionalString buildZetaCli ''
+        install -Dm755 $release_target/zeta $out/bin/zeta
       ''
       + ''
         runHook postInstall

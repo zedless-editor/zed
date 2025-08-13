@@ -240,15 +240,7 @@ mod test {
         let db = test_db.db();
 
         let user = db
-            .create_user(
-                "example@example.com",
-                None,
-                false,
-                NewUserParams {
-                    github_login: "example".into(),
-                    github_user_id: 1,
-                },
-            )
+            .create_user("example@example.com", None, false)
             .await
             .unwrap();
 

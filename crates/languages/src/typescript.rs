@@ -5,12 +5,13 @@ use collections::HashMap;
 use futures::future::join_all;
 use gpui::{App, AppContext, AsyncApp, Task};
 use language::{
-    ContextLocation, ContextProvider, File, LanguageToolchainStore, LspAdapter, LspAdapterDelegate,
+    ContextLocation, ContextProvider, File, LanguageName, LanguageToolchainStore, LspAdapter,
+    LspAdapterDelegate,
 };
 use lsp::{CodeActionKind, LanguageServerName};
 use project::{Fs, lsp_store::language_server_settings};
 use serde_json::{Value, json};
-use smol::lock::RwLock;
+use smol::{lock::RwLock, stream::StreamExt};
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
@@ -630,11 +631,11 @@ impl LspAdapter for TypeScriptLspAdapter {
         }))
     }
 
-    fn language_ids(&self) -> HashMap<String, String> {
+    fn language_ids(&self) -> HashMap<LanguageName, String> {
         HashMap::from_iter([
-            ("TypeScript".into(), "typescript".into()),
-            ("JavaScript".into(), "javascript".into()),
-            ("TSX".into(), "typescriptreact".into()),
+            (LanguageName::new("TypeScript"), "typescript".into()),
+            (LanguageName::new("JavaScript"), "javascript".into()),
+            (LanguageName::new("TSX"), "typescriptreact".into()),
         ])
     }
 }

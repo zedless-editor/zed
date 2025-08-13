@@ -22,4 +22,3 @@ serde.workspace = true
 serde_json.workspace = true
 web_search.workspace = true
 workspace-hack.workspace = true
-zed_llm_client.workspace = true

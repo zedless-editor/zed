@@ -1,4 +1,4 @@
-use gpui::{prelude::*, WindowStyle, Action, Hsla, MouseButton, svg};
+use gpui::{Action, Hsla, MouseButton, WindowStyle, prelude::*, svg};
 use ui::prelude::*;
 
 #[derive(IntoElement)]
@@ -11,7 +11,7 @@ impl LinuxWindowControls {
     pub fn new(close_window_action: Box<dyn Action>, window_style: WindowStyle) -> Self {
         Self {
             close_window_action,
-            window_style
+            window_style,
         }
     }
 }

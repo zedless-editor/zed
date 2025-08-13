@@ -11,28 +11,12 @@ test_both_dbs!(
 
 async fn test_channel_buffers(db: &Arc<Database>) {
     let a_id = db
-        .create_user(
-            "user_a@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "user_a".into(),
-                github_user_id: 101,
-            },
-        )
+        .create_user("user_a@example.com", None, false)
         .await
         .unwrap()
         .user_id;
     let b_id = db
-        .create_user(
-            "user_b@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "user_b".into(),
-                github_user_id: 102,
-            },
-        )
+        .create_user("user_b@example.com", None, false)
         .await
         .unwrap()
         .user_id;
@@ -43,10 +27,6 @@ async fn test_channel_buffers(db: &Arc<Database>) {
             "user_c@example.com",
             None,
             false,
-            NewUserParams {
-                github_login: "user_c".into(),
-                github_user_id: 103,
-            },
         )
         .await
         .unwrap()
@@ -186,10 +166,6 @@ async fn test_channel_buffers_last_operations(db: &Database) {
             "user_a@example.com",
             None,
             false,
-            NewUserParams {
-                github_login: "user_a".into(),
-                github_user_id: 101,
-            },
         )
         .await
         .unwrap()
@@ -199,10 +175,6 @@ async fn test_channel_buffers_last_operations(db: &Database) {
             "user_b@example.com",
             None,
             false,
-            NewUserParams {
-                github_login: "user_b".into(),
-                github_user_id: 102,
-            },
         )
         .await
         .unwrap()

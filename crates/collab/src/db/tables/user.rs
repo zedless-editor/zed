@@ -9,8 +9,6 @@ use serde::Serialize;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: UserId,
-    pub github_login: String,
-    pub github_user_id: i32,
     pub github_user_created_at: Option<NaiveDateTime>,
     pub email_address: Option<String>,
     pub name: Option<String>,
@@ -29,8 +27,6 @@ pub struct Model {
 pub enum Relation {
     #[sea_orm(has_many = "super::access_token::Entity")]
     AccessToken,
-    #[sea_orm(has_one = "super::billing_customer::Entity")]
-    BillingCustomer,
     #[sea_orm(has_one = "super::room_participant::Entity")]
     RoomParticipant,
     #[sea_orm(has_many = "super::project::Entity")]
@@ -39,8 +35,6 @@ pub enum Relation {
     ChannelMemberships,
     #[sea_orm(has_many = "super::user_feature::Entity")]
     UserFeatures,
-    #[sea_orm(has_one = "super::contributor::Entity")]
-    Contributor,
 }
 
 impl Model {
@@ -65,12 +59,6 @@ impl Model {
 impl Related<super::access_token::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::AccessToken.def()
-    }
-}
-
-impl Related<super::billing_customer::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::BillingCustomer.def()
     }
 }
 

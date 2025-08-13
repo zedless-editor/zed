@@ -1,7 +1,5 @@
-mod billing_subscription_tests;
 mod buffer_tests;
 mod channel_tests;
-mod contributor_tests;
 mod db_tests;
 // we only run postgres tests on macos right now
 #[cfg(target_os = "macos")]
@@ -213,18 +211,10 @@ fn channel_tree(channels: &[(ChannelId, &[ChannelId], &'static str)]) -> Vec<Cha
 static GITHUB_USER_ID: AtomicI32 = AtomicI32::new(5);
 
 async fn new_test_user(db: &Arc<Database>, email: &str) -> UserId {
-    db.create_user(
-        email,
-        None,
-        false,
-        NewUserParams {
-            github_login: email[0..email.find('@').unwrap()].to_string(),
-            github_user_id: GITHUB_USER_ID.fetch_add(1, SeqCst),
-        },
-    )
-    .await
-    .unwrap()
-    .user_id
+    db.create_user(email, None, false)
+        .await
+        .unwrap()
+        .user_id
 }
 
 static TEST_CONNECTION_ID: AtomicU32 = AtomicU32::new(1);

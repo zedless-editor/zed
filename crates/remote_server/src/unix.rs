@@ -277,6 +277,11 @@ pub fn execute_run(
         ControlFlow::Continue(_) => {}
     }
 
+    let app = gpui::Application::headless();
+    let id = std::process::id().to_string();
+    app.background_executor()
+        .spawn(crashes::init(id.clone()))
+        .detach();
     let log_rx = init_logging_server(log_file)?;
     log::info!(
         "starting up. pid_file: {:?}, stdin_socket: {:?}, stdout_socket: {:?}, stderr_socket: {:?}",
@@ -292,7 +297,7 @@ pub fn execute_run(
     let listeners = ServerListeners::new(stdin_socket, stdout_socket, stderr_socket)?;
 
     let git_hosting_provider_registry = Arc::new(GitHostingProviderRegistry::new());
-    gpui::Application::headless().run(move |cx| {
+    app.run(move |cx| {
         settings::init(cx);
         let app_version = AppVersion::load(env!("ZED_PKG_VERSION"));
         release_channel::init(app_version, cx);
@@ -394,9 +399,12 @@ impl ServerPaths {
 pub fn execute_proxy(identifier: String, is_reconnecting: bool) -> Result<()> {
     init_logging_proxy();
 
-    log::info!("starting proxy process. PID: {}", std::process::id());
-
     let server_paths = ServerPaths::new(&identifier)?;
+
+    let id = std::process::id().to_string();
+    smol::spawn(crashes::init(id.clone())).detach();
+
+    log::info!("starting proxy process. PID: {}", std::process::id());
 
     let server_pid = check_pid_file(&server_paths.pid_file)?;
     let server_running = server_pid.is_some();

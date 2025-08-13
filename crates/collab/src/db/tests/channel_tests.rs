@@ -268,29 +268,13 @@ async fn test_channel_renames(db: &Arc<Database>) {
     db.create_server("test").await.unwrap();
 
     let user_1 = db
-        .create_user(
-            "user1@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "user1".into(),
-                github_user_id: 5,
-            },
-        )
+        .create_user("user1@example.com", None, false)
         .await
         .unwrap()
         .user_id;
 
     let user_2 = db
-        .create_user(
-            "user2@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "user2".into(),
-                github_user_id: 6,
-            },
-        )
+        .create_user("user2@example.com", None, false)
         .await
         .unwrap()
         .user_id;
@@ -319,15 +303,7 @@ test_both_dbs!(
 
 async fn test_db_channel_moving(db: &Arc<Database>) {
     let a_id = db
-        .create_user(
-            "user1@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "user1".into(),
-                github_user_id: 5,
-            },
-        )
+        .create_user("user1@example.com", None, false)
         .await
         .unwrap()
         .user_id;
@@ -409,29 +385,13 @@ test_both_dbs!(
 
 async fn test_channel_reordering(db: &Arc<Database>) {
     let admin_id = db
-        .create_user(
-            "admin@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "admin".into(),
-                github_user_id: 1,
-            },
-        )
+        .create_user("admin@example.com", None, false)
         .await
         .unwrap()
         .user_id;
 
     let user_id = db
-        .create_user(
-            "user@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "user".into(),
-                github_user_id: 2,
-            },
-        )
+        .create_user("user@example.com", None, false)
         .await
         .unwrap()
         .user_id;
@@ -604,15 +564,7 @@ test_both_dbs!(
 
 async fn test_db_channel_moving_bugs(db: &Arc<Database>) {
     let user_id = db
-        .create_user(
-            "user1@example.com",
-            None,
-            false,
-            NewUserParams {
-                github_login: "user1".into(),
-                github_user_id: 5,
-            },
-        )
+        .create_user("user1@example.com", None, false)
         .await
         .unwrap()
         .user_id;

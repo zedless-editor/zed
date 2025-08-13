@@ -7,7 +7,7 @@ use crate::agent_model_selector::AgentModelSelector;
 use crate::tool_compatibility::{IncompatibleToolsState, IncompatibleToolsTooltip};
 use crate::ui::{
     MaxModeTooltip,
-    preview::{AgentPreview, UsageCallout},
+    preview::AgentPreview,
 };
 use agent::history_store::HistoryStore;
 use agent::{
@@ -16,7 +16,6 @@ use agent::{
 };
 use agent_settings::{AgentSettings, CompletionMode};
 use buffer_diff::BufferDiff;
-use client::UserStore;
 use collections::{HashMap, HashSet};
 use editor::actions::{MoveUp, Paste};
 use editor::display_map::CreaseId;
@@ -35,13 +34,11 @@ use gpui::{
 };
 use language::{Buffer, Language, Point};
 use language_model::{
-    ConfiguredModel, LanguageModelRegistry, LanguageModelRequestMessage, MessageContent,
-    ZED_CLOUD_PROVIDER_ID,
+    CompletionIntent, ConfiguredModel, LanguageModelRegistry, LanguageModelRequestMessage, MessageContent, ZED_CLOUD_PROVIDER_ID
 };
 use multi_buffer;
 use project::Project;
 use prompt_store::PromptStore;
-use proto::Plan;
 use settings::Settings;
 use std::time::Duration;
 use theme::ThemeSettings;
@@ -52,7 +49,6 @@ use util::ResultExt as _;
 use workspace::{CollaboratorId, Workspace};
 use zed_actions::agent::Chat;
 use zed_actions::agent::ToggleModelSelector;
-use zed_llm_client::CompletionIntent;
 
 use crate::context_picker::{ContextPicker, ContextPickerCompletionProvider, crease_for_mention};
 use crate::context_strip::{ContextStrip, ContextStripEvent, SuggestContextKind};
@@ -78,7 +74,6 @@ pub struct MessageEditor {
     editor: Entity<Editor>,
     workspace: WeakEntity<Workspace>,
     project: Entity<Project>,
-    user_store: Entity<UserStore>,
     context_store: Entity<ContextStore>,
     prompt_store: Option<Entity<PromptStore>>,
     history_store: Option<WeakEntity<HistoryStore>>,
@@ -158,7 +153,6 @@ impl MessageEditor {
     pub fn new(
         fs: Arc<dyn Fs>,
         workspace: WeakEntity<Workspace>,
-        user_store: Entity<UserStore>,
         context_store: Entity<ContextStore>,
         prompt_store: Option<Entity<PromptStore>>,
         thread_store: WeakEntity<ThreadStore>,
@@ -230,7 +224,6 @@ impl MessageEditor {
         Self {
             editor: editor.clone(),
             project: thread.read(cx).project().clone(),
-            user_store,
             thread,
             incompatible_tools_state: incompatible_tools.clone(),
             workspace,
@@ -729,7 +722,7 @@ impl MessageEditor {
                     .when(focus_handle.is_focused(window), |this| {
                         this.child(
                             IconButton::new("toggle-height", expand_icon)
-                                .icon_size(IconSize::XSmall)
+                                .icon_size(IconSize::Small)
                                 .icon_color(Color::Muted)
                                 .tooltip({
                                     let focus_handle = focus_handle.clone();
@@ -835,7 +828,7 @@ impl MessageEditor {
                                                         parent.child(
                                                             IconButton::new(
                                                                 "stop-generation",
-                                                                IconName::StopFilled,
+                                                                IconName::Stop,
                                                             )
                                                             .icon_color(Color::Error)
                                                             .style(ButtonStyle::Tinted(
@@ -1277,39 +1270,6 @@ impl MessageEditor {
             .map_or(false, |model| model.provider.id() == ZED_CLOUD_PROVIDER_ID)
     }
 
-    fn render_usage_callout(&self, line_height: Pixels, cx: &mut Context<Self>) -> Option<Div> {
-        if !self.is_using_zed_provider(cx) {
-            return None;
-        }
-
-        let user_store = self.user_store.read(cx);
-
-        let ubb_enable = user_store
-            .usage_based_billing_enabled()
-            .map_or(false, |enabled| enabled);
-
-        if ubb_enable {
-            return None;
-        }
-
-        let plan = user_store
-            .current_plan()
-            .map(|plan| match plan {
-                Plan::Free => zed_llm_client::Plan::ZedFree,
-                Plan::ZedPro => zed_llm_client::Plan::ZedPro,
-                Plan::ZedProTrial => zed_llm_client::Plan::ZedProTrial,
-            })
-            .unwrap_or(zed_llm_client::Plan::ZedFree);
-
-        let usage = user_store.model_request_usage()?;
-
-        Some(
-            div()
-                .child(UsageCallout::new(plan, usage))
-                .line_height(line_height),
-        )
-    }
-
     fn render_token_limit_callout(
         &self,
         line_height: Pixels,
@@ -1317,7 +1277,7 @@ impl MessageEditor {
         cx: &mut Context<Self>,
     ) -> Option<Div> {
         let icon = if token_usage_ratio == TokenUsageRatio::Exceeded {
-            Icon::new(IconName::X)
+            Icon::new(IconName::Close)
                 .color(Color::Error)
                 .size(IconSize::XSmall)
         } else {
@@ -1661,31 +1621,6 @@ impl Render for MessageEditor {
 
         let line_height = TextSize::Small.rems(cx).to_pixels(window.rem_size()) * 1.5;
 
-        let has_configured_providers = LanguageModelRegistry::read_global(cx)
-            .providers()
-            .iter()
-            .filter(|provider| {
-                provider.is_authenticated(cx) && provider.id() != ZED_CLOUD_PROVIDER_ID
-            })
-            .count()
-            > 0;
-
-        let is_signed_out = self
-            .workspace
-            .read_with(cx, |workspace, _| {
-                workspace.client().status().borrow().is_signed_out()
-            })
-            .unwrap_or(true);
-
-        let has_history = self
-            .history_store
-            .as_ref()
-            .and_then(|hs| hs.update(cx, |hs, cx| hs.entries(cx).len() > 0).ok())
-            .unwrap_or(false)
-            || self
-                .thread
-                .read_with(cx, |thread, _| thread.messages().len() > 0);
-
         v_flex()
             .size_full()
             .bg(cx.theme().colors().panel_background)
@@ -1694,11 +1629,7 @@ impl Render for MessageEditor {
             })
             .child(self.render_editor(window, cx))
             .children({
-                let usage_callout = self.render_usage_callout(line_height, cx);
-
-                if usage_callout.is_some() {
-                    usage_callout
-                } else if token_usage_ratio != TokenUsageRatio::Normal && !burn_mode_enabled {
+                if token_usage_ratio != TokenUsageRatio::Normal && !burn_mode_enabled {
                     self.render_token_limit_callout(line_height, token_usage_ratio, cx)
                 } else {
                     None
@@ -1760,7 +1691,6 @@ impl AgentPreview for MessageEditor {
     ) -> Option<AnyElement> {
         if let Some(workspace) = workspace.upgrade() {
             let fs = workspace.read(cx).app_state().fs.clone();
-            let user_store = workspace.read(cx).app_state().user_store.clone();
             let project = workspace.read(cx).project().clone();
             let weak_project = project.downgrade();
             let context_store = cx.new(|_cx| ContextStore::new(weak_project, None));
@@ -1773,7 +1703,6 @@ impl AgentPreview for MessageEditor {
                 MessageEditor::new(
                     fs,
                     workspace.downgrade(),
-                    user_store,
                     context_store,
                     None,
                     thread_store.downgrade(),

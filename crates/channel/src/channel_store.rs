@@ -113,7 +113,7 @@ pub struct ChannelMembership {
     pub role: proto::ChannelRole,
 }
 impl ChannelMembership {
-    pub fn sort_key(&self) -> MembershipSortKey<'_> {
+    pub fn sort_key(&self) -> MembershipSortKey {
         MembershipSortKey {
             role_order: match self.role {
                 proto::ChannelRole::Admin => 0,
@@ -126,16 +126,16 @@ impl ChannelMembership {
                 proto::channel_member::Kind::Member => 0,
                 proto::channel_member::Kind::Invitee => 1,
             },
-            username_order: self.user.github_login.as_str(),
+            username_order: self.user.id,
         }
     }
 }
 
 #[derive(PartialOrd, Ord, PartialEq, Eq)]
-pub struct MembershipSortKey<'a> {
+pub struct MembershipSortKey {
     role_order: u8,
     kind_order: u8,
-    username_order: &'a str,
+    username_order: u64,
 }
 
 pub enum ChannelEvent {

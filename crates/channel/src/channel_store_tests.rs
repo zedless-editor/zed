@@ -258,20 +258,6 @@ async fn test_channel_messages(cx: &mut TestAppContext) {
         assert_channels(&channel_store, &[(0, "the-channel".to_string())], cx);
     });
 
-    let get_users = server.receive::<proto::GetUsers>().await.unwrap();
-    assert_eq!(get_users.payload.user_ids, vec![5]);
-    server.respond(
-        get_users.receipt(),
-        proto::UsersResponse {
-            users: vec![proto::User {
-                id: 5,
-                github_login: "nathansobo".into(),
-                avatar_url: "http://avatar.com/nathansobo".into(),
-                name: None,
-            }],
-        },
-    );
-
     // Join a channel and populate its existing messages.
     let channel = channel_store.update(cx, |store, cx| {
         let channel_id = store.ordered_channels().next().unwrap().1.id;
@@ -318,8 +304,6 @@ async fn test_channel_messages(cx: &mut TestAppContext) {
         proto::UsersResponse {
             users: vec![proto::User {
                 id: 6,
-                github_login: "maxbrunsfeld".into(),
-                avatar_url: "http://avatar.com/maxbrunsfeld".into(),
                 name: None,
             }],
         },
@@ -330,11 +314,11 @@ async fn test_channel_messages(cx: &mut TestAppContext) {
         assert_eq!(
             channel
                 .messages_in_range(0..2)
-                .map(|message| (message.sender.github_login.clone(), message.body.clone()))
+                .map(|message| (message.sender.id.clone(), message.body.clone()))
                 .collect::<Vec<_>>(),
             &[
-                ("nathansobo".into(), "a".into()),
-                ("maxbrunsfeld".into(), "b".into())
+                (5, "a".into()),
+                (6, "b".into())
             ]
         );
     });
@@ -362,8 +346,6 @@ async fn test_channel_messages(cx: &mut TestAppContext) {
         proto::UsersResponse {
             users: vec![proto::User {
                 id: 7,
-                github_login: "as-cii".into(),
-                avatar_url: "http://avatar.com/as-cii".into(),
                 name: None,
             }],
         },
@@ -380,9 +362,9 @@ async fn test_channel_messages(cx: &mut TestAppContext) {
         assert_eq!(
             channel
                 .messages_in_range(2..3)
-                .map(|message| (message.sender.github_login.clone(), message.body.clone()))
+                .map(|message| (message.sender.id.clone(), message.body.clone()))
                 .collect::<Vec<_>>(),
-            &[("as-cii".into(), "c".into())]
+            &[(7, "c".into())]
         )
     });
 
@@ -433,11 +415,11 @@ async fn test_channel_messages(cx: &mut TestAppContext) {
         assert_eq!(
             channel
                 .messages_in_range(0..2)
-                .map(|message| (message.sender.github_login.clone(), message.body.clone()))
+                .map(|message| (message.sender.id.clone(), message.body.clone()))
                 .collect::<Vec<_>>(),
             &[
-                ("nathansobo".into(), "y".into()),
-                ("maxbrunsfeld".into(), "z".into())
+                (5, "y".into()),
+                (6, "z".into())
             ]
         );
     });

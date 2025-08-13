@@ -1,27 +1,25 @@
-use client::{DisableAiSettings};
 use db::kvp::KEY_VALUE_STORE;
 use gpui::{
-    Action, App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    ParentElement, Render, Styled, Subscription, Task, WeakEntity, Window, actions, svg,
+    actions, svg, Action, App, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, ParentElement, Render, Styled, Subscription, Task, WeakEntity, Window,
 };
-use language::language_settings::{EditPredictionProvider, all_language_settings};
+use language::language_settings::{all_language_settings, EditPredictionProvider};
+use project::DisableAiSettings;
 use settings::{Settings, SettingsStore};
 use std::sync::Arc;
-use ui::{CheckboxWithLabel, ElevationIndex, Tooltip, prelude::*};
+use ui::{prelude::*, CheckboxWithLabel, ElevationIndex, Tooltip};
 use util::ResultExt;
 use vim_mode_setting::VimModeSetting;
 use workspace::{
-    AppState, Welcome, Workspace, WorkspaceId,
     dock::DockPosition,
     item::{Item, ItemEvent},
-    open_new,
+    open_new, AppState, Welcome, Workspace, WorkspaceId,
 };
 
 pub use multibuffer_hint::*;
 
 mod base_keymap_picker;
 mod multibuffer_hint;
-mod welcome_ui;
 
 actions!(
     welcome,
@@ -295,13 +293,10 @@ impl Render for WelcomePage {
 
 impl WelcomePage {
     pub fn new(workspace: &Workspace, cx: &mut Context<Workspace>) -> Entity<Self> {
-        let this = cx.new(|cx| {
-            WelcomePage {
-                focus_handle: cx.focus_handle(),
-                workspace: workspace.weak_handle(),
-                _settings_subscription: cx
-                    .observe_global::<SettingsStore>(move |_, cx| cx.notify()),
-            }
+        let this = cx.new(|cx| WelcomePage {
+            focus_handle: cx.focus_handle(),
+            workspace: workspace.weak_handle(),
+            _settings_subscription: cx.observe_global::<SettingsStore>(move |_, cx| cx.notify()),
         });
 
         this
@@ -350,7 +345,6 @@ impl Item for WelcomePage {
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
         "Welcome".into()
     }
-
 
     fn show_toolbar(&self) -> bool {
         false

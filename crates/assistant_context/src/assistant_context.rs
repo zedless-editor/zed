@@ -2,7 +2,7 @@
 mod assistant_context_tests;
 mod context_store;
 
-use agent_settings::AgentSettings;
+use agent_settings::{AgentSettings, SUMMARIZE_THREAD_PROMPT};
 use anyhow::{Context as _, Result, bail};
 use assistant_slash_command::{
     SlashCommandContent, SlashCommandEvent, SlashCommandLine, SlashCommandOutputSection,
@@ -20,9 +20,7 @@ use gpui::{
 };
 use language::{AnchorRangeExt, Bias, Buffer, LanguageRegistry, OffsetRangeExt, Point, ToOffset};
 use language_model::{
-    LanguageModel, LanguageModelCacheConfiguration, LanguageModelCompletionEvent,
-    LanguageModelImage, LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage,
-    LanguageModelToolUseId, MessageContent, PaymentRequiredError, Role, StopReason,
+    CompletionIntent, LanguageModel, LanguageModelCacheConfiguration, LanguageModelCompletionEvent, LanguageModelImage, LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage, LanguageModelToolUseId, MessageContent, Role, StopReason
 };
 use open_ai::Model as OpenAiModel;
 use paths::contexts_dir;
@@ -44,7 +42,6 @@ use text::{BufferSnapshot, ToPoint};
 use ui::IconName;
 use util::{ResultExt, TryFutureExt, post_inc};
 use uuid::Uuid;
-use zed_llm_client::CompletionIntent;
 
 pub use crate::context_store::*;
 
@@ -2131,8 +2128,7 @@ impl AssistantContext {
                                         );
                                     }
                                     LanguageModelCompletionEvent::ToolUse(_) |
-                                    LanguageModelCompletionEvent::ToolUseJsonParseError { .. } |
-                                    LanguageModelCompletionEvent::UsageUpdate(_) => {}
+                                    LanguageModelCompletionEvent::ToolUseJsonParseError { .. } => {}
                                 }
                             });
 
@@ -2163,27 +2159,19 @@ impl AssistantContext {
 
                 this.update(cx, |this, cx| {
                     if let Some(error) = result.as_ref().err() {
-                        if error.is::<PaymentRequiredError>() {
-                            cx.emit(ContextEvent::ShowPaymentRequiredError);
-                            this.update_metadata(assistant_message_id, cx, |metadata| {
-                                metadata.status = MessageStatus::Canceled;
-                            });
-                            Some(error.to_string())
-                        } else {
-                            let error_message = error
-                                .chain()
-                                .map(|err| err.to_string())
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            cx.emit(ContextEvent::ShowAssistError(SharedString::from(
-                                error_message.clone(),
-                            )));
-                            this.update_metadata(assistant_message_id, cx, |metadata| {
-                                metadata.status =
-                                    MessageStatus::Error(SharedString::from(error_message.clone()));
-                            });
-                            Some(error_message)
-                        }
+                        let error_message = error
+                            .chain()
+                            .map(|err| err.to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        cx.emit(ContextEvent::ShowAssistError(SharedString::from(
+                            error_message.clone(),
+                        )));
+                        this.update_metadata(assistant_message_id, cx, |metadata| {
+                            metadata.status =
+                                MessageStatus::Error(SharedString::from(error_message.clone()));
+                        });
+                        Some(error_message)
                     } else {
                         this.update_metadata(assistant_message_id, cx, |metadata| {
                             metadata.status = MessageStatus::Done;
@@ -2645,10 +2633,7 @@ impl AssistantContext {
             let mut request = self.to_completion_request(Some(&model.model), cx);
             request.messages.push(LanguageModelRequestMessage {
                 role: Role::User,
-                content: vec![
-                    "Generate a concise 3-7 word title for this conversation, omitting punctuation. Go straight to the title, without any preamble and prefix like `Here's a concise suggestion:...` or `Title:`"
-                        .into(),
-                ],
+                content: vec![SUMMARIZE_THREAD_PROMPT.into()],
                 cache: false,
             });
 

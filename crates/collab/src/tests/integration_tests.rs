@@ -130,7 +130,6 @@ async fn test_basic_calls(
 
     let mut incoming_call_b = active_call_b.read_with(cx_b, |call, _| call.incoming());
     let call_b = incoming_call_b.next().await.unwrap().unwrap();
-    assert_eq!(call_b.calling_user.github_login, "user_a");
 
     // User B connects via another client and also receives a ring on the newly-connected client.
     let _client_b2 = server.create_client(cx_b2, "user_b").await;
@@ -139,7 +138,6 @@ async fn test_basic_calls(
     let mut incoming_call_b2 = active_call_b2.read_with(cx_b2, |call, _| call.incoming());
     executor.run_until_parked();
     let call_b2 = incoming_call_b2.next().await.unwrap().unwrap();
-    assert_eq!(call_b2.calling_user.github_login, "user_a");
 
     // User B joins the room using the first client.
     active_call_b
@@ -194,7 +192,6 @@ async fn test_basic_calls(
 
     // User C receives the call, but declines it.
     let call_c = incoming_call_c.next().await.unwrap().unwrap();
-    assert_eq!(call_c.calling_user.github_login, "user_b");
     active_call_c.update(cx_c, |call, cx| call.decline_incoming(cx).unwrap());
     assert!(incoming_call_c.next().await.unwrap().is_none());
 
@@ -240,7 +237,6 @@ async fn test_basic_calls(
 
     // User C accepts the call.
     let call_c = incoming_call_c.next().await.unwrap().unwrap();
-    assert_eq!(call_c.calling_user.github_login, "user_a");
     active_call_c
         .update(cx_c, |call, cx| call.accept_incoming(cx))
         .await
@@ -681,7 +677,6 @@ async fn test_room_uniqueness(
 
     let mut incoming_call_b = active_call_b.read_with(cx_b, |call, _| call.incoming());
     let call_b1 = incoming_call_b.next().await.unwrap().unwrap();
-    assert_eq!(call_b1.calling_user.github_login, "user_a");
 
     // Ensure calling users A and B from client C fails.
     active_call_c
@@ -743,7 +738,6 @@ async fn test_room_uniqueness(
         .unwrap();
     executor.run_until_parked();
     let call_b2 = incoming_call_b.next().await.unwrap().unwrap();
-    assert_eq!(call_b2.calling_user.github_login, "user_c");
 }
 
 #[gpui::test(iterations = 10)]
@@ -842,7 +836,7 @@ async fn test_client_disconnecting_from_room(
 
     // Allow user A to reconnect to the server.
     server.allow_connections();
-    executor.advance_clock(RECEIVE_TIMEOUT);
+    executor.advance_clock(RECONNECT_TIMEOUT);
 
     // Call user B again from client A.
     active_call_a
@@ -1286,7 +1280,7 @@ async fn test_calls_on_multiple_connections(
     client_b1.disconnect(&cx_b1.to_async());
     executor.advance_clock(RECEIVE_TIMEOUT);
     client_b1
-        .authenticate_and_connect(false, &cx_b1.to_async())
+        .connect(false, &cx_b1.to_async())
         .await
         .into_response()
         .unwrap();
@@ -1358,7 +1352,7 @@ async fn test_calls_on_multiple_connections(
 
     // User A reconnects automatically, then calls user B again.
     server.allow_connections();
-    executor.advance_clock(RECEIVE_TIMEOUT);
+    executor.advance_clock(RECONNECT_TIMEOUT);
     active_call_a
         .update(cx_a, |call, cx| {
             call.invite(client_b1.user_id().unwrap(), None, cx)
@@ -1667,7 +1661,7 @@ async fn test_project_reconnect(
     // Client A reconnects. Their project is re-shared, and client B re-joins it.
     server.allow_connections();
     client_a
-        .authenticate_and_connect(false, &cx_a.to_async())
+        .connect(false, &cx_a.to_async())
         .await
         .into_response()
         .unwrap();
@@ -1796,7 +1790,7 @@ async fn test_project_reconnect(
     // Client B reconnects. They re-join the room and the remaining shared project.
     server.allow_connections();
     client_b
-        .authenticate_and_connect(false, &cx_b.to_async())
+        .connect(false, &cx_b.to_async())
         .await
         .into_response()
         .unwrap();
@@ -1881,7 +1875,6 @@ async fn test_active_call_events(
         vec![room::Event::RemoteProjectShared {
             owner: Arc::new(User {
                 id: client_a.user_id().unwrap(),
-                github_login: "user_a".to_string(),
                 avatar_uri: "avatar_a".into(),
                 name: None,
             }),
@@ -1900,7 +1893,6 @@ async fn test_active_call_events(
         vec![room::Event::RemoteProjectShared {
             owner: Arc::new(User {
                 id: client_b.user_id().unwrap(),
-                github_login: "user_b".to_string(),
                 avatar_uri: "avatar_b".into(),
                 name: None,
             }),
@@ -2291,7 +2283,7 @@ async fn test_room_location(
                 .values()
                 .map(|participant| {
                     (
-                        participant.user.github_login.to_string(),
+                        participant.user.id.to_string(),
                         participant.location,
                     )
                 })
@@ -4645,10 +4637,27 @@ async fn test_definition(
         .await;
     let active_call_a = cx_a.read(ActiveCall::global);
 
-    let mut fake_language_servers = client_a
-        .language_registry()
-        .register_fake_lsp("Rust", Default::default());
+    let capabilities = lsp::ServerCapabilities {
+        definition_provider: Some(OneOf::Left(true)),
+        type_definition_provider: Some(lsp::TypeDefinitionProviderCapability::Simple(true)),
+        ..lsp::ServerCapabilities::default()
+    };
     client_a.language_registry().add(rust_lang());
+    let mut fake_language_servers = client_a.language_registry().register_fake_lsp(
+        "Rust",
+        FakeLspAdapter {
+            capabilities: capabilities.clone(),
+            ..FakeLspAdapter::default()
+        },
+    );
+    client_b.language_registry().add(rust_lang());
+    client_b.language_registry().register_fake_lsp_adapter(
+        "Rust",
+        FakeLspAdapter {
+            capabilities,
+            ..FakeLspAdapter::default()
+        },
+    );
 
     client_a
         .fs()
@@ -4694,13 +4703,19 @@ async fn test_definition(
             )))
         },
     );
+    cx_a.run_until_parked();
+    cx_b.run_until_parked();
 
     let definitions_1 = project_b
         .update(cx_b, |p, cx| p.definitions(&buffer_b, 23, cx))
         .await
         .unwrap();
     cx_b.read(|cx| {
-        assert_eq!(definitions_1.len(), 1);
+        assert_eq!(
+            definitions_1.len(),
+            1,
+            "Unexpected definitions: {definitions_1:?}"
+        );
         assert_eq!(project_b.read(cx).worktrees(cx).count(), 2);
         let target_buffer = definitions_1[0].target.buffer.read(cx);
         assert_eq!(
@@ -4768,7 +4783,11 @@ async fn test_definition(
         .await
         .unwrap();
     cx_b.read(|cx| {
-        assert_eq!(type_definitions.len(), 1);
+        assert_eq!(
+            type_definitions.len(),
+            1,
+            "Unexpected type definitions: {type_definitions:?}"
+        );
         let target_buffer = type_definitions[0].target.buffer.read(cx);
         assert_eq!(target_buffer.text(), "type T2 = usize;");
         assert_eq!(
@@ -4792,16 +4811,26 @@ async fn test_references(
         .await;
     let active_call_a = cx_a.read(ActiveCall::global);
 
+    let capabilities = lsp::ServerCapabilities {
+        references_provider: Some(lsp::OneOf::Left(true)),
+        ..lsp::ServerCapabilities::default()
+    };
     client_a.language_registry().add(rust_lang());
     let mut fake_language_servers = client_a.language_registry().register_fake_lsp(
         "Rust",
         FakeLspAdapter {
             name: "my-fake-lsp-adapter",
-            capabilities: lsp::ServerCapabilities {
-                references_provider: Some(lsp::OneOf::Left(true)),
-                ..Default::default()
-            },
-            ..Default::default()
+            capabilities: capabilities.clone(),
+            ..FakeLspAdapter::default()
+        },
+    );
+    client_b.language_registry().add(rust_lang());
+    client_b.language_registry().register_fake_lsp_adapter(
+        "Rust",
+        FakeLspAdapter {
+            name: "my-fake-lsp-adapter",
+            capabilities: capabilities,
+            ..FakeLspAdapter::default()
         },
     );
 
@@ -4856,6 +4885,8 @@ async fn test_references(
             }
         }
     });
+    cx_a.run_until_parked();
+    cx_b.run_until_parked();
 
     let references = project_b.update(cx_b, |p, cx| p.references(&buffer_b, 7, cx));
 
@@ -4863,7 +4894,7 @@ async fn test_references(
     executor.run_until_parked();
     project_b.read_with(cx_b, |project, cx| {
         let status = project.language_server_statuses(cx).next().unwrap().1;
-        assert_eq!(status.name, "my-fake-lsp-adapter");
+        assert_eq!(status.name.0, "my-fake-lsp-adapter");
         assert_eq!(
             status.pending_work.values().next().unwrap().message,
             Some("Finding references...".into())
@@ -4921,7 +4952,7 @@ async fn test_references(
     executor.run_until_parked();
     project_b.read_with(cx_b, |project, cx| {
         let status = project.language_server_statuses(cx).next().unwrap().1;
-        assert_eq!(status.name, "my-fake-lsp-adapter");
+        assert_eq!(status.name.0, "my-fake-lsp-adapter");
         assert_eq!(
             status.pending_work.values().next().unwrap().message,
             Some("Finding references...".into())
@@ -5071,10 +5102,26 @@ async fn test_document_highlights(
         )
         .await;
 
-    let mut fake_language_servers = client_a
-        .language_registry()
-        .register_fake_lsp("Rust", Default::default());
     client_a.language_registry().add(rust_lang());
+    let capabilities = lsp::ServerCapabilities {
+        document_highlight_provider: Some(lsp::OneOf::Left(true)),
+        ..lsp::ServerCapabilities::default()
+    };
+    let mut fake_language_servers = client_a.language_registry().register_fake_lsp(
+        "Rust",
+        FakeLspAdapter {
+            capabilities: capabilities.clone(),
+            ..FakeLspAdapter::default()
+        },
+    );
+    client_b.language_registry().add(rust_lang());
+    client_b.language_registry().register_fake_lsp_adapter(
+        "Rust",
+        FakeLspAdapter {
+            capabilities,
+            ..FakeLspAdapter::default()
+        },
+    );
 
     let (project_a, worktree_id) = client_a.build_local_project(path!("/root-1"), cx_a).await;
     let project_id = active_call_a
@@ -5123,6 +5170,8 @@ async fn test_document_highlights(
             ]))
         },
     );
+    cx_a.run_until_parked();
+    cx_b.run_until_parked();
 
     let highlights = project_b
         .update(cx_b, |p, cx| p.document_highlights(&buffer_b, 34, cx))
@@ -5173,30 +5222,49 @@ async fn test_lsp_hover(
 
     client_a.language_registry().add(rust_lang());
     let language_server_names = ["rust-analyzer", "CrabLang-ls"];
+    let capabilities_1 = lsp::ServerCapabilities {
+        hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
+        ..lsp::ServerCapabilities::default()
+    };
+    let capabilities_2 = lsp::ServerCapabilities {
+        hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
+        ..lsp::ServerCapabilities::default()
+    };
     let mut language_servers = [
         client_a.language_registry().register_fake_lsp(
             "Rust",
             FakeLspAdapter {
-                name: "rust-analyzer",
-                capabilities: lsp::ServerCapabilities {
-                    hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
-                    ..lsp::ServerCapabilities::default()
-                },
+                name: language_server_names[0],
+                capabilities: capabilities_1.clone(),
                 ..FakeLspAdapter::default()
             },
         ),
         client_a.language_registry().register_fake_lsp(
             "Rust",
             FakeLspAdapter {
-                name: "CrabLang-ls",
-                capabilities: lsp::ServerCapabilities {
-                    hover_provider: Some(lsp::HoverProviderCapability::Simple(true)),
-                    ..lsp::ServerCapabilities::default()
-                },
+                name: language_server_names[1],
+                capabilities: capabilities_2.clone(),
                 ..FakeLspAdapter::default()
             },
         ),
     ];
+    client_b.language_registry().add(rust_lang());
+    client_b.language_registry().register_fake_lsp_adapter(
+        "Rust",
+        FakeLspAdapter {
+            name: language_server_names[0],
+            capabilities: capabilities_1,
+            ..FakeLspAdapter::default()
+        },
+    );
+    client_b.language_registry().register_fake_lsp_adapter(
+        "Rust",
+        FakeLspAdapter {
+            name: language_server_names[1],
+            capabilities: capabilities_2,
+            ..FakeLspAdapter::default()
+        },
+    );
 
     let (project_a, worktree_id) = client_a.build_local_project(path!("/root-1"), cx_a).await;
     let project_id = active_call_a
@@ -5290,6 +5358,8 @@ async fn test_lsp_hover(
             unexpected => panic!("Unexpected server name: {unexpected}"),
         }
     }
+    cx_a.run_until_parked();
+    cx_b.run_until_parked();
 
     // Request hover information as the guest.
     let mut hovers = project_b
@@ -5472,10 +5542,26 @@ async fn test_open_buffer_while_getting_definition_pointing_to_it(
         .await;
     let active_call_a = cx_a.read(ActiveCall::global);
 
+    let capabilities = lsp::ServerCapabilities {
+        definition_provider: Some(OneOf::Left(true)),
+        ..lsp::ServerCapabilities::default()
+    };
     client_a.language_registry().add(rust_lang());
-    let mut fake_language_servers = client_a
-        .language_registry()
-        .register_fake_lsp("Rust", Default::default());
+    let mut fake_language_servers = client_a.language_registry().register_fake_lsp(
+        "Rust",
+        FakeLspAdapter {
+            capabilities: capabilities.clone(),
+            ..FakeLspAdapter::default()
+        },
+    );
+    client_b.language_registry().add(rust_lang());
+    client_b.language_registry().register_fake_lsp_adapter(
+        "Rust",
+        FakeLspAdapter {
+            capabilities,
+            ..FakeLspAdapter::default()
+        },
+    );
 
     client_a
         .fs()
@@ -5516,6 +5602,8 @@ async fn test_open_buffer_while_getting_definition_pointing_to_it(
     let definitions;
     let buffer_b2;
     if rng.r#gen() {
+        cx_a.run_until_parked();
+        cx_b.run_until_parked();
         definitions = project_b.update(cx_b, |p, cx| p.definitions(&buffer_b1, 23, cx));
         (buffer_b2, _) = project_b
             .update(cx_b, |p, cx| {
@@ -5530,11 +5618,17 @@ async fn test_open_buffer_while_getting_definition_pointing_to_it(
             })
             .await
             .unwrap();
+        cx_a.run_until_parked();
+        cx_b.run_until_parked();
         definitions = project_b.update(cx_b, |p, cx| p.definitions(&buffer_b1, 23, cx));
     }
 
     let definitions = definitions.await.unwrap();
-    assert_eq!(definitions.len(), 1);
+    assert_eq!(
+        definitions.len(),
+        1,
+        "Unexpected definitions: {definitions:?}"
+    );
     assert_eq!(definitions[0].target.buffer, buffer_b2);
 }
 
@@ -5605,7 +5699,7 @@ async fn test_contacts(
 
     server.allow_connections();
     client_c
-        .authenticate_and_connect(false, &cx_c.to_async())
+        .connect(false, &cx_c.to_async())
         .await
         .into_response()
         .unwrap();
@@ -5946,7 +6040,7 @@ async fn test_contacts(
                 .iter()
                 .map(|contact| {
                     (
-                        contact.user.github_login.clone(),
+                        contact.user.id.clone().to_string(),
                         if contact.online { "online" } else { "offline" },
                         if contact.busy { "busy" } else { "free" },
                     )
@@ -6136,7 +6230,7 @@ async fn test_contact_requests(
         client.disconnect(&cx.to_async());
         client.clear_contacts(cx).await;
         client
-            .authenticate_and_connect(false, &cx.to_async())
+            .connect(false, &cx.to_async())
             .await
             .into_response()
             .unwrap();
@@ -6182,7 +6276,6 @@ async fn test_join_call_after_screen_was_shared(
 
     let mut incoming_call_b = active_call_b.read_with(cx_b, |call, _| call.incoming());
     let call_b = incoming_call_b.next().await.unwrap().unwrap();
-    assert_eq!(call_b.calling_user.github_login, "user_a");
 
     // User A shares their screen
     let display = gpui::TestScreenCaptureSource::new();

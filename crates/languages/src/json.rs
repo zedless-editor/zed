@@ -5,8 +5,8 @@ use dap::DapRegistry;
 use futures::StreamExt;
 use gpui::{App, AsyncApp, Task};
 use language::{
-    ContextProvider, LanguageRegistry, LanguageToolchainStore, LocalFile as _, LspAdapter,
-    LspAdapterDelegate,
+    ContextProvider, LanguageName, LanguageRegistry, LanguageToolchainStore, LocalFile as _,
+    LspAdapter, LspAdapterDelegate,
 };
 use lsp::{LanguageServerBinary, LanguageServerName};
 use project::{Fs, lsp_store::language_server_settings};
@@ -249,7 +249,15 @@ impl JsonLspAdapter {
             .await;
 
         let config = cx.update(|cx| {
-            Self::get_workspace_config(self.languages.language_names().clone(), adapter_schemas, cx)
+            Self::get_workspace_config(
+                self.languages
+                    .language_names()
+                    .into_iter()
+                    .map(|name| name.to_string())
+                    .collect(),
+                adapter_schemas,
+                cx,
+            )
         })?;
         writer.replace(config.clone());
         return Ok(config);
@@ -321,10 +329,10 @@ impl LspAdapter for JsonLspAdapter {
         Ok(config)
     }
 
-    fn language_ids(&self) -> HashMap<String, String> {
+    fn language_ids(&self) -> HashMap<LanguageName, String> {
         [
-            ("JSON".into(), "json".into()),
-            ("JSONC".into(), "jsonc".into()),
+            (LanguageName::new("JSON"), "json".into()),
+            (LanguageName::new("JSONC"), "jsonc".into()),
         ]
         .into_iter()
         .collect()
